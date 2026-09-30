@@ -1,0 +1,211 @@
+@layer views {
+  .office {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    max-width: 980px;
+    margin: 0 auto;
+  }
+  .office-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .office-bar p {
+    margin: 0;
+  }
+  .office-stage {
+    border-radius: var(--radius-xl);
+    overflow: hidden;
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow-raised);
+  }
+  .office-svg {
+    display: block;
+    width: 100%;
+    height: auto;
+    background: linear-gradient(180deg, var(--office-bg-top) 0%, var(--office-bg-bottom) 100%);
+  }
+
+  /* scene fills */
+  .o-floor-top {
+    stop-color: var(--office-floor-top);
+  }
+  .o-floor-bottom {
+    stop-color: var(--office-floor-bottom);
+  }
+  .o-gym {
+    fill: var(--office-gym);
+    stroke: var(--office-gym-stroke);
+  }
+  .o-slab-front {
+    fill: var(--office-slab-front);
+  }
+  .o-slab-side {
+    fill: var(--office-slab-side);
+  }
+  .o-tile-a {
+    fill: var(--office-tile-a);
+    stroke: var(--office-tile-line);
+  }
+  .o-tile-b {
+    fill: var(--office-tile-b);
+    stroke: var(--office-tile-line);
+  }
+  .o-rug {
+    fill: var(--office-rug);
+  }
+  .o-plant-pot {
+    fill: var(--office-plant-pot);
+  }
+  .o-plant-leaf {
+    fill: var(--office-plant-leaf);
+  }
+  .o-plant-leaf-2 {
+    fill: var(--office-plant-leaf-2);
+  }
+  .o-desk-top {
+    fill: var(--office-desk-top);
+    stroke: var(--office-desk-right);
+  }
+  .o-desk-left {
+    fill: var(--office-desk-left);
+  }
+  .o-desk-right {
+    fill: var(--office-desk-right);
+  }
+  .o-monitor {
+    fill: var(--office-monitor);
+  }
+  .o-shadow {
+    fill: var(--office-shadow);
+  }
+  .o-status-ring {
+    stroke: var(--office-status-ring);
+  }
+  .o-speech {
+    fill: var(--office-speech-bg);
+  }
+  .o-bubble {
+    fill: var(--office-bubble-bg);
+    stroke: var(--office-bubble-stroke);
+  }
+  .o-bubble-dot {
+    fill: var(--office-bubble-dot);
+  }
+  .o-tag {
+    fill: var(--office-tag-bg);
+    stroke: var(--office-tag-stroke);
+  }
+  .o-tag-pointer {
+    fill: var(--office-tag-stroke);
+  }
+
+  /* people */
+  .office-svg .person {
+    cursor: pointer;
+    transition: transform 1.8s ease-in-out;
+  }
+  .office-svg .person:hover rect,
+  .office-svg .person:focus rect {
+    filter: brightness(1.08);
+  }
+  .office-svg .person:focus {
+    outline: none;
+  }
+  .office-svg .person:focus-visible .o-tag {
+    stroke: var(--focus-ring);
+    stroke-width: 1.5;
+  }
+  .office-svg .walking rect:nth-of-type(1),
+  .office-svg .walking rect:nth-of-type(2) {
+    animation: step 0.45s steps(2) infinite;
+  }
+  @keyframes step {
+    to {
+      transform: translateY(-1.5px);
+    }
+  }
+  .office-svg .tag-name {
+    font-family: var(--font-mono);
+    font-size: 8px;
+    font-weight: 600;
+    fill: var(--text);
+    letter-spacing: 0.04em;
+  }
+  .office-svg .tag-role {
+    font-family: var(--font-mono);
+    font-size: 6.5px;
+    fill: var(--text-subtle);
+  }
+  .office-svg .office-sign {
+    font-family: var(--font-mono);
+    font-size: 8px;
+    font-weight: 600;
+    fill: var(--office-sign);
+    letter-spacing: 0.15em;
+  }
+  .office-svg .bubble {
+    animation: bob 1.4s ease-in-out infinite;
+  }
+  @keyframes bob {
+    0%,
+    100% {
+      transform: translate(12px, -44px);
+    }
+    50% {
+      transform: translate(12px, -47px);
+    }
+  }
+  .office-svg .speech {
+    animation: speech-bob 1.6s ease-in-out infinite;
+  }
+  @keyframes speech-bob {
+    0%,
+    100% {
+      transform: translate(10px, -50px);
+    }
+    50% {
+      transform: translate(10px, -53px);
+    }
+  }
+  .office-svg .speech-text {
+    font-family: var(--font-mono);
+    font-size: 8px;
+    font-weight: 600;
+    fill: var(--office-speech-text);
+  }
+
+  /* stat tiles */
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+  }
+  .stat {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 12px 16px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--surface-raised);
+  }
+  .stat-n {
+    font-family: var(--font-display);
+    font-size: var(--fs-2xl);
+    font-weight: 700;
+    line-height: 1.1;
+  }
+  .stat-l {
+    font-size: var(--fs-sm);
+    color: var(--text-subtle);
+  }
+  @media (max-width: 719px) {
+    .stats {
+      grid-template-columns: 1fr;
+    }
+  }
+}

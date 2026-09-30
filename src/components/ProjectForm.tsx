@@ -1,0 +1,239 @@
+import { useEffect, useState } from 'react';
+import type { PathCheck, ProjectAccess, ProjectSummary, TeamTemplate } from '../../shared/types';
+import { api } from '../api';
+import { AVATAR_FALLBACK, cleanPath, suggestKey } from '../util';
+import { ProjectAvatar } from './ProjectAvatar';
+
+interface Props {
+  mode: 'create' | 'edit';
+  project?: ProjectSummary;
+  projects: ProjectSummary[];
+  onCancel: () => void;
+  onSaved: (project: ProjectSummary) => void;
+  onArchived?: (archivedTo: string) => void;
+}
+
+const TEAMS: { id: TeamTemplate; title: string; desks: string }[] = [
+  { id: 'dev', title: 'Dev team', desks: 'Tech Lead, Frontend, Backend, QA, DevOps, Code Reviewer, Docs' },
+  { id: 'business', title: 'Business team', desks: 'COO, EA, Pipeline, Prospecting, Inbound, Automation, Design, HR' },
+  { id: 'blank', title: 'Blank', desks: 'One generalist. Add your own desks after.' },
+];
+
+export function ProjectForm({ mode, project, projects, onCancel, onSaved, onArchived }: Props) {
+  const editing = mode === 'edit' && project;
+  const [folder, setFolder] = useState(project?.path ?? '');
+  const [name, setName] = useState(project?.name ?? '');
+  const [key, setKey] = useState(project?.key ?? '');
+  const [template, setTemplate] = useState<TeamTemplate>(project?.template ?? 'dev');
+  const [access, setAccess] = useState<ProjectAccess>(project?.access ?? 'read');
+  const [nameTouched, setNameTouched] = useState(Boolean(editing));
+  const [keyTouched, setKeyTouched] = useState(Boolean(editing));
+  const [check, setCheck] = useState<PathCheck | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [confirmArchive, setConfirmArchive] = useState(false);
+
+  const takenKeys = projects.filter((p) => p.id !== project?.id).map((p) => p.key);
+
+  // Live folder check, debounced.
+  useEffect(() => {
+    const value = cleanPath(folder);
+    if (!value) {
+      setCheck(null);
+      setChecking(false);
+      return;
+    }
+    setChecking(true);
+    const handle = window.setTimeout(async () => {
+      try {
+        const result = await api.checkPath(value, project?.id);
+        setCheck(result);
+        if (result.ok) {
+          if (!nameTouched) setName(result.suggestedName);
+          if (!keyTouched) setKey(result.suggestedKey);
+        }
+      } catch {
+        setCheck(null);
+      } finally {
+        setChecking(false);
+      }
+    }, 300);
+    return () => window.clearTimeout(handle);
+    // nameTouched/keyTouched only gate auto-fill; re-running on them would re-fetch for nothing
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [folder, project?.id]);
+
+  const onName = (value: string) => {
+    setName(value);
+    setNameTouched(true);
+    if (!keyTouched) setKey(suggestKey(value, takenKeys));
+  };
+
+  const hasFolder = Boolean(cleanPath(folder));
+  const folderBad = hasFolder && !checking && check !== null && !check.ok;
+  const keyValue = key.trim().toUpperCase();
+  const keyBad = keyValue !== '' && (!/^[A-Z][A-Z0-9]{1,9}$/.test(keyValue) || takenKeys.includes(keyValue));
+  const canSave = name.trim() !== '' && keyValue !== '' && !keyBad && !folderBad && !(hasFolder && checking) && !busy;
+
+  const submit = async () => {
+    if (!canSave) return;
+    setBusy(true);
+    setError(null);
+    const body = { name: name.trim(), key: keyValue, path: cleanPath(folder), access: hasFolder ? access : ('read' as ProjectAccess) };
+    try {
+      const saved = editing ? await api.updateProject(project.id, body) : await api.createProject({ ...body, template });
+      onSaved(saved);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not save');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const archive = async () => {
+    if (!editing) return;
+    if (!confirmArchive) {
+      setConfirmArchive(true);
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const { archivedTo } = await api.archiveProject(project.id);
+      onArchived?.(archivedTo);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not remove');
+      setConfirmArchive(false);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="page narrow-page">
+      <button className="link-btn back-link" onClick={onCancel}>
+        &larr; {editing ? 'Back to board' : 'Cancel'}
+      </button>
+      <div className="page-head">
+        <h2 className="page-title">{editing ? 'Project settings' : 'Create project'}</h2>
+        {keyValue && <ProjectAvatar project={{ key: keyValue, color: project?.color ?? AVATAR_FALLBACK }} size={34} />}
+      </div>
+
+      <form
+        className="form"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void submit();
+        }}
+      >
+        <label className="field">
+          <span className="label">Project folder</span>
+          <input
+            className="mono"
+            value={folder}
+            placeholder="C:\Users\you\code\my-app"
+            spellCheck={false}
+            onChange={(e) => setFolder(e.target.value)}
+            onBlur={() => setFolder((f) => cleanPath(f))}
+          />
+          <FolderHint folder={hasFolder} checking={checking} check={check} />
+        </label>
+
+        <div className="field-row">
+          <label className="field grow">
+            <span className="label">Name</span>
+            <input value={name} maxLength={60} placeholder="My app" onChange={(e) => onName(e.target.value)} />
+          </label>
+          <label className="field key">
+            <span className="label">Key</span>
+            <input
+              className="mono"
+              value={key}
+              maxLength={10}
+              placeholder="MA"
+              onChange={(e) => {
+                setKey(e.target.value.toUpperCase());
+                setKeyTouched(true);
+              }}
+            />
+          </label>
+        </div>
+        <p className={`field-hint${keyBad ? ' bad' : ''}`}>
+          {keyBad
+            ? takenKeys.includes(keyValue)
+              ? `${keyValue} is taken by another project`
+              : 'Key: 2-10 letters or digits, starting with a letter'
+            : `Tickets will be numbered ${keyValue || 'KEY'}-1, ${keyValue || 'KEY'}-2...`}
+        </p>
+
+        {!editing && (
+          <fieldset className="field">
+            <legend className="label">Team</legend>
+            <div className="choices">
+              {TEAMS.map((t) => (
+                <label key={t.id} className={`choice${template === t.id ? ' on' : ''}`}>
+                  <input type="radio" name="template" value={t.id} checked={template === t.id} onChange={() => setTemplate(t.id)} />
+                  <span className="choice-title">{t.title}</span>
+                  <span className="choice-sub">{t.desks}</span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
+        )}
+
+        <fieldset className="field" disabled={!hasFolder}>
+          <legend className="label">What agents can do in the folder</legend>
+          <div className="choices two">
+            <label className={`choice${access === 'read' ? ' on' : ''}`}>
+              <input type="radio" name="access" value="read" checked={access === 'read'} onChange={() => setAccess('read')} />
+              <span className="choice-title">Read only</span>
+              <span className="choice-sub">Read code, write plans and diffs into reports. Recommended.</span>
+            </label>
+            <label className={`choice${access === 'write' ? ' on' : ''}`}>
+              <input type="radio" name="access" value="write" checked={access === 'write'} onChange={() => setAccess('write')} />
+              <span className="choice-title">Read &amp; write</span>
+              <span className="choice-sub">Edit files directly. Never .git, node_modules, .env or keys. No shell, no commits.</span>
+            </label>
+          </div>
+        </fieldset>
+
+        {error && <p className="banner danger">{error}</p>}
+
+        <div className="form-actions">
+          <button type="submit" className="btn btn-primary" disabled={!canSave}>
+            {busy ? 'Saving...' : editing ? 'Save changes' : 'Create project'}
+          </button>
+          <button type="button" className="btn btn-ghost" onClick={onCancel}>
+            Cancel
+          </button>
+        </div>
+      </form>
+
+      {editing && (
+        <section className="danger-zone">
+          <h3 className="label">Remove project</h3>
+          <p className="small muted">
+            Moves this project&rsquo;s board and agent workspaces to data/archive. The linked folder is not touched.
+          </p>
+          <button className={`btn ${confirmArchive ? 'btn-danger' : 'btn-outline'}`} disabled={busy} onClick={() => void archive()}>
+            {confirmArchive ? `Click again to remove ${project.key}` : 'Remove project'}
+          </button>
+        </section>
+      )}
+    </div>
+  );
+}
+
+function FolderHint({ folder, checking, check }: { folder: boolean; checking: boolean; check: PathCheck | null }) {
+  if (!folder) return <span className="field-hint">Optional. Paste a path; quotes from "Copy as path" are fine. Leave empty for a project with no code.</span>;
+  if (checking || !check) return <span className="field-hint">Checking...</span>;
+  if (!check.ok) return <span className="field-hint bad">{check.error}</span>;
+  const facts = [check.isGit ? 'git repo' : 'not a git repo', check.instructionsFile ? `${check.instructionsFile} goes into every agent's prompt` : null, check.hasReadme ? 'README found' : null].filter(Boolean);
+  return (
+    <span className="field-hint good">
+      Folder found · {facts.join(' · ')}
+      {check.inUseBy && <span className="warn"> · also linked to {check.inUseBy}</span>}
+    </span>
+  );
+}

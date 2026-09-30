@@ -1,0 +1,290 @@
+@layer views {
+  /* ---------- projects table ---------- */
+  .table-wrap {
+    overflow-x: auto;
+  }
+  .data-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--fs-md);
+  }
+  .data-table th {
+    padding: 10px 14px;
+    text-align: left;
+    font-size: var(--fs-xs);
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-subtle);
+    border-bottom: 2px solid var(--border);
+    white-space: nowrap;
+  }
+  .data-table td {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: middle;
+  }
+  .data-table tbody tr:last-child td {
+    border-bottom: 0;
+  }
+  .data-table tbody tr:hover {
+    background: var(--surface-hover);
+  }
+  .data-table tr.current {
+    box-shadow: inset 3px 0 0 var(--accent);
+  }
+  .project-cell {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    color: var(--text);
+    text-decoration: none;
+  }
+  .project-cell:hover .project-name {
+    color: var(--accent-text);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+  .project-cell > span {
+    display: flex;
+    flex-direction: column;
+  }
+  .project-name {
+    font-weight: 650;
+  }
+  .project-sub {
+    font-size: var(--fs-xs);
+    color: var(--text-subtle);
+  }
+  .folder-cell {
+    max-width: 360px;
+  }
+  .folder-cell .path {
+    display: block;
+    margin-bottom: 4px;
+    color: var(--text-subtle);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .folder-cell .path.missing {
+    color: var(--danger-text);
+  }
+  .actions-cell {
+    width: 1%;
+    text-align: right;
+  }
+  @media (max-width: 719px) {
+    .projects-table thead {
+      display: none;
+    }
+    .projects-table,
+    .projects-table tbody,
+    .projects-table tr,
+    .projects-table td {
+      display: block;
+      width: 100%;
+    }
+    .projects-table tr {
+      position: relative;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    .projects-table td {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 4px 0;
+      border: 0;
+    }
+    .projects-table td[data-label]::before {
+      content: attr(data-label);
+      color: var(--text-subtle);
+      font-size: var(--fs-xs);
+      font-weight: 600;
+    }
+    .projects-table td[data-label='Name']::before {
+      content: none;
+    }
+    .projects-table .folder-cell {
+      max-width: none;
+      flex-wrap: wrap;
+    }
+    .projects-table .actions-cell {
+      position: absolute;
+      top: 10px;
+      right: 8px;
+      width: auto;
+    }
+  }
+
+  /* ---------- project settings ---------- */
+  .danger-zone {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 32px;
+    padding: 16px;
+    border: 1px solid var(--danger-border);
+    border-radius: var(--radius-lg);
+    background: var(--danger-subtle);
+  }
+  .danger-zone .label {
+    color: var(--danger-text);
+  }
+  .danger-zone p {
+    margin: 0;
+  }
+  .danger-zone .btn {
+    align-self: flex-start;
+  }
+  .narrow-page .form {
+    padding: 20px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--surface-raised);
+    box-shadow: var(--shadow-raised);
+  }
+
+  /* ---------- connections ---------- */
+  .conn-intro {
+    margin: 0 0 16px;
+    max-width: 70ch;
+  }
+  .conn-group {
+    margin: 24px 0 8px;
+  }
+  .conn-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--surface-raised);
+    box-shadow: var(--shadow-raised);
+    overflow: hidden;
+  }
+  .conn {
+    padding: 12px 16px;
+  }
+  .conn + .conn {
+    border-top: 1px solid var(--border);
+  }
+  .conn.on {
+    background: var(--surface-raised);
+  }
+  .conn:not(.on) .conn-name {
+    color: var(--text-subtle);
+  }
+  .conn.gone {
+    background: var(--danger-subtle);
+  }
+  .conn-head {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+  }
+  .conn-dot {
+    flex: none;
+    width: 10px;
+    height: 10px;
+    margin-top: 5px;
+    border-radius: 50%;
+    background: var(--text-subtlest);
+  }
+  .conn-dot.st-connected {
+    background: var(--status-working);
+  }
+  .conn-dot.st-needs-login {
+    background: var(--status-waiting);
+  }
+  .conn-dot.st-failed {
+    background: var(--danger);
+  }
+  .conn-dot.st-disabled,
+  .conn-dot.st-unchecked {
+    background: transparent;
+    border: 2px solid var(--text-subtlest);
+  }
+  .conn-body {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .conn-name {
+    font-weight: 650;
+  }
+  .conn-sub {
+    font-size: var(--fs-sm);
+    color: var(--text-subtle);
+  }
+  .conn-target {
+    font-size: var(--fs-xs);
+    color: var(--text-subtle);
+    overflow-wrap: anywhere;
+  }
+  .conn-note {
+    font-size: var(--fs-sm);
+    color: var(--warning-text);
+  }
+  .conn-note.bad {
+    color: var(--danger-text);
+  }
+  .conn-config {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin: 12px 0 2px 22px;
+    padding: 12px;
+    border-radius: var(--radius-md);
+    background: var(--surface-sunken);
+  }
+  .conn-modes {
+    display: inline-flex;
+    align-self: flex-start;
+    padding: 2px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border);
+    background: var(--surface);
+  }
+  .seg {
+    height: 28px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-subtle);
+    font-size: var(--fs-sm);
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .seg:hover:not(:disabled) {
+    color: var(--text);
+  }
+  .seg.on {
+    background: var(--surface-raised);
+    color: var(--text);
+    box-shadow: var(--shadow-raised);
+  }
+  .seg:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }
+  .conn-desks {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .connections > .link-btn {
+    margin-top: 10px;
+  }
+  @media (max-width: 719px) {
+    .conn-config {
+      margin-left: 0;
+    }
+  }
+}

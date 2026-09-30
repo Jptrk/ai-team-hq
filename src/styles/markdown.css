@@ -1,0 +1,310 @@
+@layer markdown {
+  /* ---------- formatted markdown ---------- */
+  .md {
+    min-width: 0;
+    color: var(--text);
+    line-height: 1.6;
+    overflow-wrap: anywhere;
+  }
+  .md > :first-child {
+    margin-top: 0;
+  }
+  .md > :last-child {
+    margin-bottom: 0;
+  }
+  .md p,
+  .md ul,
+  .md ol,
+  .md blockquote,
+  .md pre,
+  .md .md-table-wrap,
+  .md hr {
+    margin: 0 0 12px;
+  }
+  .md h1,
+  .md h2,
+  .md h3,
+  .md h4,
+  .md h5,
+  .md h6 {
+    margin: 22px 0 8px;
+    line-height: 1.3;
+    font-weight: 650;
+    scroll-margin-top: 12px;
+  }
+  .md h1 {
+    font-size: 22px;
+    letter-spacing: -0.015em;
+  }
+  .md h2 {
+    font-size: 18px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+  }
+  .md h3 {
+    font-size: 16px;
+  }
+  .md h4,
+  .md h5,
+  .md h6 {
+    font-size: var(--fs-md);
+  }
+  .md h6 {
+    color: var(--text-subtle);
+  }
+  .md ul,
+  .md ol {
+    padding-left: 22px;
+  }
+  .md li + li {
+    margin-top: 3px;
+  }
+  .md li > ul,
+  .md li > ol {
+    margin: 4px 0 0;
+  }
+  .md li::marker {
+    color: var(--text-subtle);
+  }
+  .md .contains-task-list {
+    list-style: none;
+    padding-left: 4px;
+  }
+  .md .task-list-item input {
+    margin: 0 8px 0 0;
+    vertical-align: -1px;
+    accent-color: var(--success-bold);
+  }
+  .md a {
+    color: var(--accent-text);
+    text-decoration: underline;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 3px;
+  }
+  .md a:hover {
+    text-decoration-thickness: 2px;
+  }
+  .md .md-ext {
+    margin-left: 2px;
+    vertical-align: -1px;
+    opacity: 0.7;
+  }
+  .md .md-dead-link {
+    text-decoration: underline dotted;
+    text-underline-offset: 3px;
+    cursor: help;
+  }
+  .md .md-img {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 6px;
+    border: 1px dashed var(--border-strong);
+    border-radius: var(--radius-sm);
+    color: var(--text-subtle);
+    font-size: var(--fs-sm);
+    text-decoration: none;
+  }
+  .md strong {
+    font-weight: 650;
+  }
+  .md del {
+    color: var(--text-subtle);
+  }
+  .md blockquote {
+    padding: 4px 0 4px 14px;
+    border-left: 3px solid var(--border-strong);
+    color: var(--text-subtle);
+  }
+  .md hr {
+    border: 0;
+    height: 1px;
+    background: var(--border);
+    margin: 18px 0;
+  }
+  .md code {
+    font-family: var(--font-mono);
+    font-size: 0.88em;
+    padding: 1px 5px;
+    border-radius: var(--radius-sm);
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+  }
+  .md pre {
+    padding: 12px 14px;
+    border-radius: var(--radius-md);
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    overflow-x: auto;
+    line-height: 1.5;
+  }
+  .md pre code {
+    padding: 0;
+    border: 0;
+    background: none;
+    font-size: var(--fs-sm);
+    overflow-wrap: normal;
+    white-space: pre;
+  }
+
+  /* tables */
+  .md .md-table-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+  }
+  .md .md-table-wrap:focus-visible {
+    outline-offset: 1px;
+  }
+  .md table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--fs-sm);
+    line-height: 1.45;
+  }
+  .md th,
+  .md td {
+    padding: 7px 10px;
+    text-align: left;
+    vertical-align: top;
+    border-bottom: 1px solid var(--border);
+    overflow-wrap: normal;
+  }
+  .md td {
+    min-width: 80px;
+  }
+  .md th {
+    background: var(--surface-sunken);
+    font-weight: 650;
+    white-space: nowrap;
+  }
+  .md tbody tr:nth-child(even) {
+    background: var(--table-stripe);
+  }
+  .md tbody tr:last-child td {
+    border-bottom: 0;
+  }
+
+  /* compact: chat bubbles and summaries */
+  .md-compact {
+    line-height: 1.5;
+  }
+  .md-compact p,
+  .md-compact ul,
+  .md-compact ol,
+  .md-compact blockquote,
+  .md-compact pre,
+  .md-compact .md-table-wrap {
+    margin-bottom: 6px;
+  }
+  .md-compact h1,
+  .md-compact h2,
+  .md-compact h3,
+  .md-compact h4,
+  .md-compact h5,
+  .md-compact h6 {
+    margin: 10px 0 4px;
+    font-size: var(--fs-md);
+    padding: 0;
+    border: 0;
+  }
+  .md-compact ul,
+  .md-compact ol {
+    padding-left: 18px;
+  }
+  .md-compact pre {
+    padding: 8px 10px;
+  }
+  .md-breaks p {
+    white-space: pre-line;
+  }
+
+  /* ---------- report viewer ---------- */
+  .report {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+  }
+  .report-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 6px 6px 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface-sunken);
+  }
+  .report-name {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex: 1;
+    min-width: 0;
+    color: var(--text-subtle);
+    font-size: var(--fs-sm);
+  }
+  .report-name .mono {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .report-actions {
+    display: inline-flex;
+    gap: 2px;
+  }
+  .report-note {
+    flex-basis: 100%;
+    font-size: var(--fs-xs);
+    color: var(--danger-text);
+  }
+  .report-back {
+    align-self: flex-start;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: var(--fs-sm);
+  }
+  .report-body {
+    padding: 16px 18px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface-raised);
+    max-height: 70vh;
+    overflow: auto;
+  }
+  .report-body.reader {
+    max-height: none;
+    margin-top: 10px;
+    padding: 24px 32px;
+    border: 0;
+    background: none;
+  }
+  .report-body.reader .md {
+    max-width: 80ch;
+    margin: 0 auto;
+    font-size: 15px;
+  }
+  .report-body.reader .report-raw {
+    max-width: 100ch;
+    margin: 0 auto;
+  }
+  .report-raw {
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    line-height: 1.55;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    color: var(--text);
+  }
+  @media (max-width: 719px) {
+    .report-body {
+      padding: 12px;
+    }
+    .report-body.reader {
+      padding: 12px 4px;
+    }
+  }
+}
