@@ -1,12 +1,11 @@
-import { Check, ChevronDown, ExternalLink, FileText, Link as LinkIcon, MessagesSquare, Pencil, Play, X } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Check, ChevronDown, Link as LinkIcon, MessagesSquare, Pencil, Play, X } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import { canEditDescription, MAX_DESCRIPTION, type Decision, type ItemStatus, type StateResponse, type WorkItem } from '../../shared/types';
 import { TextEditor } from '../editor/TextEditor';
 import { usePopover } from '../hooks/usePopover';
 import { needsPlainEditor } from '../lib/markdownPaste';
 import { Markdown } from '../markdown/Markdown';
-import { ReportViewer } from '../markdown/ReportViewer';
-import { isReportUrl } from '../markdown/reportLinks';
+import { useUnsavedDraft } from '../shell/draftGuard';
 import { AttachmentGrid } from '../ui/attachments/AttachmentGrid';
 import { AttachButton, AttachmentTray } from '../ui/attachments/AttachmentTray';
 import { Avatar } from '../ui/Avatar';
@@ -16,6 +15,7 @@ import { TypeIcon, TYPE_LABEL } from '../ui/TypeIcon';
 import { agentById, ITEM_STATUS_LABEL, latestDecision, ticketKey, timeAgo } from '../util';
 import { DecisionBar } from './DecisionBar';
 import { ProjectAvatar } from './ProjectAvatar';
+import { ReportList } from './ReportList';
 import { TicketComments, useDescriptionImages } from './TicketComments';
 
 interface Props {
@@ -84,6 +84,7 @@ function Description({ item, onEdit, onComment, onFiles }: { item: WorkItem; onE
   const sending = useRef(false);
   const editable = canEditDescription(item.status);
   const dirty = draft !== item.summary;
+  useUnsavedDraft(editing && dirty);
 
   // Work started while you were editing: the description locks, nothing is saved, and a changed
   // draft stays to post as a comment. Not while a save is on its way; this runs again once it ends.
@@ -193,10 +194,7 @@ export function TicketView({ item, state, live, onClose, onDecide, onComment, on
   const from = agentById(agents, item.from);
   const thread = item.threadId ? state.threads.find((t) => t.id === item.threadId) : undefined;
   const decidable = item.status === 'needs-you' || item.status === 'held';
-  const runnable = live && assignee && !assignee.isHuman && !assignee.running && ['todo', 'in-progress', 'sent-back'].includes(item.status);
-  const reports = useMemo(() => item.links.filter((l) => isReportUrl(l.url)), [item.links]);
-  const [active, setActive] = useState<string | null>(reports[0]?.url ?? null);
-  const activeReport = active && reports.some((r) => r.url === active) ? active : (reports[0]?.url ?? null);
+  const runnable = live && assignee && !assignee.isHuman && !assignee.running && ['todo', 'in-progress', 'sent-back', 'approved'].includes(item.status);
   const [copied, setCopied] = useState(false);
   const [tab, setTab] = useState<'comments' | 'history'>('comments');
   const pid = state.project.id;
@@ -301,29 +299,7 @@ export function TicketView({ item, state, live, onClose, onDecide, onComment, on
               {desc.error && <p className="field-hint bad">{desc.error}</p>}
             </section>
 
-            {item.links.length > 0 && (
-              <section className="ticket-section">
-                <h3 className="section-label">Reports</h3>
-                <div className="attachments">
-                  {item.links.map((l) =>
-                    isReportUrl(l.url) ? (
-                      <button key={l.url + l.label} type="button" className={`attachment${activeReport === l.url ? ' on' : ''}`} aria-pressed={activeReport === l.url} onClick={() => setActive(l.url)}>
-                        <FileText size={14} aria-hidden /> {l.label}
-                      </button>
-                    ) : /^https?:/i.test(l.url) ? (
-                      <a key={l.url + l.label} className="attachment" href={l.url} target="_blank" rel="noopener noreferrer">
-                        <ExternalLink size={14} aria-hidden /> {l.label}
-                      </a>
-                    ) : (
-                      <span key={l.url + l.label} className="attachment disabled" title="Sim mode placeholder, no file behind it">
-                        <FileText size={14} aria-hidden /> {l.label}
-                      </span>
-                    ),
-                  )}
-                </div>
-                {activeReport && <ReportViewer key={activeReport} url={activeReport} />}
-              </section>
-            )}
+            <ReportList pid={pid} item={item} agents={agents} />
 
             <section className="ticket-section">
               <div className="section-head">

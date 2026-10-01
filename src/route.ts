@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 /**
- * Hash routes. The view and the side panel's subject live in the URL, so reload,
+ * Hash routes. The view and the ticket modal's subject live in the URL, so reload,
  * Back and shared links all land in the same place.
  *
  *   #/projects                    all projects
@@ -11,7 +11,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
  *   #/p/<pid>/chat/<threadId>     one thread
  *   #/p/<pid>/settings            project settings
  *   #/p/<pid>/connections         MCP connections
- *   ...?ticket=GA-12 | ?agent=leo side panel
+ *   ...?ticket=GA-12 | ?agent=leo ticket or person modal
  */
 
 export type ViewId = 'needs-you' | 'chat' | 'board' | 'team' | 'office';
@@ -61,7 +61,7 @@ export function parseRoute(hash: string): Route {
   return { kind: 'home' };
 }
 
-/** Path (without '#') for a project view, optionally with a thread and a side-panel subject. */
+/** Path (without '#') for a project view, optionally with a thread and a modal subject (ticket or person). */
 export function projectPath(pid: string, view: ViewId = 'needs-you', o: { threadId?: string } & PanelRef = {}): string {
   let path = `/p/${encodeURIComponent(pid)}`;
   if (view !== 'needs-you') path += `/${view}`;

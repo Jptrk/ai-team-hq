@@ -1,6 +1,6 @@
 import express, { Router, type Response } from 'express';
 import fs from 'node:fs';
-import type { Attachment, Decision, ItemStatus, ProjectAccess, ProjectMeta, ProjectSummary, StateResponse, TeamTemplate, ThreadResponse } from '../shared/types';
+import type { Attachment, Decision, ItemStatus, ProjectAccess, ProjectMeta, ProjectSummary, ReportInfo, StateResponse, TeamTemplate, ThreadResponse } from '../shared/types';
 import { canEditDescription, MAX_ATTACHMENTS, MAX_DESCRIPTION } from '../shared/types';
 import { acceptInstruction, addAgent, parseSkills, refreshStatuses, removeAgent, settleInstructions } from './agents';
 import { AttachmentError, pickAttachments, resolveAttachment, saveUpload } from './attachments';
@@ -16,6 +16,7 @@ import {
   threadForItem,
 } from './chat';
 import { titleFrom } from '../shared/plainText';
+import { parseReportUrl, reportTitleFrom, type ReportUrlParts } from '../shared/reportUrl';
 import { addComment } from './comments';
 import { checkConnections, listConnections, updateConnection, type ConnectionPatch } from './connections';
 import { checkFolder, folderExists, KEY_PATTERN, suggestKey } from './paths';
@@ -70,7 +71,7 @@ function summary(p: Project): ProjectSummary {
   return {
     ...p.meta,
     teamSize: s.agents.length,
-    openItems: s.items.filter((i) => i.status !== 'done' && i.status !== 'approved').length,
+    openItems: s.items.filter((i) => i.status !== 'done').length,
     // Paused chat threads wait on Patrick too.
     needsYou: s.items.filter((i) => i.status === 'needs-you').length + s.threads.filter((t) => t.status === 'paused').length,
     running: s.agents.filter((a) => a.running).length,
@@ -390,7 +391,17 @@ project.post('/items/:id/decision', (req, res) => {
 
   // Live mode: the desk picks the ticket back up. Hold needs nothing from them.
   let run = null;
-  if (decision === 'approve') run = kickoff(p, item.id, 'approved', note || undefined, images);
+  if (decision === 'approve') {
+    run = kickoff(p, item.id, 'approved', note || undefined, images);
+    // Nobody to carry it out (it is yours, or its desk is gone): approving finishes it.
+    if (!agent || agent.isHuman) {
+      item.status = 'done';
+      item.history.push({ ts: now(), text: 'Done: approved, nothing left for a desk to do' });
+      settleInstructions(s);
+      refreshStatuses(s);
+      p.commit();
+    }
+  }
   else if (decision === 'send-back') run = kickoff(p, item.id, 'send-back', note || undefined, images);
   else if (decision === 'instruct') run = kickoff(p, item.id, 'instruct', note, images);
 
@@ -484,7 +495,8 @@ project.post('/items/:id/run', (req, res) => {
   const agent = p.state.agents.find((a) => a.id === item.assignee);
   if (!agent || agent.isHuman) return res.status(400).json({ error: 'no agent owns this ticket' });
   if (agent.running) return res.status(409).json({ error: `${agent.name} is already running` });
-  const run = kickoff(p, item.id, 'manual');
+  // An approved ticket that did not get finished (a failed run) is retried as the approved action.
+  const run = kickoff(p, item.id, item.status === 'approved' ? 'approved' : 'manual');
   if (!run) return res.status(500).json({ error: 'could not queue the run' });
   res.status(202).json(run);
 });
@@ -566,6 +578,49 @@ project.get('/attachments/:file', (req, res) => {
     'Content-Security-Policy': "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'",
   });
   res.send(fs.readFileSync(abs));
+});
+
+/** A report's title from the start of the file only. */
+function reportTitle(abs: string): string | null {
+  const fd = fs.openSync(abs, 'r');
+  try {
+    const buf = Buffer.alloc(8192);
+    const n = fs.readSync(fd, buf, 0, buf.length, 0);
+    return reportTitleFrom(buf.subarray(0, n).toString('utf8'));
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/** One report link's row. Another project's link, a path outside reports/ or a file that cannot be read shows as missing. */
+function reportInfo(pid: string, link: { label: string; url: string }, parts: ReportUrlParts): ReportInfo {
+  const { agent, file } = parts;
+  const info: ReportInfo = { url: link.url, label: link.label, agent, file, name: file.split('/').pop() || file, title: null, size: 0, updatedAt: null, exists: false };
+  const abs = parts.pid === pid ? resolveReport(pid, agent, file) : null;
+  if (!abs) return { ...info, agent: '', file: '', name: link.label };
+  try {
+    if (!fs.existsSync(abs)) return info;
+    const stat = fs.statSync(abs);
+    if (!stat.isFile()) return info;
+    return { ...info, exists: true, size: stat.size, updatedAt: stat.mtime.toISOString(), title: reportTitle(abs) };
+  } catch {
+    return info;
+  }
+}
+
+/** The ticket's reports, for the list: title, desk, size and when each last changed. One row per report link. */
+project.get('/items/:id/reports', (req, res) => {
+  const p = P(res);
+  const item = p.state.items.find((i) => i.id === req.params.id);
+  if (!item) return res.status(404).json({ error: 'item not found' });
+  const out: ReportInfo[] = [];
+  for (const link of item.links) {
+    const parts = parseReportUrl(link.url);
+    // Not a report link: the ticket lists it under Links.
+    if (!parts || out.some((r) => r.url === link.url)) continue;
+    out.push(reportInfo(p.id, link, parts));
+  }
+  res.json(out);
 });
 
 /** Markdown an agent wrote under workspaces/<project>/<agent>/reports/. */

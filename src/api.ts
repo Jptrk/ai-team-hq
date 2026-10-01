@@ -11,6 +11,7 @@ import type {
   PathCheck,
   ProjectAccess,
   ProjectSummary,
+  ReportInfo,
   Run,
   StateResponse,
   TeamTemplate,
@@ -96,6 +97,7 @@ export const api = {
   resumeThread: (pid: string, tid: string) => request<ThreadResponse & { woke: string[] }>(`${pp(pid)}/threads/${tid}/resume`, json('POST')),
   closeThread: (pid: string, tid: string) => request<ThreadResponse>(`${pp(pid)}/threads/${tid}/close`, json('POST')),
 
+  reports: (pid: string, itemId: string) => request<ReportInfo[]>(`${pp(pid)}/items/${itemId}/reports`),
   report: async (url: string): Promise<string> => {
     const res = await fetch(url);
     if (!res.ok) throw new Error('Report not found');

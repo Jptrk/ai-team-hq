@@ -331,7 +331,7 @@
     border-top: 1px solid var(--border);
     background: var(--surface-raised);
   }
-  .composer p {
+  .composer > p {
     margin: 0;
   }
   .composer-row {

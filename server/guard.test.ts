@@ -9,6 +9,7 @@ import path from 'node:path';
 import { attachmentsDir } from './attachments';
 import type { ItemStatus, RunReason } from '../shared/types';
 import type { AllowedServer } from './connections';
+import { HQ_ROOT } from './paths';
 import { doneRefusal, guard } from './runner/claude';
 import type { Project } from './store';
 
@@ -61,6 +62,50 @@ for (const [label, access, tool, input, want] of cases) {
   const ok = got === want;
   if (!ok) failed++;
   console.log(`${ok ? 'ok  ' : 'FAIL'} ${label}: ${got}${ok ? '' : ` (wanted ${want})`}`);
+}
+
+// ---------- a link inside the project folder that points outside ----------
+const outside = path.join(root, 'outside');
+fs.mkdirSync(outside, { recursive: true });
+fs.writeFileSync(path.join(outside, 'secret.txt'), 'x');
+const link = path.join(repo, 'linked');
+let linked = true;
+try {
+  fs.symlinkSync(outside, link, 'junction');
+} catch (e) {
+  linked = false;
+  console.log(`skip link cases: ${e instanceof Error ? e.message : String(e)}`);
+}
+const linkCases: typeof cases = linked
+  ? [
+      ['read through a link to outside', 'read', 'Read', { file_path: path.join(link, 'secret.txt') }, 'deny'],
+      ['grep through a link to outside', 'read', 'Grep', { pattern: 'x', path: link }, 'deny'],
+      ['glob through a link to outside', 'read', 'Glob', { pattern: path.join(link, '**', '*') }, 'deny'],
+      ['new file through a link, writable project', 'write', 'Write', { file_path: path.join(link, 'new.txt'), content: '' }, 'deny'],
+      ['real project files still read', 'read', 'Read', { file_path: path.join(repo, 'apps', 'web', 'page.tsx') }, 'allow'],
+    ]
+  : [];
+for (const [label, access, tool, input, want] of linkCases) {
+  const got = await decide(access, tool, input);
+  const ok = got === want;
+  if (!ok) failed++;
+  console.log(`${ok ? 'ok  ' : 'FAIL'} link: ${label}: ${got}${ok ? '' : ` (wanted ${want})`}`);
+}
+
+// ---------- a linked folder that contains HQ itself ----------
+const aroundHq = { id: 'guard-test', meta: { path: path.dirname(HQ_ROOT), access: 'write' } } as unknown as Project;
+const aroundCases: [string, string, Record<string, unknown>, 'allow' | 'deny'][] = [
+  ["HQ's own data stays out of reach", 'Read', { file_path: path.join(HQ_ROOT, 'data', 'projects.json') }, 'deny'],
+  ["another project's data stays out of reach", 'Grep', { pattern: 'x', path: path.join(HQ_ROOT, 'data', 'projects', 'another-project') }, 'deny'],
+  ['HQ code is never written', 'Write', { file_path: path.join(HQ_ROOT, 'server', 'x.ts'), content: '' }, 'deny'],
+  ["this project's pasted images still read", 'Read', { file_path: path.join(images, 'att_0123456789ab.png') }, 'allow'],
+  ['the rest of that folder still reads', 'Read', { file_path: path.join(path.dirname(HQ_ROOT), 'elsewhere', 'notes.md') }, 'allow'],
+];
+for (const [label, tool, input, want] of aroundCases) {
+  const got = (await guard({ project: aroundHq, dir: ws })(tool, input)).behavior;
+  const ok = got === want;
+  if (!ok) failed++;
+  console.log(`${ok ? 'ok  ' : 'FAIL'} around HQ: ${label}: ${got}${ok ? '' : ` (wanted ${want})`}`);
 }
 // ---------- MCP connections ----------
 const github: AllowedServer = {
@@ -124,6 +169,7 @@ for (const [label, reason, status, want] of doneCases) {
   console.log(`${ok ? 'ok  ' : 'FAIL'} report_done: ${label}: ${got}${ok ? '' : ` (wanted ${want})`}`);
 }
 
+if (linked) fs.unlinkSync(link);
 fs.rmSync(root, { recursive: true, force: true });
 assert.equal(failed, 0, `${failed} guard case(s) failed`);
-console.log(`\nall ${cases.length + mcpCases.length + doneCases.length} guard cases pass`);
+console.log(`\nall ${cases.length + linkCases.length + aroundCases.length + mcpCases.length + doneCases.length} guard cases pass`);

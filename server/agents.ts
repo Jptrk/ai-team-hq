@@ -109,18 +109,18 @@ export function refreshStatuses(s: State): void {
     if (a.isHuman || a.status === 'off') continue;
     const mine = s.items.filter((i) => i.assignee === a.id);
     if (mine.some((i) => i.status === 'needs-you')) a.status = 'waiting';
-    else if (mine.some((i) => i.status === 'in-progress' || i.status === 'sent-back')) a.status = 'working';
+    else if (mine.some((i) => i.status === 'in-progress' || i.status === 'sent-back' || i.status === 'approved')) a.status = 'working';
     else if (mine.some((i) => i.status === 'todo')) a.status = 'working';
     else a.status = 'idle';
   }
 }
 
-/** Mark an instruction done once its item reaches a terminal state. */
+/** Mark an instruction done once its item is done. Approved is not done yet: the desk is still carrying it out. */
 export function settleInstructions(s: State): void {
   for (const ins of s.instructions) {
     if (ins.status === 'done' || !ins.itemId) continue;
     const item = s.items.find((i) => i.id === ins.itemId);
-    if (item && (item.status === 'done' || item.status === 'approved')) ins.status = 'done';
+    if (item && item.status === 'done') ins.status = 'done';
   }
 }
 
@@ -182,7 +182,7 @@ export function removeAgent(p: Project, id: string): string | null {
   const heir = leadOf(s.agents);
   let moved = 0;
   for (const item of s.items) {
-    if (item.assignee !== id || item.status === 'done' || item.status === 'approved') continue;
+    if (item.assignee !== id || item.status === 'done') continue;
     item.assignee = heir?.id ?? 'you';
     item.history.push({ ts: now(), text: `${agent.name} left the team; moved to ${heir?.name ?? 'you'}` });
     moved++;

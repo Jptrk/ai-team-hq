@@ -3,6 +3,7 @@ import type { Agent, Comment, WorkItem } from '../../shared/types';
 import { TextEditor } from '../editor/TextEditor';
 import { TEXT_LIMIT } from '../lib/markdownPaste';
 import { Markdown } from '../markdown/Markdown';
+import { useUnsavedDraft } from '../shell/draftGuard';
 import { AttachmentGrid } from '../ui/attachments/AttachmentGrid';
 import { AttachButton, AttachmentTray } from '../ui/attachments/AttachmentTray';
 import { useAttachments } from '../ui/attachments/useAttachments';
@@ -26,6 +27,7 @@ export function TicketComments({ pid, item, agents, onComment }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const att = useAttachments(pid);
+  useUnsavedDraft(text.trim().length > 0 || att.count > 0);
   const owner = agentById(agents, item.assignee);
   const list = [...(item.comments ?? [])].reverse();
   const tooLong = text.length > TEXT_LIMIT;

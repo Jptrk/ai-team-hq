@@ -1,6 +1,8 @@
-/** Is this an HQ report URL, like /api/projects/<pid>/workspaces/<agent>/report?file=...? */
+import { parseReportUrl } from '../../shared/reportUrl';
+
+/** Is this an HQ report URL, like /api/projects/<pid>/workspaces/<agent>/report?file=...? Same parser as the server. */
 export function isReportUrl(url: string): boolean {
-  return /^\/api\/projects\/[^/]+\/workspaces\/[^/]+\/report\?/.test(url);
+  return parseReportUrl(url) !== null;
 }
 
 /** Is this an image you pasted, served by HQ itself? Only these are ever shown as <img>. */

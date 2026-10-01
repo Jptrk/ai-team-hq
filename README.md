@@ -43,9 +43,11 @@ theme toggle and your menu. A left sidebar holds the project switcher and the vi
 | Team | A card per desk; "Add teammate" is the dashed card |
 | Office | The pixel office |
 
-Tickets and people open in a **side panel** on the right, over whatever view you are on. The URL
-carries it (`#/p/gecom-apps/board?ticket=GA-12`), so reload, Back and shared links land on the
-same ticket. Esc closes it.
+Tickets and people open in a large **modal** over whatever view you are on, like Jira's issue
+view: the ticket on the left, its details (assignee, from, status, type, client, thread) on the
+right. Clicking a desk's name inside it switches the modal to that person. The URL carries it
+(`#/p/gecom-apps/board?ticket=GA-12`), so reload, Back and shared links land on the same ticket.
+Esc, the X, or a click outside closes it, and focus goes back to the card you opened it from.
 
 Every view has its own URL: `#/p/<project>`, `#/p/<project>/chat`, `/board`, `/team`, `/office`,
 `/chat/<threadId>`, `/settings`, `/connections`, plus `#/projects`.
@@ -57,14 +59,14 @@ Keyboard shortcuts (ignored while you type):
 | `c` | Create an instruction or a chat thread |
 | `/` | Search tickets in this project; Enter opens the top hit |
 | `[` | Collapse or expand the sidebar |
-| `Esc` | Close the top layer only: menu, then dialog, then side panel |
+| `Esc` | Close the top layer only: menu, then the report reader or a dialog, then the ticket |
 | `Ctrl+Enter` | Send in any text box |
 
 On the board, the ‹ › buttons on each card move it one column; they always show on touch screens,
 where drag-and-drop is unreliable.
 
 Screen sizes: full sidebar from 1100px, an icon rail from 720px (expand it for an overlay), and
-an off-canvas sidebar with a full-screen side panel on phones.
+an off-canvas sidebar with full-screen ticket and report views on phones.
 
 ## Dark mode
 
@@ -81,13 +83,18 @@ hardcodes a color.
 ## Reports and markdown
 
 Agent reports, ticket descriptions and chat messages render as formatted markdown: headings,
-tables, lists, task lists, code and links. A report attached to a ticket opens in the ticket's
-side panel with:
+tables, lists, task lists, code and links.
 
+A ticket's reports are a **list**: each row shows the report's title (its first heading), the
+file name, the desk that wrote it, when it last changed, and its size. A file that was deleted
+shows as "File not found". Clicking a row opens the **reader**, full size, with:
+
+- **The ticket's other reports** down the left side ("2 of 3"). Click one, or use Up and Down.
 - **Preview / Raw** to switch between the formatted page and the plain markdown. The choice is remembered.
 - **Copy** to copy the markdown.
 - **Open raw** to open the file in a new tab.
-- **Expand** to read it in a wide reader.
+
+Other links on the ticket (web pages) sit under **Links** below the reports.
 
 Links in a report behave safely:
 
@@ -139,6 +146,13 @@ images** beside Description adds images to the description itself.
 - **Desks see your images directly.** They go into the desk's prompt with your text, up to 6 per
   run. Each image costs roughly 1,000 to 1,600 tokens of your subscription in the run that
   includes it. Older images are listed by file path, and a desk can open them with Read.
+- **Desks can send you images too.** When a connected tool returns a picture during a run, for
+  example a Figma screenshot, HQ keeps up to 6 recent screenshots per run in memory, and only
+  the ones the desk attaches are saved. The desk attaches the latest ones with `screenshots: 1`
+  on `comment_on_ticket`, `send_message` or `raise_for_decision`, or attaches an image file it
+  can read with `files: ["path"]`. They show as thumbnails like yours. Only
+  images from the desk's own connections count, never a file it merely read, and files must be
+  in its workspace, the project folder, or this project's attachments.
 
 **Comments.** Every ticket has a **Comments | History** switch.
 
@@ -240,6 +254,9 @@ a desk wakes it for a live run, which spends usage.
   desk-to-desk wakes per project per day.
 - **Messages are async.** A desk posts and stops, and the reply wakes it later. Unread
   messages for a desk batch into one run. Nothing waits in a slot, so the queue can't deadlock.
+- **A cut-off reply is asked again.** If a desk's run dies before it replies (a server restart,
+  an error), what it was woken for counts as unread again. After a restart the thread pauses;
+  **Resume** wakes the desk with the same messages.
 - **Ownership.** A desk woken by a message can't finish someone else's ticket, and
   `raise_for_decision` opens a new ticket rather than taking over theirs. A ticket run that
   asked a teammate stays in progress until the reply.
@@ -328,7 +345,7 @@ npm run test:attachments
 - **`test:guard`** checks what an agent may read and write in its workspace and the linked folder. It also checks which MCP tools run freely, need approval, or are refused.
 - **`test:chat`** checks the chat core: recipients, the loop limit, resume and settle.
 - **`test:ui`** checks the UI helpers: routes, board filter, search ranking, report link resolution, markdown previews, image sizing, and avatar text contrast.
-- **`test:attachments`** checks image uploads: type sniffing, file names, picking ids, the startup sweep, and the image blocks sent to desks.
+- **`test:attachments`** checks image uploads: type sniffing, file names, picking ids, the startup sweep, and the image blocks sent to desks. It also checks desk images: screenshot capture from connected tools (held in memory, saved only when attached) and attaching image files by path, links included.
 
 To try the UI against a copy of your data, run the API from another folder and point Vite at it.
 The API reads `data/` and `workspaces/` from its working directory.
@@ -381,5 +398,6 @@ Everything project-specific lives under `/api/projects/:pid`.
 | POST   | /api/projects/:pid/threads/:tid/messages | `{ text, attachments? }` |
 | POST   | /api/projects/:pid/threads/:tid/resume | delivers held messages |
 | POST   | /api/projects/:pid/threads/:tid/close | |
+| GET    | /api/projects/:pid/items/:id/reports | the ticket's reports: title, desk, size, last change |
 | GET    | /api/projects/:pid/workspaces/:agent/report | `?file=<path under reports/>` |
 | POST   | /api/projects/:pid/reset | `?empty=1` |

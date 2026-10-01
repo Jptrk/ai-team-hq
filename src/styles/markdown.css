@@ -205,8 +205,20 @@
   .md-compact h6 {
     margin: 10px 0 4px;
     font-size: var(--fs-md);
+    font-weight: 700;
     padding: 0;
     border: 0;
+  }
+  /* A smaller ladder than full reports, but each level still reads as a heading, not as bold text. */
+  .md-compact h1 {
+    font-size: 18px;
+    letter-spacing: -0.01em;
+  }
+  .md-compact h2 {
+    font-size: var(--fs-lg);
+  }
+  .md-compact h3 {
+    font-size: 15px;
   }
   .md-compact ul,
   .md-compact ol {

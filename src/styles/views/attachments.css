@@ -168,7 +168,7 @@
     flex-direction: column;
     gap: 4px;
   }
-  .callout-ask p {
+  .callout-ask > p {
     margin: 0;
   }
 

@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Activity, ProjectAccess, ProjectMeta, State, TeamTemplate } from '../shared/types';
+import { rewindCursor } from './cursor';
 import { slug } from './paths';
 import { seed } from './seed';
 
@@ -197,8 +198,8 @@ function migrateLegacy(r: Registry): void {
   console.log(`[hq] migrated the single-project data into project "${meta.name}" (${meta.key})`);
 }
 
-/** Fill in fields added over time, and close out anything a restart killed. */
-function migrateState(s: State): State {
+/** Fill in fields added over time, and close out anything a restart killed. Exported for tests. */
+export function migrateState(s: State): State {
   s.runs ??= [];
   s.instructions ??= [];
   s.activity ??= [];
@@ -225,6 +226,10 @@ function migrateState(s: State): State {
       r.status = 'failed';
       r.error = 'Interrupted by a server restart';
       r.finishedAt = now();
+      // The desk never got to answer: un-read what it was woken for (or its ticket's thread), so it sees it again.
+      const readThreadId = r.threadId ?? r.cursorThread;
+      const readThread = readThreadId ? s.threads.find((t) => t.id === readThreadId) : undefined;
+      if (readThread) rewindCursor(readThread, s.messages, r.agentId, r.cursorFrom, r.startedAt);
       const thread = r.reason === 'message' && r.threadId ? s.threads.find((t) => t.id === r.threadId) : undefined;
       if (thread) {
         // A reply cut off by a restart: pause the thread so Patrick can resume it, and leave the ticket alone.

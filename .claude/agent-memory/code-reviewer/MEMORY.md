@@ -1,2 +1,4 @@
 - [Review conventions](review-conventions.md) — read-only reviews, allowed commands, file:line + severity + scenario + fix format
 - [Headless TipTap checks](headless-tiptap-checks.md) — run TipTap markdown round-trips in Node via scratchpad .mts, gotchas
+- [SDK/CLI internals offline](sdk-cli-internals.md) — grep sdk.mjs and the bundled claude.exe to verify stream shapes and tool ordering
+- [UI dialog review checks](ui-dialog-review-checks.md) — top-layer/inert flags, nested-dialog CSS leaks, Android close requests, stale caches

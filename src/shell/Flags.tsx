@@ -1,6 +1,8 @@
 import { AlertTriangle, CheckCircle2, Info, X, XCircle } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { Flag } from '../hooks/useFlags';
+import { useTopDialog } from './topLayer';
 
 const ICON = { info: Info, success: CheckCircle2, warning: AlertTriangle, danger: XCircle };
 
@@ -44,13 +46,18 @@ function FlagItem({ flag, onDismiss }: { flag: Flag; onDismiss: () => void }) {
   );
 }
 
-/** Always mounted, so screen readers hear every flag. */
+/**
+ * Always mounted, so screen readers hear every flag. An open modal dialog makes the rest of the page
+ * inert and covers it, so while one is open the flags render inside the topmost dialog.
+ */
 export function Flags({ flags, dismiss }: { flags: Flag[]; dismiss: (id: number) => void }) {
-  return (
+  const topDialog = useTopDialog();
+  return createPortal(
     <div className="flags" role="status" aria-live="polite">
       {flags.map((f) => (
         <FlagItem key={f.id} flag={f} onDismiss={() => dismiss(f.id)} />
       ))}
-    </div>
+    </div>,
+    topDialog ?? document.body,
   );
 }

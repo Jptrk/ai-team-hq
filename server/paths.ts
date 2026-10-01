@@ -91,6 +91,8 @@ export function checkFolder(raw: string, projects: ProjectMeta[], exceptId?: str
   }
   if (!isDir) return { ...empty, path: abs, exists: true, error: 'That is a file, not a folder' };
   if (isInside(abs, HQ_ROOT)) return { ...empty, path: abs, exists: true, isDir: true, error: 'That folder is inside AI Team HQ itself' };
+  // A folder around HQ would let desks read every project's data.
+  if (isInside(HQ_ROOT, abs)) return { ...empty, path: abs, exists: true, isDir: true, error: 'That folder contains AI Team HQ itself. Pick the project folder inside it.' };
 
   const name = path.basename(abs) || abs;
   const others = projects.filter((p) => p.id !== exceptId);

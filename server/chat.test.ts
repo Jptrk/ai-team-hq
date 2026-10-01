@@ -6,12 +6,15 @@ import assert from 'node:assert/strict';
 import type { Agent, Attachment, Run, State, WorkItem } from '../shared/types';
 import { mentionsIn } from './agents';
 import { addComment } from './comments';
+import { rewindCursor } from './cursor';
+import { migrateState } from './store';
 import {
   ChatError,
   closeThread,
   createThread,
   messagesOf,
   needsWake,
+  pauseForFailure,
   postAgentMessage,
   postFounderMessage,
   resolveRecipients,
@@ -273,6 +276,89 @@ test('settle: answering your comment leaves the ticket alone and posts the reply
   // When the desk already commented with the tool, the summary is not posted again.
   settleAfterRun(s, { mode: 'ticket', agentId: 'leo', itemId: item.id, raised: false, finished: false, sentToThread: false, awaiting: [], askedBy: [], summary: 'again', reason: 'comment', commented: true }, noLog, L);
   assert.equal(item.comments?.length, 2);
+});
+
+test('resume: a reply cut off by a restart is asked again after Resume', () => {
+  const s = fresh();
+  const t = createThread(s, { title: 'T', createdBy: 'you' });
+  postFounderMessage(s, t, '@Sam first question', []);
+  t.cursor.sam = t.count; // Sam answered it earlier
+  postAgentMessage(s, t, 'sam', ['you'], 'answer one', L);
+  postFounderMessage(s, t, '@Sam are you going to send a picture?', []);
+  const asked = t.count;
+  // The run starts: it remembers the marker, then marks the thread read.
+  const run: Run = { id: 'r_cut', agentId: 'sam', threadId: t.id, reason: 'message', status: 'running', startedAt: '2099-01-01T00:00:00Z', cursorFrom: t.cursor.sam };
+  t.cursor.sam = t.count;
+  s.runs.push(run);
+  migrateState(s);
+  assert.equal(run.status, 'failed');
+  assert.equal(t.status, 'paused');
+  assert.equal(t.pausedReason, 'restart');
+  assert.ok((t.cursor.sam ?? 0) < asked, 'the read marker was put back');
+  assert.deepEqual(resumeThread(s, t, L), ['sam']);
+  const unread = unreadFor(s, t, 'sam');
+  assert.ok(unread.addressed.some((m) => m.text.includes('send a picture')), 'Resume shows Sam the question again');
+});
+
+test('resume: a desk that already replied is not rewound', () => {
+  const s = fresh();
+  const t = createThread(s, { title: 'T', createdBy: 'you' });
+  postFounderMessage(s, t, '@Sam ping', []);
+  const before = t.cursor.sam ?? 0;
+  const startedAt = new Date(Date.now() - 1000).toISOString();
+  t.cursor.sam = t.count;
+  postAgentMessage(s, t, 'sam', ['you'], 'pong', L);
+  assert.equal(rewindCursor(t, s.messages, 'sam', before, startedAt), false);
+  assert.equal(t.cursor.sam, t.count);
+  // Without a remembered marker there is nothing to put back.
+  assert.equal(rewindCursor(t, s.messages, 'leo', undefined, startedAt), false);
+});
+
+test('failed reply: the thread pauses and Resume asks the desk again', () => {
+  const s = fresh();
+  const t = createThread(s, { title: 'T', createdBy: 'you' });
+  postFounderMessage(s, t, '@Sam what is the endpoint?', []);
+  const asked = t.count;
+  const startedAt = new Date(Date.now() - 1000).toISOString();
+  const before = t.cursor.sam ?? 0;
+  markRead(t, 'sam');
+  // What execute() does when a message run fails before replying.
+  assert.equal(rewindCursor(t, s.messages, 'sam', before, startedAt), true);
+  pauseForFailure(s, t, 'sam', "Sam's run failed: boom");
+  assert.equal(t.status, 'paused');
+  assert.equal(t.pausedReason, 'failed');
+  assert.deepEqual(messagesOf(s, t.id).at(-1)!.undelivered, ['sam']);
+  assert.deepEqual(resumeThread(s, t, L), ['sam']);
+  assert.ok(unreadFor(s, t, 'sam').addressed.some((m) => m.n === asked), 'Resume shows Sam the question again');
+});
+
+test('failed reply: a thread already paused keeps its reason, and still holds the desk for Resume', () => {
+  const s = fresh();
+  const t = createThread(s, { title: 'T', createdBy: 'leo' });
+  t.status = 'paused';
+  t.pausedReason = 'hop-limit';
+  pauseForFailure(s, t, 'sam', "Sam's run failed: boom");
+  assert.equal(t.pausedReason, 'hop-limit');
+  assert.deepEqual(messagesOf(s, t.id).at(-1)!.undelivered, ['sam']);
+});
+
+test('restart: a ticket run puts its read marker back in the ticket thread, without pausing it', () => {
+  const s = fresh();
+  const item = ticket(s, 'leo');
+  const t = createThread(s, { title: 'T', createdBy: 'you', itemId: item.id });
+  item.threadId = t.id;
+  postFounderMessage(s, t, '@Leo a note for the ticket', []);
+  // kickoff() remembers the marker and the thread, then marks it read.
+  const run: Run = { id: 'r_ticket', agentId: 'leo', itemId: item.id, reason: 'instruction', status: 'running', startedAt: '2099-01-01T00:00:00Z', cursorFrom: t.cursor.leo ?? 0, cursorThread: t.id };
+  markRead(t, 'leo');
+  s.runs.push(run);
+  const count = messagesOf(s, t.id).length;
+  migrateState(s);
+  assert.equal(run.status, 'failed');
+  assert.equal(t.cursor.leo, 0, 'the read marker was put back');
+  assert.equal(t.status, 'open', 'a ticket run never pauses the thread');
+  assert.equal(messagesOf(s, t.id).length, count, 'and posts no note in it');
+  assert.match(item.history.at(-1)!.text, /interrupted by a server restart/);
 });
 
 test('comments: kinds and titles are kept, plain comments stay plain', () => {

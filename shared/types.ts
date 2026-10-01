@@ -123,6 +123,10 @@ export interface Run {
   turns?: number;
   summary?: string;
   error?: string;
+  /** The desk's read marker before the run marked its thread read. Put back if the run dies before it replies. */
+  cursorFrom?: number;
+  /** Ticket runs: the ticket's thread that cursorFrom belongs to. Message runs use threadId. */
+  cursorThread?: string;
 }
 
 export interface Company {
@@ -201,7 +205,7 @@ export interface Thread {
   /** Agent ids, plus 'you' once Patrick posts. */
   participants: string[];
   status: ThreadStatus;
-  pausedReason?: 'hop-limit' | 'daily-cap' | 'restart';
+  pausedReason?: 'hop-limit' | 'daily-cap' | 'restart' | 'failed';
   /** Desks woken by other desks since Patrick last posted or resumed. Capped by the loop limit. */
   agentHops: number;
   /** Messages so far. Message.n runs 1..count. */
@@ -319,9 +323,10 @@ export type Decision = 'approve' | 'hold' | 'send-back' | 'instruct';
 
 export const BOARD_COLUMNS: { statuses: ItemStatus[]; label: string }[] = [
   { statuses: ['todo'], label: 'To do' },
-  { statuses: ['in-progress', 'sent-back'], label: 'In progress' },
+  // Approved means the desk is now carrying it out: it stays in progress, tagged Approved, until the desk reports it finished.
+  { statuses: ['in-progress', 'sent-back', 'approved'], label: 'In progress' },
   { statuses: ['needs-you', 'held'], label: 'Needs you' },
-  { statuses: ['approved', 'done'], label: 'Done' },
+  { statuses: ['done'], label: 'Done' },
 ];
 
 export const TEMPLATE_LABEL: Record<TeamTemplate, string> = {
@@ -344,6 +349,23 @@ export const MAX_ATTACHMENTS = 6;
 /** Claude's per-image limit is 5 MB of base64, about 3.75 MB of file. */
 export const MAX_ATTACHMENT_BYTES = 3_750_000;
 export const ATTACHMENT_TYPES: Attachment['type'][] = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
+
+/** One report on a ticket, with what the reports list shows. */
+export interface ReportInfo {
+  url: string;
+  /** The link's own label, e.g. "Read the report". */
+  label: string;
+  /** Desk whose workspace holds it. */
+  agent: string;
+  /** Path under that desk's reports/ folder. */
+  file: string;
+  name: string;
+  /** First heading in the file, or its first line. */
+  title: string | null;
+  size: number;
+  updatedAt: string | null;
+  exists: boolean;
+}
 
 export interface ThreadResponse {
   thread: Thread;

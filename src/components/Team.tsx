@@ -100,7 +100,7 @@ export function Team({ agents, items, onSelect, onAdd }: Props) {
     <>
       <ul className="team-grid">
         {sorted.map((a) => {
-          const open = items.filter((i) => i.assignee === a.id && i.status !== 'done' && i.status !== 'approved').length;
+          const open = items.filter((i) => i.assignee === a.id && i.status !== 'done').length;
           return (
             <li key={a.id}>
               <button type="button" className="team-card" onClick={() => onSelect(a.id)} disabled={a.isHuman}>

@@ -4,6 +4,7 @@ import type { Decision, WorkItem } from '../../shared/types';
 import { TextEditor } from '../editor/TextEditor';
 import { TEXT_LIMIT } from '../lib/markdownPaste';
 import { useProjectId } from '../lib/projectContext';
+import { useUnsavedDraft } from '../shell/draftGuard';
 import { AttachButton, AttachmentTray } from '../ui/attachments/AttachmentTray';
 import { useAttachments } from '../ui/attachments/useAttachments';
 
@@ -21,6 +22,7 @@ export function DecisionBar({ item, ownerName, onDecide, compact }: Props) {
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
   const att = useAttachments(useProjectId());
+  useUnsavedDraft(mode !== 'idle' && (note.trim().length > 0 || att.count > 0));
 
   /** With images (from att.take()), only those are removed afterwards; images added meanwhile stay. Approve and Hold reset the note box. */
   // A ref, not state: two key presses in the same moment both see busy as false.

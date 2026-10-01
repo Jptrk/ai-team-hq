@@ -22,7 +22,8 @@ import { ProjectIdContext } from './lib/projectContext';
 import { KEYS, storage } from './lib/storage';
 import { projectPath, useHashRoute, type ViewId } from './route';
 import { CreateModal, type CreateKind } from './shell/CreateModal';
-import { Drawer } from './shell/Drawer';
+import { createDraftGuard, DraftGuardProvider } from './shell/draftGuard';
+import { PanelModal } from './shell/PanelModal';
 import { Flags } from './shell/Flags';
 import { PageHeader } from './shell/PageHeader';
 import { Sidebar, type SidebarMode } from './shell/Sidebar';
@@ -83,11 +84,15 @@ export function App() {
   const panelTicket = route.kind === 'project' ? route.ticket : undefined;
   const panelAgent = route.kind === 'project' ? route.agent : undefined;
 
-  // ---------- side panel navigation ----------
+  // ---------- ticket modal navigation ----------
   const pushedPanel = useRef(false);
   useEffect(() => {
     if (!panelTicket && !panelAgent) pushedPanel.current = false;
   }, [panelTicket, panelAgent]);
+
+  // Editors in the ticket modal report unsaved text here. True when you choose to keep it.
+  const [panelDrafts] = useState(createDraftGuard);
+  const keepDrafts = useCallback(() => panelDrafts.dirty() && !window.confirm('Discard your unsaved text?'), [panelDrafts]);
 
   const openPanel = useCallback(
     (subject: { ticket?: string; agent?: string }) => {
@@ -95,20 +100,24 @@ export function App() {
       const onProject = route.kind === 'project';
       const path = projectPath(pid, onProject ? view : 'board', { threadId: onProject ? threadId : undefined, ...subject });
       const replacing = Boolean(panelTicket || panelAgent);
+      // Switching to another ticket or person drops what you typed in this one.
+      if (replacing && (subject.ticket !== panelTicket || subject.agent !== panelAgent) && keepDrafts()) return;
       if (!replacing) pushedPanel.current = true;
       navigate(path, replacing);
     },
-    [pid, route.kind, view, threadId, panelTicket, panelAgent, navigate],
+    [pid, route.kind, view, threadId, panelTicket, panelAgent, navigate, keepDrafts],
   );
   const openTicket = useCallback((key: string) => openPanel({ ticket: key }), [openPanel]);
   const openAgent = useCallback((id: string) => openPanel({ agent: id }), [openPanel]);
-  const closePanel = useCallback(() => {
-    if (!pid) return;
+  // Esc, the backdrop, the close button and Android back all come here. False when the modal stays open.
+  const closePanel = useCallback((): boolean => {
+    if (!pid || keepDrafts()) return false;
     if (pushedPanel.current) {
       pushedPanel.current = false;
       window.history.back();
     } else navigate(projectPath(pid, view, { threadId }), true);
-  }, [pid, view, threadId, navigate]);
+    return true;
+  }, [pid, view, threadId, navigate, keepDrafts]);
   const openThread = useCallback((id: string) => pid && navigate(projectPath(pid, 'chat', { threadId: id })), [pid, navigate]);
 
   const actions = useProjectActions({ pid, state, notify, after, openTicket, openThread });
@@ -324,7 +333,7 @@ export function App() {
     }
   }
 
-  // ---------- side panel ----------
+  // ---------- ticket / person modal ----------
   let panel: ReactNode = null;
   let panelKey = '';
   let panelLabel = 'Details';
@@ -396,7 +405,7 @@ export function App() {
 
   return (
     <ProjectIdContext.Provider value={pid}>
-      <div className={`shell${inlineMode ? ` side-${inlineMode}` : ' side-none'}${panelOpen ? ' has-panel' : ''}`}>
+      <div className={`shell${inlineMode ? ` side-${inlineMode}` : ' side-none'}`}>
         <a className="skip-link" href="#main">
           Skip to content
         </a>
@@ -433,9 +442,9 @@ export function App() {
           {!live && meta && route.kind === 'project' && view === 'needs-you' && <p className="sim-note muted small">Sim mode: fake activity, no Claude calls.</p>}
           {body}
         </main>
-        <Drawer open={panelOpen} subjectKey={panelKey} label={panelLabel} onClose={closePanel} modal={!mid} returnFocus={returnFocus}>
-          {panel}
-        </Drawer>
+        <PanelModal open={panelOpen} subjectKey={panelKey} label={panelLabel} onClose={closePanel} returnFocus={returnFocus}>
+          <DraftGuardProvider value={panelDrafts}>{panel}</DraftGuardProvider>
+        </PanelModal>
         {state && current && (
           <CreateModal
             open={createOpen}

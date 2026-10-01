@@ -27,6 +27,7 @@ const PAUSE_TEXT: Record<string, string> = {
   'hop-limit': 'Paused: the desks hit the message limit for this thread.',
   'daily-cap': "Paused: the team hit today's limit for desk-to-desk messages.",
   restart: 'Paused: a reply was cut off by a server restart.',
+  failed: 'Paused: a reply failed. Resume to try again.',
 };
 
 export function ChatThread({ pid, thread, state, onBack, onOpenTicket, onChanged }: Props) {

@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import type { Agent, Attachment, ItemKind, ItemStatus, Message, RunReason, Thread, WorkItem } from '../../shared/types';
-import { attachmentsDir } from '../attachments';
+import { attachmentsDir, saveUpload } from '../attachments';
 import {
   canWake,
   ChatError,
@@ -25,6 +25,7 @@ import { isReadOnlyTool } from '../mcp';
 import { folderExists, HQ_ROOT, instructionsFileIn, isInside } from '../paths';
 import { now, uid, WORKSPACES, type Project } from '../store';
 import { imageMarker, oneMessage, userContent } from './content';
+import { attachFiles, deskImages, isCaptureTool, keepShots, toolImagesIn, toolResultIdsIn, toolUsesIn, waitForShots, type ReadyImages, type Shots } from './screenshots';
 import type { AgentRunner, RunHooks, RunInput, RunOutcome } from './types';
 
 /**
@@ -58,11 +59,20 @@ export function workspaceFor(projectId: string, agentId: string): string {
   return path.join(WORKSPACES, projectId, agentId);
 }
 
-/** Resolve a report path the agent gave us, only if it stays inside that agent's reports folder. */
+/** Resolve a report path the agent gave us, only if it stays inside that agent's reports folder, links followed. */
 export function resolveReport(projectId: string, agentId: string, rel: string): string | null {
   const reports = path.join(workspaceFor(projectId, agentId), 'reports');
   const abs = path.resolve(reports, rel);
-  return isInside(abs, reports) && abs !== reports ? abs : null;
+  if (!isInside(abs, reports) || abs === reports) return null;
+  // A junction or symlink inside reports/ must not lead out of it.
+  if (fs.existsSync(abs)) {
+    try {
+      if (!isInside(fs.realpathSync.native(abs), fs.realpathSync.native(reports))) return null;
+    } catch {
+      return null;
+    }
+  }
+  return abs;
 }
 
 function ensureWorkspace(p: Project, agent: Agent): string {
@@ -140,6 +150,7 @@ function systemPromptFor(p: Project, agent: Agent, dir: string, connections: All
     '- Call post_update once when you start so the founder sees what you are on.',
     "- To tell the founder something about a ticket (progress, a question, an answer), use comment_on_ticket. Never rewrite a ticket's description; it stays as the founder wrote it.",
     '- Images the founder attached are shown to you with the prompt. Older ones are listed by file path; open them with Read when you need them.',
+    '- To show the founder an image: take it with a connected tool (for example Figma get_screenshot), then pass screenshots: 1 to comment_on_ticket, send_message or raise_for_decision to attach the latest one. A PNG, JPEG, WebP or GIF file you can read goes with files: ["path"]. Show, do not describe, when a picture is the point.',
     '- Do not invent facts about clients, numbers, code, or history you have no record of. Say what you would need and where it should come from.',
     reason === 'comment'
       ? '- You were woken by the founder commenting on your ticket. Answer with comment_on_ticket. Only do more work if a comment asks for it; if that work needs the founder, use raise_for_decision. Never close the ticket to answer a comment.'
@@ -213,10 +224,11 @@ function commentLines(p: Project, item: WorkItem, last = 10): string[] {
   return lines;
 }
 
-/** Which images go into this run's prompt. */
+/** Which images go into this run's prompt. Only the founder's go inline; desk-made ones are listed by path. */
 function imagesFor(input: RunInput): Attachment[] {
-  if (input.images?.length) return input.images;
-  if ((input.reason === 'instruction' || input.reason === 'manual') && input.item) return input.item.attachments ?? [];
+  const founders = (list: Attachment[]) => list.filter((a) => a.by === 'you');
+  if (input.images?.length) return founders(input.images);
+  if ((input.reason === 'instruction' || input.reason === 'manual') && input.item) return founders(input.item.attachments ?? []);
   return [];
 }
 
@@ -319,6 +331,8 @@ interface RunContext {
   /** comment_on_ticket calls so far, and whether one landed on the run's own ticket. */
   comments: number;
   commented: boolean;
+  /** Images connected tools returned this run, held in memory so the desk can attach them. */
+  shots: Shots;
   /** Epoch ms when this run started; report files written after it get linked automatically. */
   startedMs: number;
   reason: RunReason;
@@ -416,6 +430,24 @@ function hqServer(ctx: RunContext) {
     },
   );
 
+  const imageArgs = {
+    screenshots: z.number().int().min(1).max(6).optional().describe('Attach your latest N screenshots taken this run with a connected tool, e.g. Figma get_screenshot. Usually 1.'),
+    files: z.array(z.string().min(1).max(400)).max(6).optional().describe('PNG, JPEG, WebP or GIF files to attach, from your workspace or the project folder'),
+  };
+  const projectDir = projectDirOf(p);
+  const readable = [ctx.dir, ...(projectDir ? [projectDir] : []), attachmentsDir(p.id)];
+  /** Check the images a call asks for, after any screenshot still coming back this turn. Nothing is saved until save(). */
+  const imagesFrom = async (args: { screenshots?: number; files?: string[] }): Promise<ReadyImages | string> => {
+    if ((args.screenshots ?? 0) > 0 && !(await waitForShots(ctx.shots))) return 'A screenshot is still on its way. Call this again once its result is back.';
+    return deskImages(
+      args,
+      ctx.shots,
+      (files) => attachFiles(p.id, ctx.agent.id, files, readable, ctx.dir),
+      (data) => saveUpload(p.id, data, ctx.agent.id),
+    );
+  };
+  const shown = (r: ReadyImages) => (r.count ? ` with ${r.count} image${r.count === 1 ? '' : 's'} (from ${r.sources.join(', ')})` : '');
+
   const raise = tool(
     'raise_for_decision',
     'Hand something to the founder. Use it for anything that would leave the building (email, message, post, merge), commit money, promise a date, or needs a call only they can make. The task pauses until they decide.',
@@ -425,17 +457,22 @@ function hqServer(ctx: RunContext) {
       kind: z.enum(['decide', 'review']).describe('decide = yes/no on an action; review = look at a draft, a diff, or a plan'),
       report: z.string().max(200).optional().describe('File name under reports/ of the draft or full write-up, e.g. "plan.md"'),
       client: z.string().max(80).optional().describe('Client, app, or area this concerns'),
+      ...imageArgs,
     },
     async (args) => {
       const s = p.state;
+      const ready = await imagesFrom(args);
+      if (typeof ready === 'string') return fail(ready);
       const links = reportLinks(ctx, args.report, 'Read the full report');
       let target: WorkItem;
       const context = ctx.item ? s.items.find((i) => i.id === ctx.item!.id) : undefined;
+      // Saved only now, right before the decision is raised.
+      const images = ready.save();
       // Only the owner may turn its own ticket into a decision. Anyone else opens a new ticket.
       if (!ctx.raised && context && owns(ctx)) {
         // The founder's description stays as written. The ask is a comment on the ticket.
         target = context;
-        addComment(target, { from: ctx.agent.id, kind: 'decision', title: args.title, text: args.summary });
+        addComment(target, { from: ctx.agent.id, kind: 'decision', title: args.title, text: args.summary, attachments: images });
         if (ctx.item && target.id === ctx.item.id) ctx.commented = true;
         target.kind = args.kind as ItemKind;
         target.status = 'needs-you';
@@ -454,6 +491,7 @@ function hqServer(ctx: RunContext) {
           assignee: ctx.agent.id,
           dated: now().slice(0, 10),
           links,
+          ...(images.length ? { attachments: images } : {}),
           threadId: ctx.thread?.id,
           history: [
             {
@@ -470,7 +508,7 @@ function hqServer(ctx: RunContext) {
       if (thread && thread.status !== 'closed') note(s, thread, `${ctx.agent.name} raised ${p.ticket(target)} for ${ownerName}: ${args.title}`);
       p.log(ctx.agent.id, `Needs you: ${p.ticket(target)} ${args.title}`);
       p.commit();
-      return ok(`Raised as ${p.ticket(target)}. The founder will see it in Needs You. Stop working on this until they decide.`);
+      return ok(`Raised as ${p.ticket(target)}${shown(ready)}. The founder will see it in Needs You. Stop working on this until they decide.`);
     },
   );
 
@@ -480,6 +518,7 @@ function hqServer(ctx: RunContext) {
     {
       text: z.string().min(2).max(1500).describe('The comment. Short and concrete.'),
       ticket: z.string().max(40).optional().describe(`Ticket key like ${p.meta.key}-12. Leave out for the ticket you are on.`),
+      ...imageArgs,
     },
     async (args) => {
       const s = p.state;
@@ -491,12 +530,15 @@ function hqServer(ctx: RunContext) {
           ? s.items.find((i) => i.id === ctx.item!.id)
           : undefined;
       if (!target) return fail(key ? `No ticket ${args.ticket} on this project.` : `You are not on a ticket in this run. Name one, e.g. "${p.meta.key}-12".`);
-      addComment(target, { from: ctx.agent.id, text: args.text });
+      // Images last, so a refused call leaves no files behind.
+      const ready = await imagesFrom(args);
+      if (typeof ready === 'string') return fail(ready);
+      addComment(target, { from: ctx.agent.id, text: args.text, attachments: ready.save() });
       ctx.comments += 1;
       if (ctx.item && target.id === ctx.item.id) ctx.commented = true;
       p.log(ctx.agent.id, `Commented on ${p.ticket(target)} "${target.title}"`);
       p.commit();
-      return ok(`Commented on ${p.ticket(target)}.`);
+      return ok(`Commented on ${p.ticket(target)}${shown(ready)}.`);
     },
   );
 
@@ -543,6 +585,7 @@ function hqServer(ctx: RunContext) {
       text: z.string().min(2).max(1500).describe('The message. Short and concrete.'),
       thread: z.string().max(40).optional().describe('Thread id. Leave out to use the thread you were woken for, or your ticket\'s thread. "new" starts a new thread.'),
       title: z.string().min(3).max(80).optional().describe('Title, only when starting a new thread'),
+      ...imageArgs,
     },
     async (args) => {
       const s = p.state;
@@ -550,12 +593,16 @@ function hqServer(ctx: RunContext) {
       const r = resolveRecipients(s, ctx.agent.id, args.to);
       if (r.errors.length) return fail(r.errors.join(' '));
       if (!r.agents.length && !r.founder) return fail('Name at least one teammate, or "founder".');
+      // Images are checked before the thread is picked, since picking can start a new one; they are saved only when posting.
+      const ready = await imagesFrom(args);
+      if (typeof ready === 'string') return fail(ready);
       const picked = pickThread(ctx, args.thread, args.title, args.text.slice(0, 60));
       if (typeof picked === 'string') return fail(picked);
+      if (picked.status === 'closed') return fail('This thread is closed.');
       const to = [...r.agents.map((a) => a.id), ...(r.founder ? ['you'] : [])];
       let posted;
       try {
-        posted = postAgentMessage(s, picked, ctx.agent.id, to, args.text);
+        posted = postAgentMessage(s, picked, ctx.agent.id, to, args.text, undefined, ready.save());
       } catch (e) {
         if (e instanceof ChatError) return fail(e.message);
         throw e;
@@ -570,11 +617,11 @@ function hqServer(ctx: RunContext) {
 
       const held = posted.message.undelivered ?? [];
       if (held.length) {
-        return ok(`Posted in thread ${picked.id}, but the thread is paused until ${ownerName} steps in, so ${held.map((id) => nameOf(p, id)).join(', ')} will not see it yet. Wrap up.`);
+        return ok(`Posted${shown(ready)} in thread ${picked.id}, but the thread is paused until ${ownerName} steps in, so ${held.map((id) => nameOf(p, id)).join(', ')} will not see it yet. Wrap up.`);
       }
-      if (!posted.deliver.length) return ok(`Posted to ${names} in thread ${picked.id}. Nobody needed waking. You can stop now.`);
+      if (!posted.deliver.length) return ok(`Posted to ${names}${shown(ready)} in thread ${picked.id}. Nobody needed waking. You can stop now.`);
       return ok(
-        `Sent to ${names} in thread ${picked.id} (${picked.agentHops}/${HOP_LIMIT} desk-to-desk messages used). They are woken with it, and you are woken with the reply. ${ctx.mode === 'ticket' ? 'If you are blocked on their answer, stop here.' : 'You can stop now.'}`,
+        `Sent to ${names}${shown(ready)} in thread ${picked.id} (${picked.agentHops}/${HOP_LIMIT} desk-to-desk messages used). They are woken with it, and you are woken with the reply. ${ctx.mode === 'ticket' ? 'If you are blocked on their answer, stop here.' : 'You can stop now.'}`,
       );
     },
   );
@@ -652,6 +699,22 @@ function globBase(pattern: string): string {
   return /[\\/]$/.test(head) || cut === -1 ? head : path.dirname(head);
 }
 
+/** Real path of `p`, links followed. A path that does not exist yet goes through its nearest existing parent. */
+function realPathOf(p: string): string {
+  const abs = path.resolve(p);
+  const rest: string[] = [];
+  for (let at = abs; ; ) {
+    try {
+      return path.join(fs.realpathSync.native(at), ...rest);
+    } catch {
+      const up = path.dirname(at);
+      if (up === at) return abs;
+      rest.unshift(path.basename(at));
+      at = up;
+    }
+  }
+}
+
 function isProtected(target: string, projectDir: string): string | null {
   if (isInside(target, HQ_ROOT)) return 'That path is inside AI Team HQ itself.';
   const parts = path.relative(projectDir, target).toLowerCase().split(/[\\/]/);
@@ -690,9 +753,38 @@ function mcpDecision(ctx: GuardContext, toolName: string, input: Record<string, 
 export function guard(ctx: GuardContext) {
   const projectDir = projectDirOf(ctx.project);
   const canWriteProject = Boolean(projectDir && ctx.project.meta.access === 'write');
-  // Images the founder pasted: readable by every desk on this project, writable by none.
-  const readRoots = [ctx.dir, ...(projectDir ? [projectDir] : []), attachmentsDir(ctx.project.id)];
-  const writeRoots = [ctx.dir, ...(canWriteProject && projectDir ? [projectDir] : [])];
+  // The same fence twice: as written, and with links followed, so a link inside a root cannot reach outside it.
+  const fenceOf = (real: (p: string) => string) => {
+    const dir = real(ctx.dir);
+    const project = projectDir ? real(projectDir) : null;
+    const images = real(attachmentsDir(ctx.project.id));
+    return {
+      dir,
+      project,
+      images,
+      hq: real(HQ_ROOT),
+      // Images the founder pasted: readable by every desk on this project, writable by none.
+      read: [dir, ...(project ? [project] : []), images],
+      write: [dir, ...(canWriteProject && project ? [project] : [])],
+    };
+  };
+  const fences = [fenceOf((p) => p), fenceOf(realPathOf)];
+  const where = (writes: boolean) =>
+    writes
+      ? canWriteProject
+        ? 'your workspace or the project folder'
+        : `your workspace (${ctx.dir})${projectDir ? '; the project folder is read-only' : ''}`
+      : projectDir
+        ? `your workspace, ${projectDir}, or the attached images`
+        : `your workspace (${ctx.dir}) or the attached images`;
+  /** Why `target` is off limits under one fence, or null. */
+  const refusal = (target: string, f: (typeof fences)[number], writes: boolean): string | null => {
+    if (!(writes ? f.write : f.read).some((root) => isInside(target, root))) return `Stay inside ${where(writes)}.`;
+    // A linked folder around HQ must not expose HQ's data: only this desk's workspace and this project's images.
+    if (isInside(target, f.hq) && !isInside(target, f.dir) && !isInside(target, f.images)) return 'That path is inside AI Team HQ itself.';
+    if (writes && f.project && !isInside(target, f.dir)) return isProtected(target, f.project);
+    return null;
+  };
 
   return async (toolName: string, input: Record<string, unknown>): Promise<PermissionResult> => {
     if (toolName.startsWith('mcp__hq__')) return { behavior: 'allow', updatedInput: input };
@@ -701,7 +793,6 @@ export function guard(ctx: GuardContext) {
     if (!FILE_TOOLS.includes(toolName)) return { behavior: 'deny', message: `${toolName} is not available on this desk.` };
 
     const writes = WRITE_TOOLS.includes(toolName);
-    const roots = writes ? writeRoots : readRoots;
     const targets: string[] = [];
     for (const key of ['file_path', 'path']) {
       const value = input[key];
@@ -710,20 +801,8 @@ export function guard(ctx: GuardContext) {
     if (toolName === 'Glob' && typeof input.pattern === 'string' && path.isAbsolute(input.pattern)) targets.push(path.resolve(globBase(input.pattern)));
 
     for (const target of targets) {
-      if (!roots.some((root) => isInside(target, root))) {
-        const where = writes
-          ? canWriteProject
-            ? 'your workspace or the project folder'
-            : `your workspace (${ctx.dir})${projectDir ? '; the project folder is read-only' : ''}`
-          : projectDir
-            ? `your workspace, ${projectDir}, or the attached images`
-            : `your workspace (${ctx.dir}) or the attached images`;
-        return { behavior: 'deny', message: `Stay inside ${where}.` };
-      }
-      if (writes && projectDir && !isInside(target, ctx.dir)) {
-        const reason = isProtected(target, projectDir);
-        if (reason) return { behavior: 'deny', message: reason };
-      }
+      const why = refusal(target, fences[0], writes) ?? refusal(realPathOf(target), fences[1], writes);
+      if (why) return { behavior: 'deny', message: why };
     }
     return { behavior: 'allow', updatedInput: input };
   };
@@ -765,7 +844,19 @@ async function runOnce(input: RunInput, ctx: RunContext, resume: string | undefi
     // With images, the prompt becomes one user message carrying image blocks.
     const content = userContent(text, ctx.project.id, imagesFor(input));
     const prompt = typeof content === 'string' ? content : oneMessage(content);
+    // Which tool each tool_use id belongs to, so images in tool results can be traced to a connection.
+    const toolById = new Map<string, string>();
     for await (const msg of query({ prompt, options })) {
+      if (msg.type === 'assistant') {
+        for (const [id, name] of toolUsesIn(msg)) {
+          toolById.set(id, name);
+          // An HQ tool in the same turn may run before this result is back; it waits on pending.
+          if (isCaptureTool(name)) ctx.shots.pending.add(id);
+        }
+      } else if (msg.type === 'user') {
+        keepShots(ctx.shots, toolImagesIn(msg, toolById));
+        for (const id of toolResultIdsIn(msg)) ctx.shots.pending.delete(id);
+      }
       if (msg.type !== 'result') continue;
       const sessionId = (msg as { session_id?: string }).session_id;
       if (msg.subtype === 'success') {
@@ -823,6 +914,7 @@ export const claudeRunner: AgentRunner = {
       finished: false,
       comments: 0,
       commented: false,
+      shots: { recent: [], pending: new Set() },
       startedMs: Date.now() - 1000,
       reason: input.reason,
       connections: allowed,
@@ -847,9 +939,12 @@ export const claudeRunner: AgentRunner = {
         // The resumed session grew past what the API accepts (images add up). Forget it and start fresh, once.
         input.agent.sessionId = undefined;
         input.agent.sessionTotalUsd = undefined;
+        // A fresh session: screenshots from the failed attempt do not carry over.
+        ctx.shots = { recent: [], pending: new Set() };
         outcome = await runOnce(input, ctx, undefined, signal);
       } else if (input.agent.sessionId && /session/i.test(message)) {
         // A stale session id is the other failure worth retrying without it.
+        ctx.shots = { recent: [], pending: new Set() };
         outcome = await runOnce(input, ctx, undefined, signal);
       } else {
         throw e;

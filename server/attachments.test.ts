@@ -1,5 +1,7 @@
 /**
  * Pasted images: type sniffing, file names, picking ids, the sweep, and the prompt blocks and their caps.
+ * Desk images: screenshots held in memory and saved only when attached, and image files attached by path.
+ * Report paths: links inside a desk's reports/ never lead out of it.
  * Run: npm run test:attachments. Works in a throwaway folder under the OS temp dir.
  */
 import assert from 'node:assert/strict';
@@ -7,12 +9,15 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { Attachment, State } from '../shared/types';
+import type { Shots } from './runner/screenshots';
 
 // The store reads data/ from the working directory, so move into a scratch folder first.
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hq-attach-'));
 process.chdir(root);
 const att = await import('./attachments');
 const content = await import('./runner/content');
+const shotsMod = await import('./runner/screenshots');
+const claude = await import('./runner/claude');
 const PID = 'demo';
 
 const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(32, 1)]);
@@ -24,8 +29,8 @@ const HTML = Buffer.from('<!doctype html><script>alert(1)</script>');
 const ZIP = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0, 0, 0, 0]);
 
 let passed = 0;
-const cases: [string, () => void][] = [];
-const test = (name: string, fn: () => void) => cases.push([name, fn]);
+const cases: [string, () => void | Promise<void>][] = [];
+const test = (name: string, fn: () => void | Promise<void>) => cases.push([name, fn]);
 
 test('sniff: real images pass, everything else fails', () => {
   assert.equal(att.sniffImage(PNG), 'image/png');
@@ -151,10 +156,197 @@ test('prompt: a missing file is skipped, not an error', () => {
   assert.equal(content.userContent('hi', PID, [ghost]), 'hi');
 });
 
+// ---------- desk screenshots ----------
+const toolUse = (id: string, name: string) => ({ type: 'assistant', message: { content: [{ type: 'tool_use', id, name, input: {} }] } });
+const toolResult = (id: string, blocks: unknown[]) => ({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: id, content: blocks }] } });
+const imgBlock = (buf: Buffer) => ({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: buf.toString('base64') } });
+
+test('screenshots: images from a connection are found, HQ tools and file reads are not', () => {
+  const byId = new Map<string, string>();
+  for (const m of [toolUse('t1', 'mcp__figma__get_screenshot'), toolUse('t2', 'Read'), toolUse('t3', 'mcp__hq__comment_on_ticket')]) for (const [id, name] of shotsMod.toolUsesIn(m)) byId.set(id, name);
+  assert.equal(byId.size, 3);
+  const found = shotsMod.toolImagesIn(toolResult('t1', [{ type: 'text', text: 'here' }, imgBlock(PNG)]), byId);
+  assert.equal(found.length, 1);
+  assert.equal(found[0].tool, 'mcp__figma__get_screenshot');
+  assert.ok(found[0].data.equals(PNG));
+  assert.equal(shotsMod.toolImagesIn(toolResult('t2', [imgBlock(PNG)]), byId).length, 0, 'a file the desk read is not a screenshot');
+  assert.equal(shotsMod.toolImagesIn(toolResult('t3', [imgBlock(PNG)]), byId).length, 0, 'HQ tools never count');
+  assert.equal(shotsMod.toolImagesIn(toolResult('unknown', [imgBlock(PNG)]), byId).length, 0);
+  assert.equal(shotsMod.toolImagesIn(toolUse('t1', 'x'), byId).length, 0, 'assistant messages carry no results');
+  assert.equal(shotsMod.toolImagesIn({ type: 'user', message: { content: 'plain prompt' } }, byId).length, 0);
+});
+
+const newShots = (): Shots => ({ recent: [], pending: new Set() });
+const fig = (data: Buffer) => ({ tool: 'mcp__figma__get_screenshot', data });
+/** PNGs that differ, so a test can tell which one was saved. */
+const pngNo = (n: number) => Buffer.concat([PNG, Buffer.from([n])]);
+const fileCount = () => (fs.existsSync(att.attachmentsDir(PID)) ? fs.readdirSync(att.attachmentsDir(PID)).length : 0);
+const saveAsLeo = (data: Buffer) => att.saveUpload(PID, data, 'leo');
+const noFiles = () => 'files were not expected here';
+
+test('screenshots: held in memory, newest 6 kept; junk and too-large data are skipped with a reason', () => {
+  const before = fileCount();
+  const shots = newShots();
+  shotsMod.keepShots(shots, [fig(PNG)]);
+  assert.equal(shots.recent.length, 1);
+  assert.equal(fileCount(), before, 'taking a screenshot writes nothing');
+  shotsMod.keepShots(shots, [{ tool: 'mcp__x__y', data: HTML }]);
+  assert.equal(shots.recent.length, 1);
+  assert.match(shots.skipped ?? '', /not kept: it is not a PNG/);
+  shotsMod.keepShots(shots, [fig(Buffer.concat([PNG, Buffer.alloc(3_800_000)]))]);
+  assert.match(shots.skipped ?? '', /3.75 MB/);
+  shotsMod.keepShots(shots, [fig(JPEG)]);
+  assert.equal(shots.skipped, undefined, 'a good capture clears the reason');
+  // Past six the oldest drops; the newest is never refused.
+  const seven = Array.from({ length: 7 }, (_, i) => fig(pngNo(i)));
+  shotsMod.keepShots(shots, seven);
+  assert.equal(shots.recent.length, 6);
+  assert.ok(shots.recent[0].data.equals(seven[1].data));
+  assert.ok(shots.recent[5].data.equals(seven[6].data));
+  assert.equal(fileCount(), before);
+});
+
+test('screenshots: attach the latest N, saved only then, and the reply can name the source', () => {
+  assert.match(String(shotsMod.deskImages({ screenshots: 1 }, newShots(), noFiles, saveAsLeo)), /No screenshot was taken/);
+  const shots = newShots();
+  shotsMod.keepShots(shots, [fig(pngNo(1)), fig(pngNo(2)), { tool: 'mcp__claude_ai_Figma__get_screenshot', data: pngNo(3) }]);
+  const before = fileCount();
+  const latest = shotsMod.deskImages({ screenshots: 1 }, shots, noFiles, saveAsLeo);
+  assert.ok(typeof latest !== 'string');
+  assert.equal(latest.count, 1);
+  assert.deepEqual(latest.sources, ['Figma get_screenshot']);
+  assert.equal(fileCount(), before, 'checking writes nothing');
+  const [saved] = latest.save();
+  assert.equal(saved.by, 'leo');
+  assert.ok(fs.readFileSync(path.join(att.attachmentsDir(PID), saved.file)).equals(pngNo(3)), 'the newest screenshot is the one saved');
+  assert.equal(fileCount(), before + 1, 'only the attached one is written');
+  const two = shotsMod.deskImages({ screenshots: 2 }, shots, noFiles, saveAsLeo);
+  assert.ok(typeof two !== 'string' && two.count === 2);
+  assert.deepEqual(two.sources, ['figma get_screenshot', 'Figma get_screenshot']);
+  const nothing = shotsMod.deskImages({}, shots, noFiles, saveAsLeo);
+  assert.ok(typeof nothing !== 'string' && nothing.count === 0 && nothing.save().length === 0, 'nothing asked, nothing attached');
+  // Too many in total: refused before any file is checked.
+  const full = newShots();
+  shotsMod.keepShots(full, Array.from({ length: 6 }, (_, i) => fig(pngNo(i))));
+  let checked = false;
+  const attach = () => {
+    checked = true;
+    return noFiles();
+  };
+  assert.match(String(shotsMod.deskImages({ screenshots: 6, files: ['x.png'] }, full, attach, saveAsLeo)), /at most 6/);
+  assert.equal(checked, false);
+});
+
+test('screenshots: when the newest capture was refused, an older one is never attached in its place', () => {
+  const shots = newShots();
+  shotsMod.keepShots(shots, [fig(PNG), fig(HTML)]);
+  assert.equal(shots.recent.length, 1, 'the older good one is still held');
+  const before = fileCount();
+  assert.match(String(shotsMod.deskImages({ screenshots: 1 }, shots, noFiles, saveAsLeo)), /latest screenshot \(from figma get_screenshot\) was not kept/);
+  assert.equal(fileCount(), before);
+  // Files alone still go: the refused capture only blocks screenshots.
+  const ready = { count: 1, sources: ['mock.png'], save: () => [] };
+  const files = shotsMod.deskImages({ files: ['mock.png'] }, shots, () => ready, saveAsLeo);
+  assert.ok(typeof files !== 'string' && files.count === 1);
+});
+
+test('screenshots: a call waits for a capture still on its way, and gives up after the timeout', async () => {
+  const shots = newShots();
+  assert.equal(await shotsMod.waitForShots(shots, 100), true, 'nothing pending, no wait');
+  shots.pending.add('t1');
+  const started = Date.now();
+  setTimeout(() => shots.pending.delete('t1'), 60);
+  assert.equal(await shotsMod.waitForShots(shots, 1000), true);
+  assert.ok(Date.now() - started >= 50, 'it waited for the result');
+  shots.pending.add('t2');
+  assert.equal(await shotsMod.waitForShots(shots, 80), false, 'still pending after the timeout');
+});
+
+test('screenshots: every tool result clears its call, with or without an image', () => {
+  assert.deepEqual(shotsMod.toolResultIdsIn(toolResult('t1', [{ type: 'text', text: 'no image' }])), ['t1']);
+  assert.deepEqual(shotsMod.toolResultIdsIn(toolResult('t2', [imgBlock(PNG)])), ['t2']);
+  assert.deepEqual(shotsMod.toolResultIdsIn(toolUse('t1', 'mcp__figma__get_screenshot')), [], 'assistant messages carry no results');
+});
+
+test('screenshots: image files a desk can read attach; anything else is refused, and nothing is copied until all pass', () => {
+  const ws = path.join(root, 'ws-leo');
+  const outside = path.join(root, 'elsewhere');
+  fs.mkdirSync(ws, { recursive: true });
+  fs.mkdirSync(outside, { recursive: true });
+  fs.writeFileSync(path.join(ws, 'mock.png'), PNG);
+  fs.writeFileSync(path.join(ws, 'fake.png'), HTML);
+  fs.writeFileSync(path.join(ws, 'big.png'), Buffer.concat([PNG, Buffer.alloc(3_800_000)]));
+  fs.writeFileSync(path.join(outside, 'secret.png'), PNG);
+  const roots = [ws, att.attachmentsDir(PID)];
+  const ok = shotsMod.attachFiles(PID, 'leo', ['mock.png'], roots, ws);
+  assert.ok(typeof ok !== 'string' && ok.count === 1);
+  assert.deepEqual(ok.sources, ['mock.png']);
+  const before = fileCount();
+  const [copied] = ok.save();
+  assert.equal(fileCount(), before + 1);
+  assert.ok(copied.by === 'leo' && copied.type === 'image/png');
+  assert.notEqual(copied.file, 'mock.png', 'copied in under a server name');
+  assert.match(String(shotsMod.attachFiles(PID, 'leo', ['fake.png'], roots, ws)), /not a PNG/);
+  assert.match(String(shotsMod.attachFiles(PID, 'leo', ['big.png'], roots, ws)), /3.75 MB/);
+  assert.match(String(shotsMod.attachFiles(PID, 'leo', ['missing.png'], roots, ws)), /does not exist/);
+  assert.match(String(shotsMod.attachFiles(PID, 'leo', [path.join(outside, 'secret.png')], roots, ws)), /outside/);
+  assert.match(String(shotsMod.attachFiles(PID, 'leo', ['../elsewhere/secret.png'], roots, ws)), /outside/);
+  // One bad file in the list: the good one before it is not copied either.
+  const mid = fileCount();
+  assert.match(String(shotsMod.attachFiles(PID, 'leo', ['mock.png', 'fake.png'], roots, ws)), /not a PNG/);
+  assert.equal(fileCount(), mid);
+  const twice = shotsMod.attachFiles(PID, 'leo', ['mock.png', path.join(ws, 'mock.png')], roots, ws);
+  assert.ok(typeof twice !== 'string' && twice.count === 1, 'the same file named twice goes once');
+  // An existing attachment is reused, not copied again.
+  const existing = att.saveUpload(PID, PNG, 'you');
+  const again = shotsMod.attachFiles(PID, 'leo', [path.join(att.attachmentsDir(PID), existing.file)], roots, ws);
+  assert.ok(typeof again !== 'string');
+  const n = fileCount();
+  assert.equal(again.save()[0].id, existing.id);
+  assert.equal(fileCount(), n);
+});
+
+test('screenshots: a link inside a readable folder that points outside is refused', () => {
+  const ws = path.join(root, 'ws-link');
+  const outside = path.join(root, 'outside-link');
+  fs.mkdirSync(ws, { recursive: true });
+  fs.mkdirSync(outside, { recursive: true });
+  fs.writeFileSync(path.join(outside, 'secret.png'), PNG);
+  fs.writeFileSync(path.join(ws, 'mine.png'), PNG);
+  try {
+    fs.symlinkSync(outside, path.join(ws, 'linked'), 'junction');
+  } catch (e) {
+    console.log(`     (link case skipped: ${e instanceof Error ? e.message : String(e)})`);
+    return;
+  }
+  assert.match(String(shotsMod.attachFiles(PID, 'leo', ['linked/secret.png'], [ws], ws)), /outside/);
+  assert.ok(typeof shotsMod.attachFiles(PID, 'leo', ['mine.png'], [ws], ws) !== 'string', 'real files beside the link still attach');
+});
+
+test('reports: a link inside reports/ that points outside is refused', () => {
+  const reports = path.join(claude.workspaceFor(PID, 'leo'), 'reports');
+  const outside = path.join(root, 'outside-reports');
+  fs.mkdirSync(reports, { recursive: true });
+  fs.mkdirSync(outside, { recursive: true });
+  fs.writeFileSync(path.join(outside, 'secret.md'), '# secret');
+  fs.writeFileSync(path.join(reports, 'plan.md'), '# plan');
+  assert.equal(claude.resolveReport(PID, 'leo', 'plan.md'), path.join(reports, 'plan.md'));
+  assert.equal(claude.resolveReport(PID, 'leo', '../memory.md'), null, 'the text check still applies');
+  try {
+    fs.symlinkSync(outside, path.join(reports, 'linked'), 'junction');
+  } catch (e) {
+    console.log(`     (link case skipped: ${e instanceof Error ? e.message : String(e)})`);
+    return;
+  }
+  assert.equal(claude.resolveReport(PID, 'leo', 'linked/secret.md'), null);
+  assert.equal(claude.resolveReport(PID, 'leo', 'linked'), null, 'the link itself too');
+  assert.equal(claude.resolveReport(PID, 'leo', 'plan.md'), path.join(reports, 'plan.md'), 'real reports beside the link still resolve');
+});
+
 let failed = 0;
 for (const [name, fn] of cases) {
   try {
-    fn();
+    await fn();
     passed++;
     console.log(`ok   ${name}`);
   } catch (e) {

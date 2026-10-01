@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 
 /**
- * One Esc handler at a time: the topmost open layer (menu, then modal, then side panel).
+ * One Esc handler at a time: the topmost open layer (menu, then modal, then the ticket modal).
  * While typing in a field, Esc first leaves the field, unless the layer asks otherwise
  * (menus and search close straight away).
  */

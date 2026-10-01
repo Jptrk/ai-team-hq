@@ -3,7 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 import type { Agent, Attachment, Meta, Run, RunReason, RunnerName } from '../../shared/types';
 import { refreshStatuses, settleInstructions } from '../agents';
-import { clearWaiting, findThread, markRead, needsWake, note, unreadFor } from '../chat';
+import { clearWaiting, findThread, markRead, needsWake, note, pauseForFailure, unreadFor } from '../chat';
+import { rewindCursor } from '../cursor';
 import { unansweredImages } from '../comments';
 import { now, uid, type Project } from '../store';
 import { claudeRunner, MODEL } from './claude';
@@ -64,6 +65,8 @@ export function meta(): Meta {
 }
 
 const controllers = new Map<string, AbortController>();
+/** Runs the founder stopped. Their failure is not rewound or paused for a retry. */
+const cancelled = new Set<string>();
 
 /**
  * The SDK reports a resumed session's running total, not this run's spend.
@@ -125,13 +128,23 @@ async function execute(p: Project, run: Run, agent: Agent, input: Omit<RunInput,
     run.error = err.message.slice(0, 500);
     run.costUsd = charge(agent, err.outcome?.sessionId, err.outcome?.costUsd);
     run.turns = err.outcome?.turns;
+    const stopped = cancelled.has(run.id);
     const thread = input.thread ? findThread(p.state, input.thread.id) : undefined;
-    if (input.reason === 'message' && thread) note(p.state, thread, `${agent.name}'s run failed: ${run.error}`);
-    else if (input.item) input.item.history.push({ ts: now(), text: `Run failed: ${run.error}` });
+    // Not answered: the desk sees the same messages again on the next wake. A run the founder stopped stays read.
+    const readThreadId = run.threadId ?? run.cursorThread;
+    const readThread = readThreadId ? findThread(p.state, readThreadId) : undefined;
+    if (readThread && !stopped) rewindCursor(readThread, p.state.messages, agent.id, run.cursorFrom, run.startedAt);
+    const failure = `${agent.name}'s run failed: ${run.error}`;
+    // A failed reply pauses the thread like a restart does, so Resume tries it again.
+    if (input.reason === 'message' && thread) {
+      if (stopped) note(p.state, thread, failure);
+      else pauseForFailure(p.state, thread, agent.id, failure);
+    } else if (input.item) input.item.history.push({ ts: now(), text: `Run failed: ${run.error}` });
     p.log(agent.id, `Hit a problem${input.item ? ` on ${p.ticket(input.item)} "${input.item.title}"` : ''}: ${run.error}`);
     console.error(`[hq] ${p.meta.key} run ${run.id} for ${agent.name} failed:`, err.message);
   } finally {
     controllers.delete(run.id);
+    cancelled.delete(run.id);
     run.finishedAt = now();
     agent.running = false;
     agent.lastActive = now();
@@ -178,7 +191,12 @@ export function kickoff(p: Project, itemId: string, reason: RunReason, note?: st
 
     if (liveItem.status === 'todo' && reason !== 'comment') liveItem.status = 'in-progress';
     const thread = liveItem.threadId ? findThread(state, liveItem.threadId) : undefined;
-    if (thread) markRead(thread, liveAgent.id);
+    if (thread) {
+      // Remember where the desk had read to, so a run that dies before replying can put it back.
+      liveRun.cursorFrom = thread.cursor[liveAgent.id] ?? 0;
+      liveRun.cursorThread = thread.id;
+      markRead(thread, liveAgent.id);
+    }
     const label = reason === 'comment' ? `Answering your comment on ${p.ticket(liveItem)}` : liveItem.title;
     // A comment run sees the images on every comment it has not answered yet, not only the first one's.
     const runImages = reason === 'comment' ? [...images, ...unansweredImages(liveItem, liveAgent.id)] : images;
@@ -224,9 +242,11 @@ export function deliver(p: Project, threadId: string, ids: string[]): Run[] {
       const unread = unreadFor(state, thread, id);
       if (unread.addressed.length === 0) return done('nothing new for this desk');
 
+      // Remember where the desk had read to, so a run that dies before replying can be retried.
+      liveRun.cursorFrom = thread.cursor[id] ?? 0;
       markRead(thread, id);
       const item = thread.itemId ? state.items.find((i) => i.id === thread.itemId) : undefined;
-      // Images go in only from the founder: desks cannot attach any.
+      // Only the founder's images go in inline. Desk images reach teammates as file paths in the messages.
       const images = unread.all.filter((m) => m.from === 'you').flatMap((m) => m.attachments ?? []);
       await execute(p, liveRun, liveAgent, { item, reason: 'message', thread, unread: unread.all, images }, `Replying in "${thread.title}"`);
     });
@@ -238,6 +258,7 @@ export function deliver(p: Project, threadId: string, ids: string[]): Run[] {
 export function cancelRun(runId: string): boolean {
   const c = controllers.get(runId);
   if (!c) return false;
+  cancelled.add(runId);
   c.abort();
   return true;
 }

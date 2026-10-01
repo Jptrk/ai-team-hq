@@ -1,2 +1,2 @@
-- [Verify without servers](feedback_verify_without_servers.md) — tsc + 4 tsx test scripts + build; no servers, no MCP, no model calls; test pure helpers
+- [Verify without servers](feedback_verify_without_servers.md) — check port 4747 before editing server/; staging-copy workflow; in-process route probe; no servers/MCP/models
 - [Write probes with Write tool](feedback_write_probes_with_write_tool.md) — Bash heredocs collapse `\\`; probes needing packages go in a temp src/__probe/

@@ -9,17 +9,31 @@ import { reportFileName } from './reportLinks';
 
 type ViewMode = 'preview' | 'raw';
 
+// Keyed by `${url}@${version}`, so a revised file (same URL, new version) loads again.
 const cache = new Map<string, string>();
+const cacheKey = (url: string, version: string) => `${url}@${version}`;
+
+/** Keep one version per URL: drop the older texts of this report. */
+function remember(url: string, version: string, text: string): void {
+  for (const k of cache.keys()) if (k.slice(0, k.lastIndexOf('@')) === url) cache.delete(k);
+  cache.set(cacheKey(url, version), text);
+}
 
 function readMode(): ViewMode {
   return storage.get(KEYS.reportView) === 'raw' ? 'raw' : 'preview';
 }
 
-/** A report file: formatted preview or raw markdown, copy, open raw, and a wide reader. */
-export function ReportViewer({ url }: { url: string }) {
+/**
+ * A report file: formatted preview or raw markdown, copy, open raw, and a wide reader.
+ * `embedded`: shown inside the reports reader, which is already full size, so no Expand.
+ * `version`: when the file last changed (e.g. its updatedAt); a new one loads the text again.
+ */
+export function ReportViewer({ url, embedded, version }: { url: string; embedded?: boolean; version?: string | null }) {
   const [stack, setStack] = useState<string[]>([url]);
   const current = stack[stack.length - 1];
-  const [text, setText] = useState<string | null>(cache.get(current) ?? null);
+  // The version belongs to the report itself, not to reports opened from its links.
+  const currentVersion = current === url ? (version ?? '') : '';
+  const [text, setText] = useState<string | null>(cache.get(cacheKey(current, currentVersion)) ?? null);
   const [error, setError] = useState<string | null>(null);
   const [mode, setModeState] = useState<ViewMode>(readMode);
   const [copy, setCopy] = useState<'idle' | 'copied' | 'blocked'>('idle');
@@ -32,7 +46,7 @@ export function ReportViewer({ url }: { url: string }) {
   useEffect(() => {
     let live = true;
     setError(null);
-    const hit = cache.get(current);
+    const hit = cache.get(cacheKey(current, currentVersion));
     if (hit !== undefined) {
       setText(hit);
       return;
@@ -40,7 +54,7 @@ export function ReportViewer({ url }: { url: string }) {
     setText(null);
     api.report(current).then(
       (t) => {
-        cache.set(current, t);
+        remember(current, currentVersion, t);
         if (live) setText(t);
       },
       (e: unknown) => live && setError(e instanceof Error ? e.message : 'Could not load the report'),
@@ -48,7 +62,7 @@ export function ReportViewer({ url }: { url: string }) {
     return () => {
       live = false;
     };
-  }, [current]);
+  }, [current, currentVersion]);
 
   const setMode = (m: ViewMode) => {
     setModeState(m);
@@ -118,18 +132,20 @@ export function ReportViewer({ url }: { url: string }) {
   );
 
   return (
-    <div className="report">
-      {toolbar(false)}
+    <div className={`report${embedded ? ' embedded' : ''}`}>
+      {toolbar(Boolean(embedded))}
       {stack.length > 1 && (
         <button type="button" className="link-btn report-back" onClick={() => setStack((s) => s.slice(0, -1))}>
           <ArrowLeft size={13} /> Back to {reportFileName(stack[stack.length - 2])}
         </button>
       )}
-      <div className="report-body">{body}</div>
-      <Modal open={wide} onClose={() => setWide(false)} title={name} size="wide">
-        {toolbar(true)}
-        <div className="report-body reader">{body}</div>
-      </Modal>
+      <div className={`report-body${embedded ? ' reader' : ''}`}>{body}</div>
+      {!embedded && (
+        <Modal open={wide} onClose={() => setWide(false)} title={name} size="wide">
+          {toolbar(true)}
+          <div className="report-body reader">{body}</div>
+        </Modal>
+      )}
     </div>
   );
 }

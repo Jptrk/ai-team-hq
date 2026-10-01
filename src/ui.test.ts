@@ -9,7 +9,8 @@ import { TableKit } from '@tiptap/extension-table';
 import { Markdown } from '@tiptap/markdown';
 import StarterKit from '@tiptap/starter-kit';
 import { titleFrom } from '../shared/plainText';
-import { canEditDescription, type Agent, type WorkItem } from '../shared/types';
+import { parseReportUrl, reportTitleFrom } from '../shared/reportUrl';
+import { BOARD_COLUMNS, canEditDescription, type Agent, type WorkItem } from '../shared/types';
 import { EMPTY_FILTER, filterItems, isFiltered } from './components/board/filter';
 import { searchItems } from './lib/search';
 import { plainText } from './markdown/plainText';
@@ -210,6 +211,39 @@ test('resolveReportHref: refuses anything that is not another report', () => {
   assert.equal(resolveReportHref(base, 'image.png'), null);
   assert.equal(resolveReportHref(base, base), base);
 });
+test('parseReportUrl: project, desk and file; other query params ignored', () => {
+  assert.deepEqual(parseReportUrl(base), { pid: 'gecom-apps', agent: 'grace', file: 'reports/open-prs-top5.md' });
+  assert.deepEqual(parseReportUrl('/api/projects/my%20app/workspaces/leo/report?v=2&file=plan.md&x'), { pid: 'my app', agent: 'leo', file: 'plan.md' });
+  assert.deepEqual(parseReportUrl('/api/projects/x/workspaces/leo_2/report?file=a%2Bb+c.md#top'), { pid: 'x', agent: 'leo_2', file: 'a+b c.md' });
+});
+test('parseReportUrl: bad %-encoding, odd desk names, a second file and lookalikes give null', () => {
+  for (const bad of [
+    '/api/projects/x/workspaces/leo/report?file=%E0%A4%A',
+    '/api/projects/%E0%A4%A/workspaces/leo/report?file=a.md',
+    '/api/projects/x/workspaces/le.o/report?file=a.md',
+    '/api/projects/x/workspaces/le%20o/report?file=a.md',
+    '/api/projects/x/workspaces/leo/report?file=a.md&file=b.md',
+    '/api/projects/x/workspaces/leo/report?file=',
+    '/api/projects/x/workspaces/leo/report',
+    '/api/projects/x/workspaces/leo/reports?file=a.md',
+    'https://evil.example/api/projects/x/workspaces/leo/report?file=a.md',
+    '//evil/api/projects/x/workspaces/leo/report?file=a.md',
+  ]) {
+    assert.equal(parseReportUrl(bad), null, bad);
+    assert.ok(!isReportUrl(bad), `the client agrees: ${bad}`);
+  }
+});
+test('reportTitleFrom: first heading, code fences skipped, else the first line', () => {
+  assert.equal(reportTitleFrom('```bash\n# install deps\nnpm i\n```\n\n## The plan\n'), 'The plan');
+  assert.equal(reportTitleFrom('~~~\n# not this\n~~~\nIntro\n# Title'), 'Title');
+  assert.equal(reportTitleFrom('#\n\nText'), 'Text');
+  assert.equal(reportTitleFrom('#\n\nIntro\n\n## Real heading'), 'Real heading');
+  assert.equal(reportTitleFrom('Just **notes** here\nmore'), 'Just notes here');
+  assert.equal(reportTitleFrom('\r\n```\r\n# x\r\n```\r\n# Windows *lines*\r\n'), 'Windows lines');
+  assert.equal(reportTitleFrom('Intro\n```\n# never closed'), 'Intro');
+  assert.equal(reportTitleFrom('```\n# only code\n```'), null);
+  assert.equal(reportTitleFrom(''), null);
+});
 
 // ---------- colors ----------
 test('readableInk picks legible initials', () => {
@@ -383,6 +417,15 @@ test('the editor keeps formatting: saves, reads back, saves the same', () => {
   } finally {
     ed.destroy();
   }
+});
+test('board: approved tickets stay In progress until the desk finishes them', () => {
+  const columnOf = (status: WorkItem['status']) => BOARD_COLUMNS.find((c) => c.statuses.includes(status))?.label;
+  assert.equal(columnOf('approved'), 'In progress');
+  assert.equal(columnOf('in-progress'), 'In progress');
+  assert.equal(columnOf('sent-back'), 'In progress');
+  assert.deepEqual(BOARD_COLUMNS.find((c) => c.label === 'Done')?.statuses, ['done']);
+  const all = BOARD_COLUMNS.flatMap((c) => c.statuses);
+  for (const s of ['todo', 'in-progress', 'needs-you', 'approved', 'held', 'sent-back', 'done'] as const) assert.equal(all.filter((x) => x === s).length, 1, `${s} is in exactly one column`);
 });
 test('descriptions are editable only in To do', () => {
   assert.equal(canEditDescription('todo'), true);

@@ -35,11 +35,10 @@
   --topbar-h: 52px;
   --sidebar-w: 240px;
   --rail-w: 56px;
-  --drawer-w: clamp(420px, 42vw, 720px);
+
 
   --z-sticky: 10;
   --z-sidebar: 30;
-  --z-drawer: 40;
   --z-menu: 50;
   --z-flags: 70;
 

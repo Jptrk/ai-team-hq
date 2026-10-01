@@ -18,7 +18,7 @@ export interface SearchHandle {
   focus: () => void;
 }
 
-/** Ticket search: a combobox. Enter opens the highlighted ticket in the side panel. */
+/** Ticket search: a combobox. Enter opens the highlighted ticket in the ticket modal. */
 export const TopBarSearch = forwardRef<SearchHandle, Props>(function TopBarSearch({ items, agents, projectKey, onOpen, compact }, ref) {
   const [q, setQ] = useState('');
   const [open, setOpen] = useState(false);

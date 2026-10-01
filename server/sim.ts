@@ -171,6 +171,13 @@ function tickProject(p: Project): void {
     p.log(agent.id, `Started "${title}"`);
   }
 
+  // Approved work gets carried out and finishes, the way a live desk reports it done.
+  for (const done of s.items.filter((i) => i.status === 'approved' && Math.random() < 0.4)) {
+    done.status = 'done';
+    done.history.push({ ts: now(), text: 'Done: carried out what you approved' });
+    p.log(done.assignee, `Finished "${done.title}"`);
+  }
+
   const active = s.items.filter((i) => i.status === 'in-progress' || i.status === 'sent-back');
 
   // Occasionally start a queued item.

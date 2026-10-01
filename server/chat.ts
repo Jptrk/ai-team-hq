@@ -94,8 +94,18 @@ function append(s: State, t: Thread, msg: Pick<Message, 'from' | 'to' | 'text'> 
   return message;
 }
 
-export function note(s: State, t: Thread, text: string): Message {
-  return append(s, t, { from: 'hq', to: [], text });
+/** A system note. `undelivered` holds desks for Resume to wake. */
+export function note(s: State, t: Thread, text: string, undelivered?: string[]): Message {
+  return append(s, t, { from: 'hq', to: [], text, undelivered });
+}
+
+/** A desk's reply failed: pause the thread if it is open, and hold the desk so Resume wakes it again. */
+export function pauseForFailure(s: State, t: Thread, agentId: string, text: string): Message {
+  if (t.status === 'open') {
+    t.status = 'paused';
+    t.pausedReason = 'failed';
+  }
+  return note(s, t, text, [agentId]);
 }
 
 function addWaiting(t: Thread, ids: string[]): void {
@@ -182,7 +192,7 @@ export interface Posted {
  * A desk posts. The message is always saved. Each desk recipient is one hop; past the
  * limit (or the daily cap) the thread pauses and the rest are held as undelivered.
  */
-export function postAgentMessage(s: State, t: Thread, from: string, to: string[], text: string, limits: Limits = defaultLimits()): Posted {
+export function postAgentMessage(s: State, t: Thread, from: string, to: string[], text: string, limits: Limits = defaultLimits(), attachments?: Attachment[]): Posted {
   if (t.status === 'closed') throw new ChatError('This thread is closed.');
   rollDay(s, limits.today);
   const deliver: string[] = [];
@@ -203,7 +213,7 @@ export function postAgentMessage(s: State, t: Thread, from: string, to: string[]
       deliver.push(id);
     }
   }
-  const message = append(s, t, { from, to, text, undelivered: held });
+  const message = append(s, t, { from, to, text, undelivered: held, attachments });
   if (pauseWith) pause(s, t, pauseWith, limits);
   addWaiting(t, deliver);
   return { message, deliver, paused: t.status === 'paused' };
