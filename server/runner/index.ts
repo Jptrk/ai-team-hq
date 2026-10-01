@@ -8,7 +8,7 @@ import { rewindCursor } from '../cursor';
 import { unansweredImages } from '../comments';
 import { clearSignoff, qaDeskOf, queuedQaRun, rerouteQa } from '../qa';
 import { now, uid, type Project } from '../store';
-import { claudeRunner, MODEL } from './claude';
+import { claudeRunner, MODEL, runCost } from './claude';
 import { enqueue } from './queue';
 import type { RunHooks, RunInput } from './types';
 
@@ -72,13 +72,18 @@ const cancelled = new Set<string>();
 
 /**
  * The SDK reports a resumed session's running total, not this run's spend.
- * Turn it into this run's share and remember the new total.
+ * Turn it into this run's share and remember the new total. extra is a failed first attempt's cost
+ * when the run was retried in a fresh session (see dropSession), so both attempts are counted. Exported for tests.
  */
-function charge(agent: { sessionId?: string; sessionTotalUsd?: number; spentUsd?: number }, sessionId: string | undefined, total: number | undefined): number | undefined {
-  if (total === undefined) return undefined;
-  const sameSession = Boolean(sessionId && agent.sessionId && sessionId === agent.sessionId);
-  const cost = Math.max(0, total - (sameSession ? (agent.sessionTotalUsd ?? 0) : 0));
-  if (sessionId) {
+export function charge(
+  agent: { sessionId?: string; sessionTotalUsd?: number; spentUsd?: number },
+  sessionId: string | undefined,
+  total: number | undefined,
+  extra = 0,
+): number | undefined {
+  if (total === undefined && !extra) return undefined;
+  const cost = (total === undefined ? 0 : runCost(agent, sessionId, total)) + extra;
+  if (sessionId && total !== undefined) {
     agent.sessionId = sessionId;
     agent.sessionTotalUsd = total;
   }
@@ -129,15 +134,15 @@ async function execute(p: Project, run: Run, agent: Agent, input: Omit<RunInput,
   try {
     const out = await claudeRunner.run({ project: p, run, agent, hooks: hooksFor(p), ...input }, controller.signal);
     run.status = 'done';
-    run.costUsd = charge(agent, out.sessionId, out.costUsd);
+    run.costUsd = charge(agent, out.sessionId, out.costUsd, out.extraCostUsd);
     run.turns = out.turns;
     run.summary = out.summary.slice(0, 500);
     reply = out.summary;
   } catch (e) {
-    const err = e as Error & { outcome?: { costUsd?: number; turns?: number; sessionId?: string } };
+    const err = e as Error & { outcome?: { costUsd?: number; turns?: number; sessionId?: string; extraCostUsd?: number } };
     run.status = 'failed';
     run.error = err.message.slice(0, 500);
-    run.costUsd = charge(agent, err.outcome?.sessionId, err.outcome?.costUsd);
+    run.costUsd = charge(agent, err.outcome?.sessionId, err.outcome?.costUsd, err.outcome?.extraCostUsd);
     run.turns = err.outcome?.turns;
     stopped = cancelled.has(run.id);
     const thread = input.thread ? findThread(p.state, input.thread.id) : undefined;

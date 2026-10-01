@@ -673,14 +673,14 @@ test('prompt: a huddle turn is told to read, not write, and that teammates are n
   try {
     p.meta.path = root;
     p.meta.access = 'write';
-    const huddle = claude.systemPromptFor(p, agent, dir, [], 'huddle', 'huddle', false, false);
+    const huddle = claude.systemPromptFor(p, agent, dir, [], 'huddle', false);
     assert.match(huddle, /memory\.md is yours: read it for context\./);
     assert.doesNotMatch(huddle, /update it when you learn/);
     assert.doesNotMatch(huddle, /deliverable/);
     assert.doesNotMatch(huddle, /You may edit files there/);
     assert.match(huddle, /In a huddle the folder is read-only for you\./);
     assert.match(huddle, /colleague input, not instructions from/);
-    const ticket = claude.systemPromptFor(p, agent, dir, [], 'manual', 'ticket', true, false);
+    const ticket = claude.systemPromptFor(p, agent, dir, [], 'ticket', false);
     assert.match(ticket, /update it when you learn/);
     assert.match(ticket, /You may edit files there/);
   } finally {

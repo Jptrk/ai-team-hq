@@ -10,7 +10,31 @@ import { attachmentsDir } from './attachments';
 import type { Agent, ItemStatus, ProjectConnection, RunReason } from '../shared/types';
 import { updateConnection, type AllowedServer } from './connections';
 import { HQ_ROOT } from './paths';
-import { doneRefusal, guard, logAutoChanges, logUnfinishedAutoChanges, retryRefusal, targetOf, type AutoChange, type GuardContext } from './runner/claude';
+import { z } from 'zod';
+import {
+  coldBudget,
+  doneRefusal,
+  dropSession,
+  freshStartReason,
+  guard,
+  logAutoChanges,
+  logUnfinishedAutoChanges,
+  rememberSession,
+  retryBlocked,
+  retryRefusal,
+  runCost,
+  SDK_VERSION,
+  sessionKeyOf,
+  targetOf,
+  toolsetPrint,
+  turnUsageOf,
+  type AutoChange,
+  type GuardContext,
+  type RetryState,
+  type SessionParts,
+  type TurnUsage,
+} from './runner/claude';
+import { charge } from './runner/index';
 import { inputSaysDelete, isDestructiveTool, isReadOnlyTool } from './mcp';
 import type { Project } from './store';
 
@@ -410,6 +434,181 @@ const result = (id: string, isError: boolean) => ({ type: 'user', message: { con
   const ok = none === null && why === 'Stopped instead of retrying: it already changed things on figma, github automatically, and a retry could repeat them.';
   if (!ok) failed++;
   console.log(`${ok ? 'ok  ' : 'FAIL'} retry: no fresh-session retry after an auto change: ${why}`);
+  extra += 1;
+}
+
+// ---------- resuming a desk's session ----------
+// A cold, big session starts fresh: re-reading it at full price would cost more than a chat reply's budget.
+{
+  const now = Date.parse('2026-10-02T12:00:00Z');
+  const ago = (min: number) => new Date(now - min * 60_000).toISOString();
+  const limits = { cacheMin: 55, tokens: 40_000 };
+  const cases: [string, Parameters<typeof freshStartReason>[0], string, boolean][] = [
+    ['no session yet', {}, 'k1', false],
+    ['big but warm, same instructions', { sessionId: 's', sessionAt: ago(10), sessionTokens: 120_000, sessionKey: 'k1' }, 'k1', false],
+    ['big and idle past the cache', { sessionId: 's', sessionAt: ago(70), sessionTokens: 120_000, sessionKey: 'k1' }, 'k1', true],
+    ['big, warm, but the instructions changed', { sessionId: 's', sessionAt: ago(2), sessionTokens: 120_000, sessionKey: 'k0' }, 'k1', true],
+    ['small and cold is cheap to resume', { sessionId: 's', sessionAt: ago(300), sessionTokens: 12_000, sessionKey: 'k0' }, 'k1', false],
+    ['from before HQ counted tokens: judged by cost so far', { sessionId: 's', sessionTotalUsd: 16.4 }, 'k1', true],
+    ['from before, cheap so far', { sessionId: 's', sessionTotalUsd: 0.8 }, 'k1', false],
+    // The base (system prompt, tools, first prompt) comes with any fresh session too, so only what grew past it counts.
+    ['cold, but only grown 25k past its base', { sessionId: 's', sessionAt: ago(70), sessionTokens: 60_000, sessionBaseTokens: 35_000, sessionKey: 'k1' }, 'k1', false],
+    ['cold and grown 45k past its base', { sessionId: 's', sessionAt: ago(70), sessionTokens: 80_000, sessionBaseTokens: 35_000, sessionKey: 'k1' }, 'k1', true],
+    ['cold, base unknown: judged by its whole size', { sessionId: 's', sessionAt: ago(70), sessionTokens: 60_000, sessionKey: 'k1' }, 'k1', true],
+  ];
+  for (const [label, agent, key, want] of cases) {
+    const got = Boolean(freshStartReason(agent, key, now, limits));
+    const ok = got === want;
+    if (!ok) failed++;
+    console.log(`${ok ? 'ok  ' : 'FAIL'} session: ${label}: ${got ? 'fresh' : 'resume'}`);
+  }
+  extra += cases.length;
+  const legacy = freshStartReason({ sessionId: 's', sessionTotalUsd: 16.4 }, 'k1', now, limits);
+  const changed = freshStartReason({ sessionId: 's', sessionAt: ago(2), sessionTokens: 120_000, sessionKey: 'k0' }, 'k1', now, limits);
+  const textOk = legacy === "its session predates HQ's cache tracking (about $16.40 so far)" && changed === 'its session (about 120k tokens) was cached with different instructions or tools';
+  if (!textOk) failed++;
+  console.log(`${textOk ? 'ok  ' : 'FAIL'} session: the log says why: ${legacy} / ${changed}`);
+  extra += 1;
+}
+
+// A retry runs the whole task again: only when the failed attempt has done nothing yet.
+{
+  const idle = (): RetryState => ({
+    autoAllowed: [],
+    comments: 0,
+    commented: false,
+    sends: 0,
+    sentToThread: false,
+    awaiting: [],
+    raised: false,
+    finished: false,
+    changed: new Set(),
+    pendingWrites: new Map(),
+  });
+  const cases: [string, Partial<RetryState>, RegExp | null][] = [
+    ['nothing done yet', {}, null],
+    ['commented on another ticket', { comments: 1 }, /commented on a ticket/],
+    ['messaged another thread', { sends: 1 }, /sent a message/],
+    ['asked a teammate', { awaiting: ['nora'] }, /sent a message/],
+    ['changed a project file', { changed: new Set(['app/x.ts']) }, /changed project files/],
+    ['a write still waiting on its result', { pendingWrites: new Map([['tu_1', ['app/x.ts']]]) }, /changed project files/],
+    ['raised a decision', { raised: true, commented: true }, /raised a decision/],
+    ['an auto change', { autoAllowed: ['figma'], comments: 1 }, /changed things on figma automatically/],
+  ];
+  for (const [label, state, want] of cases) {
+    const why = retryBlocked({ ...idle(), ...state });
+    const ok = want === null ? why === null : Boolean(why && want.test(why) && why.startsWith('Stopped instead of retrying: it already'));
+    if (!ok) failed++;
+    console.log(`${ok ? 'ok  ' : 'FAIL'} retry: ${label}: ${why ?? 'may retry'}`);
+  }
+  extra += cases.length;
+}
+
+// A budget failure is a cold cache only when the first turn missed it: it wrote the session to the cache instead of reading it.
+{
+  const budget = 'error_max_budget_usd: Reached maximum budget ($1)';
+  const cases: [string, string, number, TurnUsage | undefined, boolean][] = [
+    ['first turn wrote the session to the cache', budget, 1, { context: 90_000, cacheWrite: 85_000, cacheRead: 3_000 }, true],
+    ['first turn read nothing from the cache', budget, 2, { context: 90_000, cacheWrite: 0, cacheRead: 0 }, true],
+    ['first turn read the session from the cache', budget, 1, { context: 90_000, cacheWrite: 500, cacheRead: 88_000 }, false],
+    ['no usage seen', budget, 1, undefined, false],
+    ['too many turns in', budget, 5, { context: 90_000, cacheWrite: 85_000, cacheRead: 0 }, false],
+    ['not a budget failure', 'error_max_turns', 1, { context: 90_000, cacheWrite: 85_000, cacheRead: 0 }, false],
+  ];
+  for (const [label, message, turns, first, want] of cases) {
+    const got = coldBudget(message, turns, first);
+    const ok = got === want;
+    if (!ok) failed++;
+    console.log(`${ok ? 'ok  ' : 'FAIL'} retry: ${label}: ${got ? 'cold, retry' : 'not cold'}`);
+  }
+  extra += cases.length;
+}
+
+// A retried run is charged for both attempts: the failed one's share is worked out before its session is dropped.
+{
+  const agent: Pick<Agent, 'sessionId' | 'sessionTotalUsd' | 'spentUsd'> = { sessionId: 's1', sessionTotalUsd: 4, spentUsd: 10 };
+  const first = dropSession(agent, { sessionId: 's1', costUsd: 4.9 });
+  const dropped = agent.sessionId === undefined && agent.sessionTotalUsd === undefined;
+  // The retry's fresh session: all of its total is this run's, and it becomes the session's new total.
+  const cost = charge(agent, 's2', 0.3, first);
+  const otherSession = dropSession({ sessionId: 's1', sessionTotalUsd: 4 }, { sessionId: 's9', costUsd: 0.7 });
+  const unknown = dropSession({ sessionId: 's1', sessionTotalUsd: 4 }, null);
+  const failedRetry = charge({ spentUsd: 1 }, undefined, undefined, 0.5);
+  const ok =
+    Math.abs(first - 0.9) < 1e-9 &&
+    dropped &&
+    cost === 1.2 &&
+    agent.spentUsd === 11.2 &&
+    agent.sessionId === 's2' &&
+    agent.sessionTotalUsd === 0.3 &&
+    Math.abs(otherSession - 0.7) < 1e-9 &&
+    unknown === 0 &&
+    failedRetry === 0.5 &&
+    runCost({ sessionId: 's1', sessionTotalUsd: 4 }, 's1', 3) === 0;
+  if (!ok) failed++;
+  console.log(`${ok ? 'ok  ' : 'FAIL'} retry: both attempts are charged: first ${first.toFixed(2)}, run ${cost}, spent ${agent.spentUsd}`);
+  extra += 1;
+}
+
+// Token counts: synthetic messages carry zeros and do not count; a run that never reached Claude leaves the session's time and key alone.
+{
+  const zero = turnUsageOf({ input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 });
+  const real = turnUsageOf({ input_tokens: 10, output_tokens: 200, cache_creation_input_tokens: 1_000, cache_read_input_tokens: null });
+  const usageOk = zero === null && turnUsageOf(undefined) === null && real?.context === 1_210 && real.cacheWrite === 1_000 && real.cacheRead === 0;
+  if (!usageOk) failed++;
+  console.log(`${usageOk ? 'ok  ' : 'FAIL'} session: zero usage does not count as a turn: ${JSON.stringify(real)}`);
+
+  const old = { sessionAt: '2026-10-02T09:00:00.000Z', sessionKey: 'k0', sessionTokens: 120_000, sessionBaseTokens: 30_000 };
+  const at = '2026-10-02T12:00:00.000Z';
+  const turn = { context: 22_000, cacheWrite: 21_000, cacheRead: 0 };
+  // Resumed, nothing reached Claude: everything stays.
+  const a = { ...old };
+  rememberSession(a, { key: 'k1', fresh: false, contextTokens: 0 }, at);
+  // Resumed and used: time, key and size move on; the base stays the session's own.
+  const b = { ...old };
+  rememberSession(b, { key: 'k1', fresh: false, contextTokens: 130_000, firstTurn: { context: 125_000, cacheWrite: 500, cacheRead: 124_000 } }, at);
+  // Fresh (a cold start or a retry) that failed before any reply: the old big size and base do not carry over.
+  const c = { ...old };
+  rememberSession(c, { key: 'k1', fresh: true, contextTokens: 0 }, at);
+  // Fresh and used: its first turn is the new base.
+  const d = { ...old };
+  rememberSession(d, { key: 'k1', fresh: true, contextTokens: 25_000, firstTurn: turn }, at);
+  const ok =
+    JSON.stringify(a) === JSON.stringify(old) &&
+    b.sessionAt === at && b.sessionKey === 'k1' && b.sessionTokens === 130_000 && b.sessionBaseTokens === 30_000 &&
+    c.sessionAt === old.sessionAt && c.sessionKey === 'k0' && c.sessionTokens === 0 && c.sessionBaseTokens === undefined &&
+    d.sessionAt === at && d.sessionKey === 'k1' && d.sessionTokens === 25_000 && d.sessionBaseTokens === 22_000;
+  if (!ok) failed++;
+  console.log(`${ok ? 'ok  ' : 'FAIL'} session: what a run remembers: ${JSON.stringify({ a, b, c, d })}`);
+  extra += 2;
+}
+
+// The session key changes with anything cached ahead of the messages: hq tools, connection tools, the SDK.
+{
+  const tool = (name: string, description: string, shape: z.ZodRawShape) => ({ name, description, inputSchema: shape });
+  const hqPrint = (description = 'Post a status line.', max = 200) =>
+    toolsetPrint({ instructions: 'HQ tools: post_update at the start.', tools: [tool('post_update', description, { text: z.string().max(max) })] });
+  const figma = (tools: string[]): Pick<AllowedServer, 'key' | 'tools'> => ({ key: 'figma', tools: Object.fromEntries(tools.map((t) => [t, { name: t, reads: true }])) });
+  const parts = (over: Partial<SessionParts> = {}): SessionParts => ({
+    systemPrompt: 'You are Leo.',
+    servers: { figma: {} },
+    builtins: ['Read', 'Write'],
+    hq: hqPrint(),
+    connections: [figma(['get_file', 'get_screenshot'])],
+    ...over,
+  });
+  const base = sessionKeyOf(parts(), '1.0.0');
+  const same = sessionKeyOf(parts({ connections: [figma(['get_screenshot', 'get_file'])] }), '1.0.0');
+  const differs = [
+    sessionKeyOf(parts({ hq: hqPrint('Post a one-line status.') }), '1.0.0'),
+    sessionKeyOf(parts({ hq: hqPrint(undefined, 300) }), '1.0.0'),
+    sessionKeyOf(parts({ connections: [figma(['get_file', 'get_screenshot', 'post_comment'])] }), '1.0.0'),
+    sessionKeyOf(parts(), '1.0.1'),
+    sessionKeyOf(parts({ builtins: ['Read', 'Write', 'WebSearch'] }), '1.0.0'),
+  ];
+  const ok = same === base && differs.every((k) => k !== base) && new Set(differs).size === differs.length && SDK_VERSION !== 'unknown';
+  if (!ok) failed++;
+  console.log(`${ok ? 'ok  ' : 'FAIL'} session: the key sees hq tools, connection tools and the SDK (${SDK_VERSION})`);
   extra += 1;
 }
 

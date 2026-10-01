@@ -478,6 +478,38 @@ Code work reads a lot of files, so it costs more per run than email drafting. A 
 monorepo landed near $2.50 on the SDK's estimate. If code tasks hit "Reached maximum budget",
 raise `HQ_MAX_BUDGET_USD`. On a subscription the figure is an estimate, not a charge.
 
+### Sessions and the prompt cache
+
+Each desk keeps one Claude session and resumes it on every run, so it remembers its earlier work.
+Claude caches a session for about an hour on a subscription, and HQ asks for the 1-hour cache on
+API-key runs and on overage too. While the cache is warm, resuming is cheap. Once it has gone cold,
+the first turn re-reads the whole session at full price. A big session can then cost more than a
+chat reply's whole budget ("Reached maximum budget ($1)").
+
+- **Cold and big starts fresh.** When a desk's session is big and its cache has likely gone cold,
+  the run starts a fresh session instead. Cold means idle longer than `HQ_SESSION_CACHE_MIN`, or
+  anything cached ahead of the session changed since: the model, the SDK, the system prompt, HQ's
+  tools or a connection's tools (an HQ update does that). Big means grown more than
+  `HQ_FRESH_SESSION_TOKENS` past the session's base, the size of its first turn (system prompt,
+  tools, first prompt), which any fresh session starts with anyway. Sessions from before HQ kept
+  the base count their whole size. `memory.md`, reports and the ticket carry what matters, and a
+  fresh session's prompt says so: its earlier conversation is not loaded, so read `memory.md` first.
+- **One system prompt per desk.** A desk gets the same system prompt and tools for ticket runs and
+  chat replies; what differs per run (why it was woken, an approval, team notes ticked for one task)
+  goes in a "For this run" section at the very end of the prompt. Switching between chat and ticket
+  work keeps the cache warm. The system prompt says only that last section counts, so a copy of it
+  in a message or comment never passes for HQ's.
+- **Safety net.** If a resumed run still runs out of budget in its first two turns and its first
+  turn missed the cache, it is retried once in a fresh session (the log shows the first turn's cache
+  numbers). A run that grew too large or lost its session is retried the same way. A retry only
+  happens when the first attempt did nothing yet: no comment, message, decision, project file or
+  auto change. The run's cost counts both attempts.
+
+| Env | Default | What |
+| --- | ------- | ---- |
+| `HQ_SESSION_CACHE_MIN` | 55 | Minutes a session's cache counts as warm |
+| `HQ_FRESH_SESSION_TOKENS` | 40000 | Growth past the session's base above which a cold session starts fresh |
+
 ## Data
 
 | Path | What |

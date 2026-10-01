@@ -34,6 +34,8 @@ export interface RunOutcome {
   costUsd: number;
   turns: number;
   sessionId?: string;
+  /** What a failed first attempt cost, when the run was retried in a fresh session. costUsd is the retry's alone. */
+  extraCostUsd?: number;
 }
 
 export interface AgentRunner {

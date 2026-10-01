@@ -24,6 +24,14 @@ export interface Agent {
   spentUsd?: number;
   /** Live runner only: the SDK's running total for the current session, to turn it into per-run cost. */
   sessionTotalUsd?: number;
+  /** Live runner only: when the session was last used. Claude's prompt cache for it lasts about an hour. */
+  sessionAt?: string;
+  /** Live runner only: how many tokens the session's context held at the end of its last run. */
+  sessionTokens?: number;
+  /** Live runner only: tokens after the session's first turn (system prompt, tools, first prompt). Any fresh session starts this big. */
+  sessionBaseTokens?: number;
+  /** Live runner only: fingerprint of the system prompt and tools the session was cached with. A new one means a cold cache. */
+  sessionKey?: string;
 }
 
 export type ItemKind = 'decide' | 'review' | 'fyi';
