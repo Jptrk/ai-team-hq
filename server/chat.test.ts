@@ -40,6 +40,11 @@ const desk = (id: string, name: string, extra: Partial<Agent> = {}): Agent => ({
 
 function fresh(): State {
   return {
+    huddles: [],
+    huddleDay: { day: '2026-10-01', started: 0 },
+    huddleSeq: 0,
+    teamNotes: '',
+    notesEveryRun: false,
     company: { name: 'Test', ownerId: 'you', timezone: 'UTC' },
     agents: [
       desk('you', 'Patrick', { isHuman: true }),

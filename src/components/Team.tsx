@@ -10,6 +10,8 @@ import { AGENT_ORDER, AGENT_STATUS_LABEL, type Tone } from '../util';
 interface Props {
   agents: Agent[];
   items: WorkItem[];
+  /** Dev-team project: the QA desk wears its QA chip. Other projects have no QA. */
+  qa: boolean;
   onSelect: (id: string) => void;
   onAdd: (body: AgentBody) => Promise<void>;
 }
@@ -86,7 +88,7 @@ function AddTeammate({ open, onClose, onAdd }: { open: boolean; onClose: () => v
   );
 }
 
-export function Team({ agents, items, onSelect, onAdd }: Props) {
+export function Team({ agents, items, qa, onSelect, onAdd }: Props) {
   const [adding, setAdding] = useState(false);
   const sorted = [...agents].sort((a, b) => {
     if (a.isHuman !== b.isHuman) return a.isHuman ? -1 : 1;
@@ -110,6 +112,7 @@ export function Team({ agents, items, onSelect, onAdd }: Props) {
                     <span className="team-name">
                       {a.name}
                       {a.lead && <span className="chip lead-chip">lead</span>}
+                      {a.qa && qa && <span className="chip qa-chip">QA</span>}
                     </span>
                     <span className="team-role">{a.role}</span>
                   </div>

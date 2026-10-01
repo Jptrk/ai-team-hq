@@ -15,11 +15,16 @@ interface Props {
   /** Pauses the state poll while a card is dragged. */
   onDragActive: (on: boolean) => void;
   flash: (text: string) => void;
+  /** Show the QA column: dev-team projects, or any project with tickets in it. */
+  showQa: boolean;
 }
 
-const colOf = (status: ItemStatus) => BOARD_COLUMNS.findIndex((c) => c.statuses.includes(status));
-
-export function Board({ items, agents, projectKey, selectedId, onOpen, onMove, onDragActive, flash }: Props) {
+export function Board({ items, agents, projectKey, selectedId, onOpen, onMove, onDragActive, flash, showQa }: Props) {
+  const columns = useMemo(
+    () => (showQa || items.some((i) => i.status === 'qa' || i.status === 'signoff') ? BOARD_COLUMNS : BOARD_COLUMNS.filter((c) => !c.statuses.includes('qa'))),
+    [showQa, items],
+  );
+  const colOf = (status: ItemStatus) => columns.findIndex((c) => c.statuses.includes(status));
   const [filter, setFilter] = useState<BoardFilter>(EMPTY_FILTER);
   const [pending, setPending] = useState<Record<string, ItemStatus>>({});
   const [dragId, setDragId] = useState<string | null>(null);
@@ -53,7 +58,7 @@ export function Board({ items, agents, projectKey, selectedId, onOpen, onMove, o
     setPending((p) => ({ ...p, [item.id]: status }));
     if (viaKeyboard) {
       requestAnimationFrame(() => document.querySelector<HTMLButtonElement>(`[data-card="${item.id}"] .bcard-title`)?.focus());
-      const col = BOARD_COLUMNS[colOf(status)];
+      const col = columns[colOf(status)];
       flash(`${ticketKey(item, projectKey)} moved to ${col?.label ?? status}`);
     }
     await onMove(item.id, status);
@@ -84,11 +89,11 @@ export function Board({ items, agents, projectKey, selectedId, onOpen, onMove, o
     <div className="board-view">
       <BoardToolbar filter={filter} onChange={setFilter} people={people} />
       <div className="board">
-        {BOARD_COLUMNS.map((col, idx) => {
+        {columns.map((col, idx) => {
           const all = shownItems.filter((i) => col.statuses.includes(i.status));
           const cards = filtered.filter((i) => col.statuses.includes(i.status));
-          const prev = BOARD_COLUMNS[idx - 1];
-          const next = BOARD_COLUMNS[idx + 1];
+          const prev = columns[idx - 1];
+          const next = columns[idx + 1];
           const validTarget = dragItem !== undefined && colOf(dragItem.status) !== idx;
           return (
             <section

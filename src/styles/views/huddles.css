@@ -1,0 +1,407 @@
+@layer views {
+  /* ---------- "Include team notes" ---------- */
+  .notes-toggle {
+    flex-wrap: wrap;
+  }
+  .notes-toggle .muted {
+    font-size: var(--fs-xs);
+  }
+
+  /* ---------- setup ---------- */
+  .huddle-desks {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 6px;
+  }
+  .huddle-desk {
+    display: grid;
+    grid-template-columns: auto auto 1fr;
+    grid-template-rows: auto auto;
+    align-items: center;
+    column-gap: 8px;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface-raised);
+    cursor: pointer;
+  }
+  .huddle-desk input {
+    grid-row: span 2;
+  }
+  .huddle-desk .avatar {
+    grid-row: span 2;
+  }
+  .huddle-desk:hover {
+    border-color: var(--border-strong);
+  }
+  .huddle-desk.on {
+    border-color: var(--accent);
+    background: var(--accent-subtle);
+  }
+  .huddle-desk.disabled {
+    opacity: 0.55;
+    cursor: default;
+  }
+  .huddle-desk-name {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 600;
+    min-width: 0;
+  }
+  .huddle-desk-role {
+    grid-column: 3;
+    font-size: var(--fs-xs);
+    color: var(--text-subtle);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .huddle-cost {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 10px 12px;
+    border: 1px solid var(--info-border);
+    border-radius: var(--radius-lg);
+    background: var(--info-subtle);
+    font-size: var(--fs-sm);
+  }
+  .huddle-cost.over {
+    border-color: var(--warning-border);
+    background: var(--warning-subtle);
+  }
+
+  /* ---------- list ---------- */
+  .huddle-empty {
+    max-width: 620px;
+    margin: 0 auto;
+  }
+  .huddle-kinds {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    text-align: left;
+  }
+  .huddle-list {
+    max-width: 1100px;
+  }
+  .huddle-avatars {
+    display: inline-flex;
+  }
+  .huddle-avatars .avatar + .avatar {
+    margin-left: -5px;
+    box-shadow: 0 0 0 2px var(--surface-raised);
+  }
+  .huddle-row-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  /* ---------- one huddle ---------- */
+  .huddle-view {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-5);
+    max-width: 1100px;
+  }
+  .huddle-head {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-3);
+  }
+  .huddle-head-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .huddle-title {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 0;
+    font-size: var(--fs-lg);
+    font-weight: 700;
+  }
+  .huddle-topic {
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+  .huddle-progress {
+    margin: 0;
+  }
+  .huddle-head-actions {
+    display: flex;
+    gap: 6px;
+  }
+  .huddle-desks-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 14px;
+    font-size: var(--fs-sm);
+  }
+  .huddle-who {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-subtle);
+  }
+  .huddle-who.waiting {
+    color: var(--text);
+    font-weight: 600;
+  }
+
+  .huddle-board {
+    display: grid;
+    gap: var(--space-3);
+  }
+  .huddle-board.kind-retro {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .huddle-lane {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px;
+    border-radius: var(--radius-lg);
+    background: var(--surface-sunken);
+    border-top: 3px solid var(--border-strong);
+    min-width: 0;
+  }
+  .lane-went-well {
+    border-top-color: var(--success);
+  }
+  .lane-didnt {
+    border-top-color: var(--danger);
+  }
+  .lane-try {
+    border-top-color: var(--info);
+  }
+  .lane-idea {
+    border-top-color: var(--warning);
+  }
+  .lane-task {
+    border-top-color: var(--accent);
+  }
+  .huddle-lane-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0;
+    font-size: var(--fs-sm);
+    font-weight: 650;
+  }
+  .huddle-lane-empty {
+    margin: 0;
+  }
+  .huddle-cards {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .kind-brainstorm .huddle-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  }
+  .huddle-card {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface-raised);
+    box-shadow: var(--shadow-raised);
+  }
+  .huddle-card-title {
+    margin: 0;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+  .huddle-card-detail {
+    margin: 0;
+    font-size: var(--fs-sm);
+    color: var(--text-subtle);
+    overflow-wrap: anywhere;
+  }
+  .huddle-card-foot {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: var(--fs-xs);
+    color: var(--text-subtle);
+  }
+  .huddle-card-foot .grow {
+    flex: 1;
+  }
+  .huddle-pick {
+    align-items: flex-start;
+  }
+
+  .huddle-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .huddle-transcript {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+  .huddle-round {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .huddle-round-title {
+    margin: 0;
+    font-size: var(--fs-sm);
+    font-weight: 650;
+    color: var(--text-subtle);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .huddle-entries {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .huddle-entry {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+  }
+  .huddle-entry-body {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .huddle-entry.summary .huddle-entry-body {
+    padding: 8px 10px;
+    border-radius: var(--radius-md);
+    border-left: 3px solid var(--info);
+    background: var(--info-subtle);
+  }
+  .huddle-entry.steer .huddle-entry-body {
+    padding: 8px 10px;
+    border-radius: var(--radius-md);
+    border-left: 3px solid var(--accent);
+    background: var(--accent-subtle);
+  }
+  .huddle-entry.note {
+    color: var(--text-subtle);
+  }
+  .huddle-steer {
+    margin-top: var(--space-2);
+  }
+
+  /* ---------- proposals ---------- */
+  .proposal {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-4);
+    padding: 12px 16px;
+  }
+  .proposal + .proposal {
+    border-top: 1px solid var(--border);
+  }
+  .proposal.declined {
+    opacity: 0.6;
+  }
+  .proposal-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .proposal-line {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+  .proposal-icon {
+    flex: none;
+    color: var(--text-subtle);
+  }
+  .proposal-type {
+    flex: none;
+    font-size: var(--fs-xs);
+    font-weight: 650;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-subtle);
+  }
+  .proposal-title {
+    min-width: 0;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+  .proposal-note {
+    margin: 0;
+    color: var(--text-subtle);
+    font-size: var(--fs-sm);
+    overflow-wrap: anywhere;
+  }
+  .proposal-actions {
+    flex: none;
+  }
+
+  /* ---------- team notes ---------- */
+  .team-notes {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+    max-width: 860px;
+  }
+  .team-notes-every {
+    flex-wrap: wrap;
+    color: var(--text);
+  }
+  .team-notes-view {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding: var(--space-4);
+  }
+  .team-notes-edit {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  @media (max-width: 899px) {
+    .huddle-board.kind-retro {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .huddle-head {
+      flex-wrap: wrap;
+    }
+    .proposal {
+      flex-direction: column;
+      gap: 10px;
+    }
+  }
+}

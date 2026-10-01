@@ -9,6 +9,8 @@ export interface Agent {
   isHuman?: boolean;
   /** The desk that routes instructions nobody else matches. One per project. */
   lead?: boolean;
+  /** Dev-team projects: the desk that checks finished tickets before you sign them off. One per project. */
+  qa?: boolean;
   color: string;
   seat: { col: number; row: number };
   currentTask?: string;
@@ -32,6 +34,10 @@ export type ItemStatus =
   | 'approved'
   | 'held'
   | 'sent-back'
+  /** Dev-team projects: the QA desk is checking the finished work. */
+  | 'qa'
+  /** Dev-team projects: passed QA (or there is no QA desk). Waits for you to mark it done. */
+  | 'signoff'
   | 'done';
 
 /** An image you pasted. The file lives in data/projects/<project>/attachments/<file>. */
@@ -46,7 +52,7 @@ export interface Attachment {
   ts: string;
 }
 
-export type CommentKind = 'comment' | 'note' | 'decision';
+export type CommentKind = 'comment' | 'note' | 'decision' | 'qa';
 
 /** A comment on a ticket. Desks comment instead of rewriting the description. */
 export interface Comment {
@@ -56,9 +62,9 @@ export interface Comment {
   ts: string;
   text: string;
   attachments?: Attachment[];
-  /** note = your Instruct / Send back note; decision = a desk asking you to decide. */
+  /** note = your Instruct / Send back note; decision = a desk asking you to decide; qa = a QA result. */
   kind?: CommentKind;
-  /** Decision comments: the short ask, e.g. "Reply to Paul: confirm Tue kickoff". */
+  /** Decision and QA comments: the short headline, e.g. "Reply to Paul: confirm Tue kickoff" or "Passed QA". */
   title?: string;
 }
 
@@ -83,6 +89,25 @@ export interface WorkItem {
   /** Images on the description. */
   attachments?: Attachment[];
   comments?: Comment[];
+  /** Dev-team projects: where the ticket is in QA. */
+  qa?: QaState;
+  /** Files in the project folder that desks changed for this ticket, relative to the folder. Newest last. */
+  changedFiles?: string[];
+}
+
+export interface QaState {
+  /** The QA desk that checked it last. */
+  by?: string;
+  /** Times QA failed it since you last sent it back yourself. */
+  fails: number;
+  /** Trips into QA so far. A check only counts for the round it started in. Tickets from before rounds have none: 0. */
+  round?: number;
+  /** This round's verdict. Cleared each time the ticket goes back into QA. */
+  result?: 'pass' | 'fail';
+  /** The work is finished and checked, or QA gave up on it: your Approve closes the ticket instead of starting a run. */
+  ready?: boolean;
+  /** QA failed it too often, so it came to you. */
+  escalated?: boolean;
 }
 
 export type InstructionStatus = 'queued' | 'assigned' | 'done';
@@ -104,7 +129,7 @@ export interface Activity {
   text: string;
 }
 
-export type RunReason = 'instruction' | 'send-back' | 'instruct' | 'approved' | 'manual' | 'message' | 'handoff' | 'comment';
+export type RunReason = 'instruction' | 'send-back' | 'instruct' | 'approved' | 'manual' | 'message' | 'handoff' | 'comment' | 'huddle' | 'qa' | 'qa-fail';
 export type RunStatus = 'queued' | 'running' | 'done' | 'failed';
 
 /** One invocation of an agent: on a ticket, or woken by a chat message. */
@@ -127,6 +152,10 @@ export interface Run {
   cursorFrom?: number;
   /** Ticket runs: the ticket's thread that cursorFrom belongs to. Message runs use threadId. */
   cursorThread?: string;
+  /** Huddle runs: the huddle this turn belongs to. */
+  huddleId?: string;
+  /** The team notes went into this run's prompt. */
+  notes?: boolean;
 }
 
 export interface Company {
@@ -157,7 +186,8 @@ export interface McpToolInfo {
   reads: boolean;
 }
 
-export type ConnectionMode = 'ask' | 'read';
+/** read = changes never allowed; ask = changes wait for your approval; auto = changes run on their own, deletes still ask. */
+export type ConnectionMode = 'ask' | 'read' | 'auto';
 
 /** Your choice for one server in one project. Only this is stored; tokens never are. */
 export interface ProjectConnection {
@@ -166,7 +196,7 @@ export interface ProjectConnection {
   enabled: boolean;
   /** Desks allowed to use it. */
   desks: string[];
-  /** ask = reads run, changes wait for approval; read = changes are never allowed. */
+  /** ask = reads run, changes wait for approval; read = changes are never allowed; auto = changes run, deletes wait for approval. */
   mode: ConnectionMode;
 }
 
@@ -256,7 +286,101 @@ export interface State {
   messages: Message[];
   /** Agent-triggered wakes today, for the daily cap. */
   chat: { day: string; wakes: number };
+  /** Team sessions you started: retros, brainstorms, planning. Newest first. */
+  huddles: Huddle[];
+  /** Huddles started today, for the daily cap. */
+  huddleDay: { day: string; started: number };
+  /** Last huddle number handed out. */
+  huddleSeq: number;
+  /** What the team has learned, in markdown. Desks read it only when you include it. */
+  teamNotes: string;
+  /** Include the team notes in every desk run, not only the ones you tick. Off by default. */
+  notesEveryRun: boolean;
+  /** Dev-team projects: the QA desk was picked once by role. After that your choice sticks, none included. */
+  qaPicked?: boolean;
 }
+
+export type HuddleKind = 'retro' | 'brainstorm' | 'planning';
+export type HuddleStatus = 'running' | 'stopped' | 'done';
+/** retro: went-well / didnt / try. brainstorm: idea. planning: task. */
+export type HuddleLane = 'went-well' | 'didnt' | 'try' | 'idea' | 'task';
+
+/** One sticky note on a huddle board. */
+export interface HuddleCard {
+  id: string;
+  round: number;
+  /** Desk id that wrote it. */
+  by: string;
+  lane: HuddleLane;
+  title: string;
+  detail?: string;
+  /** Planning: the desk proposed to own the task. */
+  owner?: string;
+}
+
+/** A line in a huddle's transcript. */
+export interface HuddleEntry {
+  id: string;
+  round: number;
+  /** Desk id, or 'you' for your notes. */
+  from: string;
+  kind: 'contribution' | 'summary' | 'steer' | 'note';
+  text: string;
+  ts: string;
+}
+
+/** Something a huddle proposes. Nothing happens until you approve it. */
+export interface HuddleProposal {
+  id: string;
+  type: 'ticket' | 'note';
+  title: string;
+  text: string;
+  /** Tickets: the desk proposed to own it. */
+  owner?: string;
+  status: 'pending' | 'approved' | 'declined';
+  /** The ticket an approved ticket proposal became. */
+  itemId?: string;
+  decidedAt?: string;
+}
+
+export interface Huddle {
+  id: string;
+  number: number;
+  kind: HuddleKind;
+  topic: string;
+  status: HuddleStatus;
+  /** Why it stopped: you stopped it, a server restart, or a desk run that failed. */
+  stopReason?: 'you' | 'restart' | 'failed';
+  /** The desk that sums up each round: the project lead. */
+  facilitator: string;
+  participants: string[];
+  rounds: number;
+  /** Current round, 1-based. */
+  round: number;
+  /** contribute: desks are adding theirs. summarize: the facilitator is summing up. */
+  phase: 'contribute' | 'summarize' | 'done';
+  /** Desks that still owe their contribution this round. */
+  waiting: string[];
+  includeNotes: boolean;
+  /** Desk runs it was expected to take when you started it. */
+  estimate: number;
+  /** Desk runs it has taken so far. */
+  usedRuns: number;
+  entries: HuddleEntry[];
+  cards: HuddleCard[];
+  proposals: HuddleProposal[];
+  /** Brainstorm: the idea the facilitator picked, and why. */
+  pick?: { title: string; reason: string };
+  createdAt: string;
+  updatedAt: string;
+  finishedAt?: string;
+}
+
+/** A proposal as the poll carries it: decided ones come without their text. */
+export type HuddleProposalSummary = Omit<HuddleProposal, 'text'> & { text?: string };
+
+/** A huddle as the 3-second poll carries it: the board and transcript load when you open it. */
+export type HuddleSummary = Omit<Huddle, 'entries' | 'cards' | 'proposals'> & { proposals: HuddleProposalSummary[]; entryCount: number; cardCount: number };
 
 export type TeamTemplate = 'business' | 'dev' | 'blank';
 /** read = agents can read the linked folder; write = they can also edit files in it. */
@@ -314,7 +438,10 @@ export interface Meta {
 }
 
 /** The polled state leaves out messages; a thread's messages load when it opens. */
-export interface StateResponse extends Omit<State, 'messages'> {
+export interface StateResponse extends Omit<State, 'messages' | 'huddles'> {
+  huddles: HuddleSummary[];
+  /** Huddles a project can start per day. */
+  huddleLimit: number;
   meta: Meta;
   project: ProjectMeta;
 }
@@ -325,9 +452,26 @@ export const BOARD_COLUMNS: { statuses: ItemStatus[]; label: string }[] = [
   { statuses: ['todo'], label: 'To do' },
   // Approved means the desk is now carrying it out: it stays in progress, tagged Approved, until the desk reports it finished.
   { statuses: ['in-progress', 'sent-back', 'approved'], label: 'In progress' },
+  // Dev-team projects: the QA desk checks it, then it waits for your sign-off.
+  { statuses: ['qa', 'signoff'], label: 'QA' },
   { statuses: ['needs-you', 'held'], label: 'Needs you' },
   { statuses: ['done'], label: 'Done' },
 ];
+
+/** QA runs on dev-team projects: finished tickets go to the QA desk, then to you, before Done. */
+export function hasQa(template: TeamTemplate): boolean {
+  return template === 'dev';
+}
+
+/** A role that reads like QA, for picking a dev-team project's QA desk when none is set. */
+export function isQaRole(role: string): boolean {
+  return /\b(qa|quality|tests?|testers?|testing)\b/i.test(role);
+}
+
+/** The desk to pick when a dev-team project has none set: the first whose role says QA or testing. */
+export function defaultQaDesk(agents: Agent[]): Agent | undefined {
+  return agents.find((a) => !a.isHuman && isQaRole(a.role));
+}
 
 export const TEMPLATE_LABEL: Record<TeamTemplate, string> = {
   business: 'Business team',

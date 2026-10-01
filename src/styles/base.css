@@ -309,6 +309,15 @@
     letter-spacing: 0.06em;
     font-size: 10px;
   }
+  .qa-chip {
+    background: var(--success-subtle);
+    border-color: var(--success-border);
+    color: var(--success-text);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-size: 10px;
+  }
   .ticket-key {
     font-family: var(--font-mono);
     font-size: var(--fs-xs);

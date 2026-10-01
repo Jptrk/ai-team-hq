@@ -146,6 +146,10 @@
       flex-direction: column;
       gap: 10px;
     }
+    /* Full width, so a long one-line title ends in an ellipsis instead of running off the screen. */
+    .inbox-main {
+      align-self: stretch;
+    }
     .inbox-actions {
       max-width: none;
       width: 100%;

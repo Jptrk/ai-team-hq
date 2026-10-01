@@ -42,7 +42,7 @@ function StatusPill({ meta }: { meta: Meta | null }) {
           <p className="popover-title">{live ? 'Live agents' : 'Sim mode'}</p>
           <p className="muted small">
             {live
-              ? `Each instruction starts a real Claude run on ${meta.auth === 'api-key' ? 'your API key' : 'your Claude login'}. Nothing leaves the building without your approval.`
+              ? `Each instruction starts a real Claude run on ${meta.auth === 'api-key' ? 'your API key' : 'your Claude login'}. Nothing leaves the building without your approval, except changes on a connection you set to Auto.`
               : 'Fake activity, no Claude calls. Set HQ_RUNNER=claude in .env to go live.'}
           </p>
         </div>

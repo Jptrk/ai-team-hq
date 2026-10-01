@@ -151,6 +151,17 @@ test('projectPath builds paths that parse back', () => {
   const round = parseRoute(`#${projectPath('g', 'chat', { threadId: 't/1' })}`);
   assert.ok(round.kind === 'project' && round.threadId === 't/1');
 });
+test('huddles and team notes: list, one huddle, a ticket over it, notes', () => {
+  assert.equal(projectPath('g', 'huddles'), '/p/g/huddles');
+  assert.equal(projectPath('g', 'huddles', { huddleId: 'hud_1', ticket: 'GA-2' }), '/p/g/huddles/hud_1?ticket=GA-2');
+  assert.equal(projectPath('g', 'board', { huddleId: 'ignored' }), '/p/g/board');
+  const one = parseRoute('#/p/g/huddles/hud_1?ticket=GA-2');
+  assert.ok(one.kind === 'project' && one.view === 'huddles' && one.huddleId === 'hud_1' && one.ticket === 'GA-2');
+  const list = parseRoute('#/p/g/huddles');
+  assert.ok(list.kind === 'project' && list.view === 'huddles' && !('huddleId' in list));
+  assert.ok(!('huddleId' in parseRoute('#/p/g/board/hud_1')), 'only the huddles view reads an id');
+  assert.equal((parseRoute('#/p/g/notes') as { view: string }).view, 'notes');
+});
 
 // ---------- board filter ----------
 const items = [

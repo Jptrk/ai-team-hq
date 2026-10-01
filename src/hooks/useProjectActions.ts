@@ -1,6 +1,7 @@
 import { useCallback } from 'react';
 import type { Decision, ItemStatus, StateResponse } from '../../shared/types';
-import { api, type AgentBody } from '../api';
+import { HUDDLE_KIND_LABEL } from '../../shared/huddle';
+import { api, type AgentBody, type HuddleBody } from '../api';
 import { agentById, ticketKey } from '../util';
 import type { Notify } from './useFlags';
 
@@ -11,10 +12,11 @@ interface Opts {
   after: () => Promise<void>;
   openTicket: (key: string) => void;
   openThread: (threadId: string) => void;
+  openHuddle: (huddleId: string) => void;
 }
 
 /** Everything that changes a project, with flags for the outcome. */
-export function useProjectActions({ pid, state, notify, after, openTicket, openThread }: Opts) {
+export function useProjectActions({ pid, state, notify, after, openTicket, openThread, openHuddle }: Opts) {
   const nameOf = useCallback((id: string) => (state ? agentById(state.agents, id)?.name : undefined) ?? id, [state]);
 
   const guard = useCallback(
@@ -30,16 +32,18 @@ export function useProjectActions({ pid, state, notify, after, openTicket, openT
 
   /** True once the server took the decision, false when it did not go through (the flag says why), so the note box can keep its draft. */
   const decide = useCallback(
-    async (id: string, decision: Decision, note?: string, attachments: string[] = []): Promise<boolean> => {
+    async (id: string, decision: Decision, note?: string, attachments: string[] = [], includeNotes = false): Promise<boolean> => {
       if (!pid || !state) return false;
       const item = state.items.find((i) => i.id === id);
       const owner = item ? nameOf(item.assignee) : 'the desk';
+      // Finished and checked: approving signs it off.
+      const signOff = decision === 'approve' && Boolean(item?.qa?.ready) && (item?.status === 'signoff' || item?.status === 'needs-you' || item?.status === 'held');
       let ok = false;
       await guard(async () => {
-        const { run } = await api.decide(pid, id, decision, note, attachments);
+        const { run } = await api.decide(pid, id, decision, note, attachments, includeNotes);
         ok = true;
         const verb =
-          decision === 'approve' ? 'Approved' : decision === 'hold' ? 'On hold' : decision === 'send-back' ? `Sent back to ${owner}` : `Instruction sent to ${owner}`;
+          signOff ? 'Marked done' : decision === 'approve' ? 'Approved' : decision === 'hold' ? 'On hold' : decision === 'send-back' ? `Sent back to ${owner}` : `Instruction sent to ${owner}`;
         notify(run ? `${verb}. ${owner} is on it.` : verb, { tone: decision === 'approve' ? 'success' : 'info' });
         await after();
       }, 'That did not go through');
@@ -73,9 +77,9 @@ export function useProjectActions({ pid, state, notify, after, openTicket, openT
 
   /** Throws so the Create dialog can keep its draft and show the error. */
   const instruct = useCallback(
-    async (text: string, attachments: string[] = []) => {
+    async (text: string, attachments: string[] = [], includeNotes = false) => {
       if (!pid || !state) return;
-      const { item, run } = await api.instruct(pid, text, attachments);
+      const { item, run } = await api.instruct(pid, text, attachments, includeNotes);
       const key = ticketKey(item, state.project.key);
       notify(`${key} routed to ${nameOf(item.assignee)}${run ? ', working now' : ''}`, {
         tone: 'success',
@@ -101,9 +105,9 @@ export function useProjectActions({ pid, state, notify, after, openTicket, openT
 
   /** Throws so the comment box can keep its draft. */
   const comment = useCallback(
-    async (itemId: string, text: string, attachments: string[] = []) => {
+    async (itemId: string, text: string, attachments: string[] = [], includeNotes = false) => {
       if (!pid) return;
-      const { item, run } = await api.comment(pid, itemId, text, attachments);
+      const { item, run } = await api.comment(pid, itemId, text, attachments, includeNotes);
       const owner = nameOf(item.assignee);
       if (run) notify(`Comment sent. ${owner} will answer.`, { tone: 'success' });
       await after();
@@ -156,6 +160,18 @@ export function useProjectActions({ pid, state, notify, after, openTicket, openT
     [pid, notify, after],
   );
 
+  const setQaDesk = useCallback(
+    async (id: string, on: boolean) => {
+      if (!pid) return;
+      await guard(async () => {
+        const agent = await api.updateAgent(pid, id, { qa: on });
+        notify(on ? `${agent.name} now checks finished tickets` : `${agent.name} stopped QA. Finished tickets come to you to sign off`);
+        await after();
+      }, 'Could not change the QA desk');
+    },
+    [pid, guard, notify, after],
+  );
+
   const makeLead = useCallback(
     async (id: string) => {
       if (!pid) return;
@@ -182,7 +198,102 @@ export function useProjectActions({ pid, state, notify, after, openTicket, openT
     [pid, guard, notify, after, nameOf],
   );
 
-  return { decide, move, runItem, instruct, startThread, comment, attachToItem, editDescription, resumeThread, addAgent, makeLead, removeAgent, guard };
+  /** Throws so the setup form keeps what you typed. */
+  const startHuddle = useCallback(
+    async (body: HuddleBody) => {
+      if (!pid) return;
+      const h = await api.startHuddle(pid, body);
+      notify(`${HUDDLE_KIND_LABEL[h.kind]} #${h.number} started`, { tone: 'success' });
+      // Load it first, so its page never flashes "Huddle not found".
+      await after();
+      openHuddle(h.id);
+    },
+    [pid, notify, after, openHuddle],
+  );
+
+  const stopHuddle = useCallback(
+    async (id: string) => {
+      if (!pid) return;
+      await guard(async () => {
+        await api.stopHuddle(pid, id);
+        notify('Huddle stopped. Resume picks it up where it left off.');
+        await after();
+      }, 'Could not stop the huddle');
+    },
+    [pid, guard, notify, after],
+  );
+
+  const resumeHuddle = useCallback(
+    async (id: string) => {
+      if (!pid) return;
+      await guard(async () => {
+        await api.resumeHuddle(pid, id);
+        notify('Huddle resumed');
+        await after();
+      }, 'Could not resume the huddle');
+    },
+    [pid, guard, notify, after],
+  );
+
+  /** Throws so the box keeps its draft. */
+  const steerHuddle = useCallback(
+    async (id: string, text: string) => {
+      if (!pid) return;
+      await api.steerHuddle(pid, id, text);
+      await after();
+    },
+    [pid, after],
+  );
+
+  const decideProposal = useCallback(
+    async (huddleId: string, proposalId: string, decision: 'approve' | 'decline') => {
+      if (!pid || !state) return;
+      await guard(async () => {
+        const { proposal, item } = await api.decideProposal(pid, huddleId, proposalId, decision);
+        if (decision === 'decline') notify('Declined');
+        else if (item) {
+          const key = ticketKey(item, state.project.key);
+          notify(`${key} added to To do for ${nameOf(item.assignee)}`, { tone: 'success', action: { label: 'View', onClick: () => openTicket(key) } });
+        } else notify(proposal.type === 'note' ? 'Added to the team notes' : 'Approved', { tone: 'success' });
+        await after();
+      }, 'That did not go through');
+    },
+    [pid, state, guard, notify, after, nameOf, openTicket],
+  );
+
+  /** Throws so the notes editor keeps the draft. */
+  const saveTeamNotes = useCallback(
+    async (body: { teamNotes?: string; notesEveryRun?: boolean; base?: string }) => {
+      if (!pid) return;
+      await api.saveTeamNotes(pid, body);
+      notify('teamNotes' in body ? 'Team notes saved' : body.notesEveryRun ? 'Team notes now go into every run' : 'Team notes only go in when you tick the box', { tone: 'success' });
+      await after();
+    },
+    [pid, notify, after],
+  );
+
+  return {
+    decide,
+    move,
+    runItem,
+    instruct,
+    startThread,
+    comment,
+    attachToItem,
+    editDescription,
+    resumeThread,
+    addAgent,
+    makeLead,
+    setQaDesk,
+    removeAgent,
+    guard,
+    startHuddle,
+    stopHuddle,
+    resumeHuddle,
+    steerHuddle,
+    decideProposal,
+    saveTeamNotes,
+  };
 }
 
 export type ProjectActions = ReturnType<typeof useProjectActions>;

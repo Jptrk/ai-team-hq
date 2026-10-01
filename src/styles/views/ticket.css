@@ -89,6 +89,15 @@
   .comments > p {
     margin: 0;
   }
+  .changed-files {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    overflow-wrap: anywhere;
+  }
   .callout {
     display: flex;
     flex-direction: column;

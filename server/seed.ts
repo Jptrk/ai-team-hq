@@ -1,5 +1,5 @@
 import type { Agent, State, TeamTemplate, WorkItem } from '../shared/types';
-import { MAX_TEAM } from '../shared/types';
+import { hasQa, MAX_TEAM } from '../shared/types';
 
 const day = (offset: number) => {
   const d = new Date();
@@ -82,7 +82,7 @@ function devTeam(): Agent[] {
       skills: ['frontend', 'ui', 'ux', 'react', 'next', 'nextjs', 'css', 'component', 'page', 'layout', 'html', 'styling', 'accessibility', 'a11y', 'checkout'] },
     { id: 'sam', name: 'Sam', role: 'Backend Engineer', desk: 'Backend desk', color: '#2f8f6b',
       skills: ['backend', 'api', 'endpoint', 'database', 'db', 'sql', 'schema', 'service', 'server', 'migration', 'auth', 'graphql', 'paypal', 'payment', 'webhook'] },
-    { id: 'ivy', name: 'Ivy', role: 'QA Engineer', desk: 'QA desk', color: '#d98a2b',
+    { id: 'ivy', name: 'Ivy', role: 'QA Engineer', desk: 'QA desk', qa: true, color: '#d98a2b',
       skills: ['test', 'tests', 'testing', 'qa', 'bug', 'bugs', 'regression', 'e2e', 'unit', 'coverage', 'repro', 'reproduce', 'playwright', 'jest'] },
     { id: 'omar', name: 'Omar', role: 'DevOps Engineer', desk: 'Ops desk', color: '#4f8fd6',
       skills: ['deploy', 'deployment', 'ci', 'cd', 'pipeline', 'docker', 'dockerfile', 'build', 'infra', 'terraform', 'vercel', 'kubernetes', 'env', 'config', 'turbo'] },
@@ -238,6 +238,13 @@ export function seed(template: TeamTemplate, opts: SeedOptions): State {
     threads: [],
     messages: [],
     chat: { day: new Date().toISOString().slice(0, 10), wakes: 0 },
+    huddles: [],
+    huddleDay: { day: new Date().toISOString().slice(0, 10), started: 0 },
+    huddleSeq: 0,
+    teamNotes: '',
+    notesEveryRun: false,
+    // Dev-team projects start with their QA desk already picked (Ivy), so a restart after you stop QA never picks one again.
+    ...(hasQa(template) ? { qaPicked: true } : {}),
     activity: demo
       ? [
           { id: 'act_1', ts: ago(2), agentId: 'dylan', text: 'Reviewed overnight queue, nothing urgent before your first meeting' },

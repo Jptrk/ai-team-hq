@@ -36,7 +36,8 @@ export function BoardCard({ item, projectKey, owner, selected, dragging, onOpen,
       <div className="bcard-foot">
         <TypeIcon kind={item.kind} />
         <span className="ticket-key">{key}</span>
-        {(item.status === 'held' || item.status === 'sent-back' || item.status === 'approved') && <StatusLozenge status={item.status} />}
+        {(item.status === 'held' || item.status === 'sent-back' || item.status === 'approved' || item.status === 'signoff') && <StatusLozenge status={item.status} />}
+        {item.status === 'sent-back' && item.qa?.result === 'fail' && <span className="chip qa-chip">QA failed</span>}
         <span className="bcard-spacer" />
         <span className="bcard-moves">
           {left && (

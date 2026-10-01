@@ -1,7 +1,9 @@
 import type { WorkItem } from '../shared/types';
+import { hasQa } from '../shared/types';
 import { leadOf, refreshStatuses, settleInstructions } from './agents';
 import { clearWaiting, markRead, messagesOf, postAgentMessage, threadForItem } from './chat';
 import { addComment } from './comments';
+import { finishWork, qaDeskOf, recordQaResult } from './qa';
 import { allProjects, now, today, uid, type Project } from './store';
 
 /**
@@ -127,6 +129,32 @@ const COMMENT_REPLIES = [
   'Understood. I will comment here again when it is ready for you.',
 ];
 
+const QA_PASSES = [
+  'Read the changed files against the ticket. It does what was asked and nothing nearby looks broken. Run the unit tests once before release.',
+  'Checked the change and the report. Matches the ticket. Worth a quick manual pass on mobile.',
+];
+const QA_ISSUES = [
+  'The empty state from the ticket is missing: nothing shows when the list has no rows.',
+  'The error message still reads "Something went wrong"; the ticket asks for the real reason.',
+  'The new field is not validated: a blank value gets saved.',
+];
+
+/** Sim QA: the QA desk passes most tickets in QA and fails some, one tick at a time. */
+function tickQa(p: Project): void {
+  const s = p.state;
+  for (const item of s.items.filter((i) => i.status === 'qa')) {
+    if (Math.random() > 0.5) continue;
+    const by = item.qa?.by ?? qaDeskOf(s)?.id;
+    if (!by) continue;
+    const pass = Math.random() < 0.7;
+    const outcome = recordQaResult(s, item, by, pass ? { result: 'pass', summary: pick(QA_PASSES) ?? 'Looks right.' } : { result: 'fail', summary: 'Most of it is right, but one thing from the ticket is missing.', issues: [pick(QA_ISSUES) ?? 'Something is missing.'] });
+    if (typeof outcome === 'string') continue;
+    const desk = s.agents.find((a) => a.id === by);
+    if (desk) desk.lastActive = now();
+    p.log(by, outcome === 'signoff' ? `Passed QA on ${p.ticket(item)} "${item.title}"` : `Failed QA on ${p.ticket(item)} "${item.title}"`);
+  }
+}
+
 /** Your plain comments get an answer from the ticket's desk, one tick later. Instruct and Send back notes do not. */
 function tickComments(p: Project): void {
   for (const item of p.state.items) {
@@ -143,7 +171,9 @@ function tickComments(p: Project): void {
 
 function tickProject(p: Project): void {
   const s = p.state;
+  const qaOn = hasQa(p.meta.template);
   tickComments(p);
+  tickQa(p);
 
   // Idle desks pick up routine work so the office never goes quiet.
   for (const agent of s.agents) {
@@ -173,9 +203,8 @@ function tickProject(p: Project): void {
 
   // Approved work gets carried out and finishes, the way a live desk reports it done.
   for (const done of s.items.filter((i) => i.status === 'approved' && Math.random() < 0.4)) {
-    done.status = 'done';
-    done.history.push({ ts: now(), text: 'Done: carried out what you approved' });
-    p.log(done.assignee, `Finished "${done.title}"`);
+    const where = finishWork(s, done, 'carried out what you approved', qaOn);
+    p.log(done.assignee, where === 'done' ? `Finished "${done.title}"` : `Finished "${done.title}", ${where === 'qa' ? 'sent to QA' : 'ready for your sign-off'}`);
   }
 
   const active = s.items.filter((i) => i.status === 'in-progress' || i.status === 'sent-back');
@@ -201,9 +230,9 @@ function tickProject(p: Project): void {
     const agent = s.agents.find((a) => a.id === item.assignee);
     const roll = Math.random();
     if (roll < 0.25) {
-      item.status = 'done';
-      item.history.push({ ts: now(), text: 'Finished' });
-      p.log(item.assignee, `Finished "${item.title}"`);
+      // The sim's own routine busywork skips QA, so your sign-off list only holds real tickets.
+      const where = finishWork(s, item, 'Finished the work on the ticket', qaOn && item.client !== 'Routine');
+      p.log(item.assignee, where === 'done' ? `Finished "${item.title}"` : `Finished "${item.title}", ${where === 'qa' ? 'sent to QA' : 'ready for your sign-off'}`);
       if (agent) {
         agent.currentTask = 'Wrapping up and looking for the next task';
         agent.lastActive = now();

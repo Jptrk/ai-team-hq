@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Activity, ProjectAccess, ProjectMeta, State, TeamTemplate } from '../shared/types';
+import { defaultQaDesk, hasQa } from '../shared/types';
 import { rewindCursor } from './cursor';
 import { slug } from './paths';
 import { seed } from './seed';
@@ -199,7 +200,7 @@ function migrateLegacy(r: Registry): void {
 }
 
 /** Fill in fields added over time, and close out anything a restart killed. Exported for tests. */
-export function migrateState(s: State): State {
+export function migrateState(s: State, template?: TeamTemplate): State {
   s.runs ??= [];
   s.instructions ??= [];
   s.activity ??= [];
@@ -209,11 +210,31 @@ export function migrateState(s: State): State {
   s.threads ??= [];
   s.messages ??= [];
   s.chat ??= { day: today(), wakes: 0 };
+  s.huddles ??= [];
+  s.huddleDay ??= { day: today(), started: 0 };
+  s.huddleSeq ??= s.huddles.reduce((n, h) => Math.max(n, h.number ?? 0), 0);
+  s.teamNotes ??= '';
+  s.notesEveryRun ??= false;
+  // A huddle mid-round when the server stopped: it stops too, and Resume picks it up.
+  for (const h of s.huddles) {
+    if (h.status !== 'running') continue;
+    h.status = 'stopped';
+    h.stopReason = 'restart';
+  }
   for (const a of s.agents) a.running = false;
   // Nobody is mid-reply after a restart.
   for (const t of s.threads) {
     t.waiting = [];
     t.cursor ??= {};
+  }
+
+  // Dev-team projects get a QA desk once: the first whose role says QA or testing. After that your pick stands, none included.
+  if (template && hasQa(template) && !s.qaPicked) {
+    if (!s.agents.some((a) => a.qa && !a.isHuman)) {
+      const qa = defaultQaDesk(s.agents);
+      if (qa) qa.qa = true;
+    }
+    s.qaPicked = true;
   }
 
   if (!s.agents.some((a) => a.lead && !a.isHuman)) {
@@ -268,7 +289,7 @@ export function getProject(id: string): Project | null {
   const fresh = !fs.existsSync(file);
   const state = fresh
     ? seed(meta.template, { empty: true, ownerName: reg().owner.name, projectName: meta.name })
-    : migrateState(JSON.parse(fs.readFileSync(file, 'utf8')) as State);
+    : migrateState(JSON.parse(fs.readFileSync(file, 'utf8')) as State, meta.template);
   const project = new Project(id, state);
   handles.set(id, project);
   project.save();
