@@ -1,5 +1,6 @@
-import type { Agent, Instruction, State, WorkItem } from '../shared/types';
+import type { Agent, Attachment, Instruction, State, WorkItem } from '../shared/types';
 import { MAX_TEAM } from '../shared/types';
+import { titleFrom } from '../shared/plainText';
 import { slug } from './paths';
 import { AGENT_COLORS, assignSeats } from './seed';
 import { now, today, uid, type Project } from './store';
@@ -47,13 +48,14 @@ export function routeInstruction(text: string, agents: Agent[]): { agent: Agent;
 }
 
 /** Turn a free-text instruction into an in-progress ticket owned by a desk. Null when the team has no agents. */
-export function acceptInstruction(p: Project, text: string): { instruction: Instruction; item: WorkItem } | null {
+export function acceptInstruction(p: Project, text: string, attachments: Attachment[] = []): { instruction: Instruction; item: WorkItem } | null {
   const s = p.state;
   const routed = routeInstruction(text, s.agents);
   if (!routed) return null;
   const { agent, direct } = routed;
   const lead = leadOf(s.agents);
-  const title = text.length > 80 ? `${text.slice(0, 77).trimEnd()}...` : text;
+  // Titles are plain text everywhere (cards, inbox, search), so formatting and code blocks are stripped.
+  const title = titleFrom(text, attachments.length, 80);
 
   const item: WorkItem = {
     id: uid('wi'),
@@ -67,6 +69,7 @@ export function acceptInstruction(p: Project, text: string): { instruction: Inst
     assignee: agent.id,
     dated: today(),
     links: [],
+    ...(attachments.length ? { attachments } : {}),
     history: [
       {
         ts: now(),
@@ -85,6 +88,7 @@ export function acceptInstruction(p: Project, text: string): { instruction: Inst
     status: 'assigned',
     assignedTo: agent.id,
     itemId: item.id,
+    ...(attachments.length ? { attachments } : {}),
   };
 
   s.items.unshift(item);

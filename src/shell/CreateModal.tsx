@@ -1,7 +1,12 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Agent } from '../../shared/types';
+import { TextEditor, type EditorHandle } from '../editor/TextEditor';
+import { TEXT_LIMIT } from '../lib/markdownPaste';
+import { useProjectId } from '../lib/projectContext';
+import { AttachButton, AttachmentTray } from '../ui/attachments/AttachmentTray';
+import { useAttachments } from '../ui/attachments/useAttachments';
 import { Segmented } from '../ui/Segmented';
-import { addMention, MentionChips } from '../ui/MentionChips';
+import { MentionChips } from '../ui/MentionChips';
 import { Modal } from './Modal';
 
 export type CreateKind = 'task' | 'thread';
@@ -12,8 +17,8 @@ interface Props {
   agents: Agent[];
   projectName: string;
   onClose: () => void;
-  onTask: (text: string) => Promise<void>;
-  onThread: (text: string) => Promise<void>;
+  onTask: (text: string, attachments: string[]) => Promise<void>;
+  onThread: (text: string, attachments: string[]) => Promise<void>;
 }
 
 /** "+ Create": give the team an instruction (a ticket) or start a chat thread. */
@@ -23,6 +28,8 @@ export function CreateModal({ open, initialKind, agents, projectName, onClose, o
   const [another, setAnother] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const att = useAttachments(useProjectId());
+  const box = useRef<EditorHandle>(null);
 
   useEffect(() => {
     if (open) {
@@ -31,18 +38,33 @@ export function CreateModal({ open, initialKind, agents, projectName, onClose, o
     }
   }, [open, initialKind]);
 
+  const tooLong = text.length > TEXT_LIMIT;
+  const canSubmit = (text.trim().length > 0 || att.ids.length > 0) && !att.uploading && !busy && !tooLong;
+  const close = () => {
+    att.clear();
+    onClose();
+  };
+
+  // A ref, not state: two key presses in the same moment both see busy as false.
+  const sending = useRef(false);
   const submit = async () => {
     const value = text.trim();
-    if (!value || busy) return;
+    if (!canSubmit || sending.current) return;
+    sending.current = true;
+    // Only the images ready now go out; ones pasted while this sends stay.
+    const { ids, keys } = att.take();
     setBusy(true);
     setError(null);
     try {
-      await (kind === 'task' ? onTask(value) : onThread(value));
+      await (kind === 'task' ? onTask(value, ids) : onThread(value, ids));
       setText('');
-      if (!another || kind === 'thread') onClose();
+      att.removeKeys(keys);
+      // Closing drops anything still in the tray, so it never reappears next time Create opens.
+      if (!another || kind === 'thread') close();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'That did not go through');
     } finally {
+      sending.current = false;
       setBusy(false);
     }
   };
@@ -52,7 +74,7 @@ export function CreateModal({ open, initialKind, agents, projectName, onClose, o
   return (
     <Modal
       open={open}
-      onClose={onClose}
+      onClose={close}
       title={`Create in ${projectName}`}
       footer={
         <>
@@ -62,16 +84,16 @@ export function CreateModal({ open, initialKind, agents, projectName, onClose, o
             </label>
           )}
           <span className="grow" />
-          <button type="button" className="btn btn-ghost" onClick={onClose}>
+          <button type="button" className="btn btn-ghost" onClick={close}>
             Cancel
           </button>
-          <button type="button" className="btn btn-primary" disabled={busy || !text.trim()} onClick={() => void submit()}>
-            {busy ? 'Sending...' : kind === 'task' ? 'Create ticket' : 'Start thread'}
+          <button type="button" className="btn btn-primary" disabled={!canSubmit} onClick={() => void submit()}>
+            {busy ? 'Sending...' : att.uploading ? 'Uploading...' : kind === 'task' ? 'Create ticket' : 'Start thread'}
           </button>
         </>
       }
     >
-      <div className="create-form">
+      <div className="create-form" {...att.dropZone}>
         <Segmented
           label="What to create"
           value={kind}
@@ -86,19 +108,38 @@ export function CreateModal({ open, initialKind, agents, projectName, onClose, o
             ? `Becomes a ticket. @${desk} sends it to one desk; otherwise the router picks by keywords and the lead catches the rest.`
             : 'Starts a conversation. @mention the desks you want in it; your messages never count toward the loop limit.'}
         </p>
-        <textarea
+        <TextEditor
+          ref={box}
           autoFocus
-          rows={5}
+          toolbar
+          minHeight={120}
           value={text}
-          aria-label={kind === 'task' ? 'Instruction' : 'First message'}
+          label={kind === 'task' ? 'Instruction' : 'First message'}
           placeholder={kind === 'task' ? `Fix the checkout page on mobile, or @${desk} ...` : `@${desk} who owns the checkout page?`}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void submit();
-          }}
+          onChange={setText}
+          onSubmit={() => void submit()}
+          onFiles={att.add}
         />
-        <MentionChips agents={agents} onPick={(name) => setText((t) => addMention(t, name))} />
-        {error ? <p className="banner danger">{error}</p> : <p className="field-hint">Ctrl+Enter to send.</p>}
+        <AttachmentTray att={att} />
+        <div className="create-tools">
+          <AttachButton att={att} />
+          <MentionChips
+            agents={agents}
+            onPick={(name) => {
+              // Once per desk, where the caret is.
+              if (!text.includes(`@${name}`)) box.current?.insertText(`@${name} `);
+            }}
+          />
+        </div>
+        {error ? (
+          <p className="banner danger">{error}</p>
+        ) : tooLong ? (
+          <p className="field-hint bad">
+            Too long: {text.length} of {TEXT_LIMIT} characters.
+          </p>
+        ) : (
+          <p className="field-hint">Type markdown or use the buttons. Paste or drop images to attach them. Ctrl+Enter to send.</p>
+        )}
       </div>
     </Modal>
   );

@@ -1,7 +1,9 @@
-import { Router, type Response } from 'express';
+import express, { Router, type Response } from 'express';
 import fs from 'node:fs';
-import type { Decision, ItemStatus, ProjectAccess, ProjectMeta, ProjectSummary, StateResponse, TeamTemplate, ThreadResponse } from '../shared/types';
+import type { Attachment, Decision, ItemStatus, ProjectAccess, ProjectMeta, ProjectSummary, StateResponse, TeamTemplate, ThreadResponse } from '../shared/types';
+import { canEditDescription, MAX_ATTACHMENTS, MAX_DESCRIPTION } from '../shared/types';
 import { acceptInstruction, addAgent, parseSkills, refreshStatuses, removeAgent, settleInstructions } from './agents';
+import { AttachmentError, pickAttachments, resolveAttachment, saveUpload } from './attachments';
 import {
   ChatError,
   closeThread,
@@ -13,6 +15,8 @@ import {
   resumeThread,
   threadForItem,
 } from './chat';
+import { titleFrom } from '../shared/plainText';
+import { addComment } from './comments';
 import { checkConnections, listConnections, updateConnection, type ConnectionPatch } from './connections';
 import { checkFolder, folderExists, KEY_PATTERN, suggestKey } from './paths';
 import { resolveReport } from './runner/claude';
@@ -40,6 +44,26 @@ const TEMPLATES: TeamTemplate[] = ['business', 'dev', 'blank'];
 const ACCESS: ProjectAccess[] = ['read', 'write'];
 
 const str = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+
+/** Attachment ids from a request body, checked against the files on disk. Sends a 400 and returns null when bad. */
+function attachmentsFrom(p: Project, body: unknown, res: Response): Attachment[] | null {
+  try {
+    return pickAttachments(p.id, (body as { attachments?: unknown } | undefined)?.attachments, 'you');
+  } catch (e) {
+    if (e instanceof AttachmentError) {
+      res.status(400).json({ error: e.message });
+      return null;
+    }
+    throw e;
+  }
+}
+
+/** Text that may be empty when images carry the message. */
+function textOk(text: string, attachments: Attachment[], max = 2000): string | null {
+  if (text.length > max) return `Text can be at most ${max} characters`;
+  if (!text && !attachments.length) return 'Write something or attach an image';
+  return null;
+}
 
 function summary(p: Project): ProjectSummary {
   const s = p.state;
@@ -196,7 +220,10 @@ project.post('/threads', (req, res) => {
   const text = str(req.body?.text);
   const title = str(req.body?.title);
   const itemId = str(req.body?.itemId);
-  if (!text || text.length > 2000) return res.status(400).json({ error: 'Message must be 1-2000 characters' });
+  const attachments = attachmentsFrom(p, req.body, res);
+  if (!attachments) return;
+  const bad = textOk(text, attachments);
+  if (bad) return res.status(400).json({ error: bad });
   if (title.length > 80) return res.status(400).json({ error: 'Title must be at most 80 characters' });
   let thread;
   if (itemId) {
@@ -204,9 +231,9 @@ project.post('/threads', (req, res) => {
     if (!item) return res.status(404).json({ error: 'ticket not found' });
     thread = threadForItem(s, item, p.ticket(item), 'you');
   } else {
-    thread = createThread(s, { title: title || text.replace(/\s+/g, ' ').slice(0, 60), createdBy: 'you' });
+    thread = createThread(s, { title: title || titleFrom(text, attachments.length, 60, 'thread'), createdBy: 'you' });
   }
-  const posted = postFounderMessage(s, thread, text);
+  const posted = postFounderMessage(s, thread, text, attachments);
   p.commit();
   deliver(p, thread.id, posted.deliver);
   res.status(201).json({ ...threadBody(p, thread.id), woke: posted.deliver });
@@ -217,8 +244,11 @@ project.post('/threads/:tid/messages', (req, res) => {
   const thread = findThread(p.state, String(req.params.tid));
   if (!thread) return res.status(404).json({ error: 'thread not found' });
   const text = str(req.body?.text);
-  if (!text || text.length > 2000) return res.status(400).json({ error: 'Message must be 1-2000 characters' });
-  const posted = postFounderMessage(p.state, thread, text);
+  const attachments = attachmentsFrom(p, req.body, res);
+  if (!attachments) return;
+  const bad = textOk(text, attachments);
+  if (bad) return res.status(400).json({ error: bad });
+  const posted = postFounderMessage(p.state, thread, text, attachments);
   p.commit();
   deliver(p, thread.id, posted.deliver);
   res.status(201).json({ ...threadBody(p, thread.id), woke: posted.deliver });
@@ -299,11 +329,13 @@ project.delete('/agents/:id', (req, res) => {
 project.post('/instructions', (req, res) => {
   const p = P(res);
   const text = str(req.body?.text);
-  if (!text) return res.status(400).json({ error: 'text is required' });
-  if (text.length > 2000) return res.status(400).json({ error: 'text is too long' });
-  const result = acceptInstruction(p, text);
+  const attachments = attachmentsFrom(p, req.body, res);
+  if (!attachments) return;
+  const bad = textOk(text, attachments);
+  if (bad) return res.status(400).json({ error: bad });
+  const result = acceptInstruction(p, text, attachments);
   if (!result) return res.status(409).json({ error: 'This project has no teammates yet. Add one on the Team tab.' });
-  const run = kickoff(p, result.item.id, 'instruction');
+  const run = kickoff(p, result.item.id, 'instruction', undefined, attachments);
   res.status(201).json({ ...result, run });
 });
 
@@ -316,6 +348,9 @@ project.post('/items/:id/decision', (req, res) => {
   const decision = req.body?.decision as Decision;
   if (!DECISIONS.includes(decision)) return res.status(400).json({ error: 'unknown decision' });
   const note = str(req.body?.note);
+  if (note.length > 2000) return res.status(400).json({ error: 'The note can be at most 2000 characters' });
+  const images = attachmentsFrom(p, req.body, res);
+  if (!images) return;
   const agent = s.agents.find((a) => a.id === item.assignee);
   const name = agent?.name ?? item.assignee;
   const ref = p.ticket(item);
@@ -339,23 +374,25 @@ project.post('/items/:id/decision', (req, res) => {
       if (agent) agent.currentTask = `Reworking: ${item.title}`;
       break;
     case 'instruct':
-      if (!note) return res.status(400).json({ error: 'instruct needs a note' });
+      if (!note && !images.length) return res.status(400).json({ error: 'instruct needs a note' });
       item.status = 'in-progress';
-      item.history.push({ ts: now(), text: `Instruction from you: ${note}` });
+      item.history.push({ ts: now(), text: note ? `Instruction from you: ${note}` : 'Instruction from you (images)' });
       p.log(item.assignee, `New instruction on ${ref} "${item.title}"`);
       if (agent) agent.currentTask = `${item.title} (with your note)`;
       break;
   }
   if (agent) agent.lastActive = now();
+  // Your note, with any images, also lands in the ticket's comments.
+  if (note || images.length) addComment(item, { from: 'you', text: note, attachments: images, kind: 'note' });
   settleInstructions(s);
   refreshStatuses(s);
   p.commit();
 
   // Live mode: the desk picks the ticket back up. Hold needs nothing from them.
   let run = null;
-  if (decision === 'approve') run = kickoff(p, item.id, 'approved');
-  else if (decision === 'send-back') run = kickoff(p, item.id, 'send-back', note || undefined);
-  else if (decision === 'instruct') run = kickoff(p, item.id, 'instruct', note);
+  if (decision === 'approve') run = kickoff(p, item.id, 'approved', note || undefined, images);
+  else if (decision === 'send-back') run = kickoff(p, item.id, 'send-back', note || undefined, images);
+  else if (decision === 'instruct') run = kickoff(p, item.id, 'instruct', note, images);
 
   res.json({ item, run });
 });
@@ -365,14 +402,75 @@ project.patch('/items/:id', (req, res) => {
   const s = p.state;
   const item = s.items.find((i) => i.id === req.params.id);
   if (!item) return res.status(404).json({ error: 'item not found' });
-  const status = req.body?.status as ItemStatus;
-  if (!ITEM_STATUSES.includes(status)) return res.status(400).json({ error: 'unknown status' });
-  if (status !== item.status) {
-    item.status = status;
-    item.history.push({ ts: now(), text: `Moved to ${status} by you` });
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  if (!('status' in body) && !('summary' in body)) return res.status(400).json({ error: 'Send a status or a summary' });
+
+  // Check everything first, so a request with one bad field changes nothing.
+  let nextStatus: ItemStatus | undefined;
+  if ('status' in body) {
+    nextStatus = body.status as ItemStatus;
+    if (!ITEM_STATUSES.includes(nextStatus)) return res.status(400).json({ error: 'unknown status' });
+  }
+  let nextSummary: string | undefined;
+  if ('summary' in body) {
+    if (typeof body.summary !== 'string') return res.status(400).json({ error: 'summary must be text' });
+    // The description can change only before work starts, judged by the status before this request.
+    if (!canEditDescription(item.status)) {
+      return res.status(409).json({ error: 'This ticket is already being worked on, so its description is locked. Add a comment instead.' });
+    }
+    nextSummary = body.summary.replace(/\s+$/, '');
+    if (nextSummary.length > MAX_DESCRIPTION) return res.status(400).json({ error: `The description can be at most ${MAX_DESCRIPTION} characters` });
+  }
+
+  if (nextSummary !== undefined && nextSummary !== item.summary) {
+    item.summary = nextSummary;
+    item.history.push({ ts: now(), text: 'Description edited by you' });
+  }
+  if (nextStatus !== undefined && nextStatus !== item.status) {
+    item.status = nextStatus;
+    item.history.push({ ts: now(), text: `Moved to ${nextStatus} by you` });
   }
   settleInstructions(s);
   refreshStatuses(s);
+  p.commit();
+  res.json(item);
+});
+
+/** You comment on a ticket. The desk that owns it is woken to answer. */
+project.post('/items/:id/comments', (req, res) => {
+  const p = P(res);
+  const s = p.state;
+  const item = s.items.find((i) => i.id === req.params.id);
+  if (!item) return res.status(404).json({ error: 'item not found' });
+  const text = str(req.body?.text);
+  const attachments = attachmentsFrom(p, req.body, res);
+  if (!attachments) return;
+  const bad = textOk(text, attachments);
+  if (bad) return res.status(400).json({ error: bad });
+  const comment = addComment(item, { from: 'you', text, attachments });
+  p.log('you', `Commented on ${p.ticket(item)} "${item.title}"`);
+  p.commit();
+  const agent = s.agents.find((a) => a.id === item.assignee && !a.isHuman);
+  // A desk that is off shift is not woken; the comment waits on the ticket.
+  const run = agent && agent.status !== 'off' ? kickoff(p, item.id, 'comment', text || undefined, attachments) : null;
+  res.status(201).json({ item, comment, run });
+});
+
+/** Add images to a ticket's description. Wakes nobody. */
+project.post('/items/:id/attachments', (req, res) => {
+  const p = P(res);
+  const item = p.state.items.find((i) => i.id === req.params.id);
+  if (!item) return res.status(404).json({ error: 'item not found' });
+  const attachments = attachmentsFrom(p, req.body, res);
+  if (!attachments) return;
+  if (!attachments.length) return res.status(400).json({ error: 'Attach at least one image' });
+  const current = item.attachments ?? [];
+  const added = attachments.filter((a) => !current.some((c) => c.id === a.id));
+  if (!added.length) return res.json(item);
+  const cap = MAX_ATTACHMENTS * 4;
+  if (current.length + added.length > cap) return res.status(400).json({ error: `A ticket description can hold at most ${cap} images` });
+  item.attachments = [...current, ...added];
+  item.history.push({ ts: now(), text: `You attached ${added.length} image${added.length === 1 ? '' : 's'}` });
   p.commit();
   res.json(item);
 });
@@ -432,6 +530,42 @@ project.put('/connections/:name', (req, res) => {
   const result = updateConnection(p, String(req.params.name), patch);
   if (typeof result === 'string') return res.status(404).json({ error: result });
   res.json(listConnections(p));
+});
+
+// ---------- attachments (images you paste) ----------
+
+/**
+ * Upload one image as the raw request body. The type is read from the bytes, never trusted from the header.
+ * Only image or octet-stream bodies are read, so a plain form on another site cannot post one.
+ */
+project.post('/attachments', express.raw({ type: ['image/*', 'application/octet-stream'], limit: '4mb' }), (req, res) => {
+  const p = P(res);
+  const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+  try {
+    res.status(201).json(saveUpload(p.id, body, 'you'));
+  } catch (e) {
+    if (e instanceof AttachmentError) return res.status(400).json({ error: e.message });
+    throw e;
+  }
+});
+
+const IMAGE_TYPE: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif' };
+
+project.get('/attachments/:file', (req, res) => {
+  const p = P(res);
+  const abs = resolveAttachment(p.id, String(req.params.file));
+  if (!abs || !fs.existsSync(abs)) return res.status(404).json({ error: 'image not found' });
+  const type = IMAGE_TYPE[abs.slice(abs.lastIndexOf('.') + 1)];
+  if (!type) return res.status(404).json({ error: 'image not found' });
+  res.set({
+    'Content-Type': type,
+    'X-Content-Type-Options': 'nosniff',
+    'Content-Disposition': 'inline',
+    // Names are random and never reused, so the browser can keep them.
+    'Cache-Control': 'private, max-age=31536000, immutable',
+    'Content-Security-Policy': "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'",
+  });
+  res.send(fs.readFileSync(abs));
 });
 
 /** Markdown an agent wrote under workspaces/<project>/<agent>/reports/. */

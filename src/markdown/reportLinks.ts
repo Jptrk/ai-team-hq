@@ -3,6 +3,16 @@ export function isReportUrl(url: string): boolean {
   return /^\/api\/projects\/[^/]+\/workspaces\/[^/]+\/report\?/.test(url);
 }
 
+/** Is this an image you pasted, served by HQ itself? Only these are ever shown as <img>. */
+export function isAttachmentUrl(url: string): boolean {
+  return /^\/api\/projects\/[^/?#]+\/attachments\/att_[a-f0-9]{12}\.(png|jpg|webp|gif)$/.test(url);
+}
+
+/** Where HQ serves an attachment. */
+export function attachmentUrl(pid: string, file: string): string {
+  return `/api/projects/${encodeURIComponent(pid)}/attachments/${encodeURIComponent(file)}`;
+}
+
 /** File name shown for a report URL. */
 export function reportFileName(url: string): string {
   try {

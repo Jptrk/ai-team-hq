@@ -6,8 +6,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { attachmentsDir } from './attachments';
+import type { ItemStatus, RunReason } from '../shared/types';
 import type { AllowedServer } from './connections';
-import { guard } from './runner/claude';
+import { doneRefusal, guard } from './runner/claude';
 import type { Project } from './store';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hq-guard-'));
@@ -16,7 +18,10 @@ const ws = path.join(root, 'ws', 'leo');
 fs.mkdirSync(path.join(repo, 'apps', 'web'), { recursive: true });
 fs.mkdirSync(ws, { recursive: true });
 
-const fakeProject = (access: 'read' | 'write') => ({ meta: { path: repo, access } }) as unknown as Project;
+const fakeProject = (access: 'read' | 'write') => ({ id: 'guard-test', meta: { path: repo, access } }) as unknown as Project;
+// Only paths are computed; nothing is created there.
+const images = attachmentsDir('guard-test');
+const otherImages = attachmentsDir('another-project');
 
 async function decide(access: 'read' | 'write', tool: string, input: Record<string, unknown>) {
   const result = await guard({ project: fakeProject(access), dir: ws })(tool, input);
@@ -42,6 +47,11 @@ const cases: [string, 'read' | 'write', string, Record<string, unknown>, 'allow'
   ['write node_modules, writable project', 'write', 'Write', { file_path: path.join(repo, 'node_modules', 'x', 'i.js'), content: '' }, 'deny'],
   ['write key file, writable project', 'write', 'Write', { file_path: path.join(repo, 'certs', 'server.pem'), content: '' }, 'deny'],
   ['bash never', 'write', 'Bash', { command: 'ls' }, 'deny'],
+  ['read a pasted image', 'read', 'Read', { file_path: path.join(images, 'att_0123456789ab.png') }, 'allow'],
+  ['glob the pasted images', 'read', 'Glob', { pattern: path.join(images, '*.png') }, 'allow'],
+  ['write into the pasted images', 'write', 'Write', { file_path: path.join(images, 'att_0123456789ab.png'), content: '' }, 'deny'],
+  ['edit a pasted image', 'write', 'Edit', { file_path: path.join(images, 'att_0123456789ab.png') }, 'deny'],
+  ["read another project's images", 'read', 'Read', { file_path: path.join(otherImages, 'att_0123456789ab.png') }, 'deny'],
   ['hq tools always', 'read', 'mcp__hq__report_done', { summary: 'done' }, 'allow'],
 ];
 
@@ -98,6 +108,22 @@ for (const [label, tool, reason, conns, want] of mcpCases) {
   console.log(`${ok ? 'ok  ' : 'FAIL'} mcp: ${label}: ${got}${ok ? '' : ` (wanted ${want})`}`);
 }
 
+// ---------- report_done on comment runs ----------
+const doneCases: [string, RunReason, ItemStatus, 'refuse' | 'allow'][] = [
+  ['comment run cannot close a ticket waiting on your decision', 'comment', 'needs-you', 'refuse'],
+  ['comment run cannot close a held ticket', 'comment', 'held', 'refuse'],
+  ['comment run may finish an in-progress ticket when asked', 'comment', 'in-progress', 'allow'],
+  ['approved run finalizes as usual', 'approved', 'approved', 'allow'],
+  ['instruction run finishes as usual', 'instruction', 'in-progress', 'allow'],
+];
+for (const [label, reason, status, want] of doneCases) {
+  const why = doneRefusal(reason, status);
+  const got = why ? 'refuse' : 'allow';
+  const ok = got === want && (!why || /comment_on_ticket/.test(why));
+  if (!ok) failed++;
+  console.log(`${ok ? 'ok  ' : 'FAIL'} report_done: ${label}: ${got}${ok ? '' : ` (wanted ${want})`}`);
+}
+
 fs.rmSync(root, { recursive: true, force: true });
 assert.equal(failed, 0, `${failed} guard case(s) failed`);
-console.log(`\nall ${cases.length + mcpCases.length} guard cases pass`);
+console.log(`\nall ${cases.length + mcpCases.length + doneCases.length} guard cases pass`);

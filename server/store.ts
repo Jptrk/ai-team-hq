@@ -104,6 +104,11 @@ function stateFile(id: string): string {
   return path.join(PROJECTS_DIR, id, 'db.json');
 }
 
+/** data/projects/<id>: the project's db.json and its attachments/ folder. Archived with the project. */
+export function projectDataDir(id: string): string {
+  return path.join(PROJECTS_DIR, id);
+}
+
 function saveRegistry(): void {
   fs.mkdirSync(DATA, { recursive: true });
   fs.writeFileSync(REGISTRY_FILE, JSON.stringify(registry, null, 2));

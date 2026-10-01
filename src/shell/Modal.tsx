@@ -14,6 +14,7 @@ interface Props {
 /** Native <dialog>: focus trap, backdrop and top layer for free. Esc goes through the layer stack. */
 export function Modal({ open, onClose, title, size = 'md', children, footer }: Props) {
   const ref = useRef<HTMLDialogElement>(null);
+  const opener = useRef<HTMLElement | null>(null);
   const titleId = useId();
   useLayer(open, onClose);
 
@@ -22,11 +23,18 @@ export function Modal({ open, onClose, title, size = 'md', children, footer }: P
     if (!d) return;
     // StrictMode runs effects twice; showModal() on an open dialog throws.
     if (open && !d.open) {
+      opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
       d.showModal();
       // showModal() focuses the first button (Close). Start in the first text field instead, if there is one.
-      d.querySelector<HTMLElement>('.modal-body textarea:not(:disabled), .modal-body input:not([type=checkbox]):not([type=radio]):not(:disabled)')?.focus();
+      d.querySelector<HTMLElement>('.modal-body [contenteditable="true"], .modal-body textarea:not(:disabled), .modal-body input:not([type=checkbox]):not([type=radio]):not(:disabled)')?.focus();
     }
-    if (!open && d.open) d.close();
+    if (!open && d.open) {
+      d.close();
+      // Back to whatever opened it, e.g. the thumbnail, so keyboard users keep their place.
+      const back = opener.current;
+      opener.current = null;
+      if (back && document.contains(back)) back.focus();
+    }
   }, [open]);
 
   return (

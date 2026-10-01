@@ -2,7 +2,8 @@ import { createSdkMcpServer, query, tool, type McpServerConfig, type Options, ty
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import type { Agent, ItemKind, Message, RunReason, Thread, WorkItem } from '../../shared/types';
+import type { Agent, Attachment, ItemKind, ItemStatus, Message, RunReason, Thread, WorkItem } from '../../shared/types';
+import { attachmentsDir } from '../attachments';
 import {
   canWake,
   ChatError,
@@ -18,10 +19,12 @@ import {
   settleAfterRun,
   threadForItem,
 } from '../chat';
+import { addComment } from '../comments';
 import { runtimeServers, type AllowedServer } from '../connections';
 import { isReadOnlyTool } from '../mcp';
 import { folderExists, HQ_ROOT, instructionsFileIn, isInside } from '../paths';
 import { now, uid, WORKSPACES, type Project } from '../store';
+import { imageMarker, oneMessage, userContent } from './content';
 import type { AgentRunner, RunHooks, RunInput, RunOutcome } from './types';
 
 /**
@@ -32,7 +35,8 @@ import type { AgentRunner, RunHooks, RunInput, RunOutcome } from './types';
  *   - the project's linked folder, if any: read, plus write when the project allows it
  *     (never .git, node_modules, .env or key files, never anything inside HQ itself)
  *   - WebSearch / WebFetch only when HQ_WEB=1
- *   - three HQ tools that write straight into the project's board: post_update, raise_for_decision, report_done
+ *   - the project's attachments folder (images the founder pasted): read only
+ *   - HQ tools that write straight into the project's board: post_update, comment_on_ticket, raise_for_decision, report_done
  * No Bash, no subagents. Nothing leaves the building without the founder approving it.
  */
 
@@ -134,8 +138,12 @@ function systemPromptFor(p: Project, agent: Agent, dir: string, connections: All
     '- Anything that commits money, promises a date, or changes a policy also goes through raise_for_decision.',
     '- Routine internal work: finish it and call report_done with a 1-3 sentence summary.',
     '- Call post_update once when you start so the founder sees what you are on.',
+    "- To tell the founder something about a ticket (progress, a question, an answer), use comment_on_ticket. Never rewrite a ticket's description; it stays as the founder wrote it.",
+    '- Images the founder attached are shown to you with the prompt. Older ones are listed by file path; open them with Read when you need them.',
     '- Do not invent facts about clients, numbers, code, or history you have no record of. Say what you would need and where it should come from.',
-    mode === 'ticket'
+    reason === 'comment'
+      ? '- You were woken by the founder commenting on your ticket. Answer with comment_on_ticket. Only do more work if a comment asks for it; if that work needs the founder, use raise_for_decision. Never close the ticket to answer a comment.'
+      : mode === 'ticket'
       ? '- Every run ends with raise_for_decision or report_done, or with a question to a teammate (send_message) when you are blocked on them. The ticket then waits for their reply.'
       : owns
         ? '- You were woken by a message. Reply with send_message in this thread. If the conversation finishes your ticket, you may also call report_done.'
@@ -188,7 +196,28 @@ function nameOf(p: Project, id: string): string {
 function formatMessage(p: Project, m: Message, me?: string): string {
   const to = m.to.length ? m.to.map((id) => nameOf(p, id)).join(', ') : 'note';
   const mark = me && m.to.includes(me) ? ' (to you)' : '';
-  return `- [${m.n}] ${nameOf(p, m.from)} -> ${to}${mark}: ${m.text}`;
+  return `- [${m.n}] ${nameOf(p, m.from)} -> ${to}${mark}: ${m.text || '(image only)'}${imageMarker(p.id, m.attachments)}`;
+}
+
+const COMMENT_LABEL = { note: 'note', decision: 'asked for a decision' } as const;
+
+function commentLines(p: Project, item: WorkItem, last = 10): string[] {
+  const list = (item.comments ?? []).slice(-last);
+  if (!list.length) return [];
+  const lines = ['', '## Comments'];
+  for (const c of list) {
+    const label = c.kind && c.kind !== 'comment' ? ` (${COMMENT_LABEL[c.kind]})` : '';
+    const head = c.title ? `${c.title}: ` : '';
+    lines.push(`- ${c.ts.slice(0, 16).replace('T', ' ')} ${nameOf(p, c.from)}${label}: ${head}${c.text || '(image only)'}${imageMarker(p.id, c.attachments)}`);
+  }
+  return lines;
+}
+
+/** Which images go into this run's prompt. */
+function imagesFor(input: RunInput): Attachment[] {
+  if (input.images?.length) return input.images;
+  if ((input.reason === 'instruction' || input.reason === 'manual') && input.item) return input.item.attachments ?? [];
+  return [];
 }
 
 function ticketPrompt(input: RunInput): string {
@@ -199,8 +228,10 @@ function ticketPrompt(input: RunInput): string {
     `# ${p.ticket(item)}: ${item.title}`,
     `Kind: ${item.kind} · Status: ${item.status}${item.client ? ` · Client: ${item.client}` : ''} · From: ${from?.name ?? item.from}`,
     '',
-    item.summary,
+    item.summary.trim() || '(No written description. See the attached images.)',
   ];
+  if (item.attachments?.length) lines.push(`Description images:${imageMarker(p.id, item.attachments)}`);
+  lines.push(...commentLines(p, item));
   if (item.history.length) {
     lines.push('', '## History');
     for (const h of item.history.slice(-8)) lines.push(`- ${h.ts.slice(0, 16).replace('T', ' ')}: ${h.text}`);
@@ -221,13 +252,19 @@ function ticketPrompt(input: RunInput): string {
       lines.push(`The founder sent this back${founderNote ? ` with this note: "${founderNote}"` : ''}. Revise it and raise it again when ready.`);
       break;
     case 'instruct':
-      lines.push(`The founder added an instruction: "${founderNote}". Act on it.`);
+      lines.push(founderNote ? `The founder added an instruction: "${founderNote}". Act on it.` : 'The founder added instructions in the attached images. Act on them.');
       break;
     case 'approved':
       lines.push('The founder approved this. Finalize it: put the final version in reports/, then call report_done. Do not raise it again.');
       break;
     case 'handoff':
       lines.push(`${nameOf(p, item.handoffFrom ?? item.from)} handed this to you. Work it now. When you call report_done, they are told automatically.`);
+      break;
+    case 'comment':
+      // Several comments can batch into one run, so the prompt points at Comments instead of quoting one.
+      lines.push(
+        'The founder commented on this ticket. Answer every comment of theirs that you have not answered yet (see Comments) with comment_on_ticket. Only do more work if a comment asks for it.',
+      );
       break;
     default:
       lines.push('Please pick this up now.');
@@ -279,6 +316,9 @@ interface RunContext {
   dir: string;
   raised: boolean;
   finished: boolean;
+  /** comment_on_ticket calls so far, and whether one landed on the run's own ticket. */
+  comments: number;
+  commented: boolean;
   /** Epoch ms when this run started; report files written after it get linked automatically. */
   startedMs: number;
   reason: RunReason;
@@ -328,6 +368,14 @@ function reportLinks(ctx: RunContext, named: string | undefined, label: string):
     .sort((a, b) => b.mtime - a.mtime)
     .slice(0, 3)
     .map((f, i) => linkFor(p, ctx.agent.id, f.abs, i === 0 ? label : `Also: ${path.basename(f.abs)}`));
+}
+
+/** Why report_done must refuse, or null. A comment run never closes a ticket that waits on the founder. Exported for tests. */
+export function doneRefusal(reason: RunReason | undefined, status: ItemStatus): string | null {
+  if (reason === 'comment' && (status === 'needs-you' || status === 'held')) {
+    return "This ticket is waiting on the founder's decision. Answer with comment_on_ticket; do not close it.";
+  }
+  return null;
 }
 
 /** Does this desk own the run's ticket right now? Checked when a tool is called, not cached. */
@@ -385,13 +433,12 @@ function hqServer(ctx: RunContext) {
       const context = ctx.item ? s.items.find((i) => i.id === ctx.item!.id) : undefined;
       // Only the owner may turn its own ticket into a decision. Anyone else opens a new ticket.
       if (!ctx.raised && context && owns(ctx)) {
+        // The founder's description stays as written. The ask is a comment on the ticket.
         target = context;
-        target.history.push({ ts: now(), text: `Original task: ${target.title}` });
-        target.title = args.title;
-        target.summary = args.summary;
+        addComment(target, { from: ctx.agent.id, kind: 'decision', title: args.title, text: args.summary });
+        if (ctx.item && target.id === ctx.item.id) ctx.commented = true;
         target.kind = args.kind as ItemKind;
         target.status = 'needs-you';
-        target.from = ctx.agent.id;
         if (args.client) target.client = args.client;
         target.links = [...links, ...target.links.filter((l) => !links.some((n) => n.url === l.url))];
       } else {
@@ -427,6 +474,32 @@ function hqServer(ctx: RunContext) {
     },
   );
 
+  const comment = tool(
+    'comment_on_ticket',
+    "Comment on a ticket so the founder sees it: progress, a question, an answer to their comment. Use this instead of rewriting a ticket's description.",
+    {
+      text: z.string().min(2).max(1500).describe('The comment. Short and concrete.'),
+      ticket: z.string().max(40).optional().describe(`Ticket key like ${p.meta.key}-12. Leave out for the ticket you are on.`),
+    },
+    async (args) => {
+      const s = p.state;
+      if (ctx.comments >= 3) return fail('You already commented 3 times this run. Wrap up.');
+      const key = args.ticket?.trim().toLowerCase();
+      const target = key
+        ? s.items.find((i) => p.ticket(i).toLowerCase() === key || i.id === args.ticket)
+        : ctx.item
+          ? s.items.find((i) => i.id === ctx.item!.id)
+          : undefined;
+      if (!target) return fail(key ? `No ticket ${args.ticket} on this project.` : `You are not on a ticket in this run. Name one, e.g. "${p.meta.key}-12".`);
+      addComment(target, { from: ctx.agent.id, text: args.text });
+      ctx.comments += 1;
+      if (ctx.item && target.id === ctx.item.id) ctx.commented = true;
+      p.log(ctx.agent.id, `Commented on ${p.ticket(target)} "${target.title}"`);
+      p.commit();
+      return ok(`Commented on ${p.ticket(target)}.`);
+    },
+  );
+
   const done = tool(
     'report_done',
     'Mark your ticket finished. Use it for routine internal work that needed no decision, or after the founder approved something and you finalized it. Only the ticket owner can do this.',
@@ -438,6 +511,8 @@ function hqServer(ctx: RunContext) {
       const s = p.state;
       const target = ctx.item ? s.items.find((i) => i.id === ctx.item!.id) : undefined;
       if (!target || !owns(ctx)) return fail('You do not own a ticket in this run. Reply with send_message instead.');
+      const refused = doneRefusal(ctx.reason, target.status);
+      if (refused) return fail(refused);
       for (const link of reportLinks(ctx, args.report, 'Read the report').reverse()) {
         if (!target.links.some((l) => l.url === link.url)) target.links.unshift(link);
       }
@@ -557,12 +632,15 @@ function hqServer(ctx: RunContext) {
   );
 
   // Mixed schemas: widen the element type so report_done can join the list.
-  const tools: SdkMcpToolDefinition<any>[] = [postUpdate, send, handOff, raise];
+  const tools: SdkMcpToolDefinition<any>[] = [postUpdate, comment, send, handOff, raise];
   if (ctx.mode === 'ticket' || owns(ctx)) tools.push(done);
   return createSdkMcpServer({
     name: 'hq',
     version: '1.1.0',
-    instructions: 'HQ tools: post_update at the start; send_message or hand_off to involve a teammate; end with raise_for_decision or report_done.',
+    instructions:
+      ctx.reason === 'comment'
+        ? "HQ tools: answer the founder's comments with comment_on_ticket; send_message or hand_off to involve a teammate; raise_for_decision only if a comment asks for something that needs the founder's call."
+        : 'HQ tools: post_update at the start; comment_on_ticket to tell the founder something about a ticket; send_message or hand_off to involve a teammate; end with raise_for_decision or report_done.',
     tools,
   });
 }
@@ -612,7 +690,8 @@ function mcpDecision(ctx: GuardContext, toolName: string, input: Record<string, 
 export function guard(ctx: GuardContext) {
   const projectDir = projectDirOf(ctx.project);
   const canWriteProject = Boolean(projectDir && ctx.project.meta.access === 'write');
-  const readRoots = [ctx.dir, ...(projectDir ? [projectDir] : [])];
+  // Images the founder pasted: readable by every desk on this project, writable by none.
+  const readRoots = [ctx.dir, ...(projectDir ? [projectDir] : []), attachmentsDir(ctx.project.id)];
   const writeRoots = [ctx.dir, ...(canWriteProject && projectDir ? [projectDir] : [])];
 
   return async (toolName: string, input: Record<string, unknown>): Promise<PermissionResult> => {
@@ -637,8 +716,8 @@ export function guard(ctx: GuardContext) {
             ? 'your workspace or the project folder'
             : `your workspace (${ctx.dir})${projectDir ? '; the project folder is read-only' : ''}`
           : projectDir
-            ? `your workspace or ${projectDir}`
-            : `your workspace (${ctx.dir})`;
+            ? `your workspace, ${projectDir}, or the attached images`
+            : `your workspace (${ctx.dir}) or the attached images`;
         return { behavior: 'deny', message: `Stay inside ${where}.` };
       }
       if (writes && projectDir && !isInside(target, ctx.dir)) {
@@ -656,10 +735,12 @@ async function runOnce(input: RunInput, ctx: RunContext, resume: string | undefi
   const onAbort = () => controller.abort();
   signal.addEventListener('abort', onAbort, { once: true });
   const projectDir = projectDirOf(ctx.project);
+  const attachments = attachmentsDir(ctx.project.id);
+  fs.mkdirSync(attachments, { recursive: true });
 
   const options: Options = {
     cwd: ctx.dir,
-    additionalDirectories: projectDir ? [projectDir] : undefined,
+    additionalDirectories: [...(projectDir ? [projectDir] : []), attachments],
     model: MODEL,
     systemPrompt: systemPromptFor(ctx.project, ctx.agent, ctx.dir, ctx.connections, ctx.reason, ctx.mode, owns(ctx)),
     settingSources: [],
@@ -680,7 +761,10 @@ async function runOnce(input: RunInput, ctx: RunContext, resume: string | undefi
   let outcome: RunOutcome | null = null;
   let error: string | null = null;
   try {
-    const prompt = ctx.mode === 'message' ? messagePrompt(input, owns(ctx)) : ticketPrompt(input);
+    const text = ctx.mode === 'message' ? messagePrompt(input, owns(ctx)) : ticketPrompt(input);
+    // With images, the prompt becomes one user message carrying image blocks.
+    const content = userContent(text, ctx.project.id, imagesFor(input));
+    const prompt = typeof content === 'string' ? content : oneMessage(content);
     for await (const msg of query({ prompt, options })) {
       if (msg.type !== 'result') continue;
       const sessionId = (msg as { session_id?: string }).session_id;
@@ -737,6 +821,8 @@ export const claudeRunner: AgentRunner = {
       dir,
       raised: false,
       finished: false,
+      comments: 0,
+      commented: false,
       startedMs: Date.now() - 1000,
       reason: input.reason,
       connections: allowed,
@@ -749,7 +835,7 @@ export const claudeRunner: AgentRunner = {
     } catch (e) {
       const err = e as Error & { outcome?: RunOutcome | null };
       const message = err.message ?? String(e);
-      if (ctx.raised || ctx.finished || ctx.sentToThread || ctx.awaiting.length) {
+      if (ctx.raised || ctx.finished || ctx.sentToThread || ctx.awaiting.length || (ctx.reason === 'comment' && ctx.commented)) {
         // The agent already closed out (or replied, or asked a teammate); a cap or abort after that is not a failure.
         outcome = {
           summary: `Closed out, then stopped: ${message}`,
@@ -757,8 +843,13 @@ export const claudeRunner: AgentRunner = {
           turns: err.outcome?.turns ?? 0,
           sessionId: err.outcome?.sessionId,
         };
+      } else if (input.agent.sessionId && /too large|too long|413|request_too_large|exceeds|image/i.test(message)) {
+        // The resumed session grew past what the API accepts (images add up). Forget it and start fresh, once.
+        input.agent.sessionId = undefined;
+        input.agent.sessionTotalUsd = undefined;
+        outcome = await runOnce(input, ctx, undefined, signal);
       } else if (input.agent.sessionId && /session/i.test(message)) {
-        // A stale session id is the one failure worth retrying without it.
+        // A stale session id is the other failure worth retrying without it.
         outcome = await runOnce(input, ctx, undefined, signal);
       } else {
         throw e;
@@ -779,6 +870,8 @@ export const claudeRunner: AgentRunner = {
         awaiting: ctx.awaiting,
         askedBy: ctx.askedBy,
         summary: outcome.summary,
+        reason: ctx.reason,
+        commented: ctx.commented,
       },
       (id, text) => p.log(id, text),
     );

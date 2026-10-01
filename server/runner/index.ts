@@ -1,9 +1,10 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { Agent, Meta, Run, RunReason, RunnerName } from '../../shared/types';
+import type { Agent, Attachment, Meta, Run, RunReason, RunnerName } from '../../shared/types';
 import { refreshStatuses, settleInstructions } from '../agents';
 import { clearWaiting, findThread, markRead, needsWake, note, unreadFor } from '../chat';
+import { unansweredImages } from '../comments';
 import { now, uid, type Project } from '../store';
 import { claudeRunner, MODEL } from './claude';
 import { enqueue } from './queue';
@@ -145,13 +146,18 @@ async function execute(p: Project, run: Run, agent: Agent, input: Omit<RunInput,
 }
 
 /** Queue a run for the ticket's owner. No-op in sim mode. Returns the Run, or null. */
-export function kickoff(p: Project, itemId: string, reason: RunReason, note?: string): Run | null {
+export function kickoff(p: Project, itemId: string, reason: RunReason, note?: string, images: Attachment[] = []): Run | null {
   if (!isLive()) return null;
   const s = p.state;
   const item = s.items.find((i) => i.id === itemId);
   if (!item) return null;
   const agent = s.agents.find((a) => a.id === item.assignee);
   if (!agent || agent.isHuman) return null;
+  // Comments batch: one queued comment run per desk per ticket answers every new comment when it starts.
+  if (reason === 'comment') {
+    const queued = s.runs.find((r) => r.agentId === agent.id && r.itemId === item.id && r.reason === 'comment' && r.status === 'queued');
+    if (queued) return queued;
+  }
 
   const run: Run = { id: uid('run'), agentId: agent.id, itemId: item.id, reason, status: 'queued', startedAt: now() };
   track(p, run);
@@ -167,13 +173,16 @@ export function kickoff(p: Project, itemId: string, reason: RunReason, note?: st
     if (!liveRun) return;
     if (!liveAgent) return skip(p, liveRun, 'Desk was removed before the run started', true);
     if (!liveItem) return skip(p, liveRun, 'Ticket disappeared before the run started', true);
-    // Decisions made while queued make the run moot.
-    if (reason !== 'approved' && ['done', 'approved', 'held'].includes(liveItem.status)) return skip(p, liveRun, `ticket is ${liveItem.status}`);
+    // Decisions made while queued make the run moot. A comment still gets an answer on any ticket.
+    if (reason !== 'approved' && reason !== 'comment' && ['done', 'approved', 'held'].includes(liveItem.status)) return skip(p, liveRun, `ticket is ${liveItem.status}`);
 
-    if (liveItem.status === 'todo') liveItem.status = 'in-progress';
+    if (liveItem.status === 'todo' && reason !== 'comment') liveItem.status = 'in-progress';
     const thread = liveItem.threadId ? findThread(state, liveItem.threadId) : undefined;
     if (thread) markRead(thread, liveAgent.id);
-    await execute(p, liveRun, liveAgent, { item: liveItem, reason, note, thread }, liveItem.title);
+    const label = reason === 'comment' ? `Answering your comment on ${p.ticket(liveItem)}` : liveItem.title;
+    // A comment run sees the images on every comment it has not answered yet, not only the first one's.
+    const runImages = reason === 'comment' ? [...images, ...unansweredImages(liveItem, liveAgent.id)] : images;
+    await execute(p, liveRun, liveAgent, { item: liveItem, reason, note, thread, images: runImages }, label);
   });
 
   return run;
@@ -217,7 +226,9 @@ export function deliver(p: Project, threadId: string, ids: string[]): Run[] {
 
       markRead(thread, id);
       const item = thread.itemId ? state.items.find((i) => i.id === thread.itemId) : undefined;
-      await execute(p, liveRun, liveAgent, { item, reason: 'message', thread, unread: unread.all }, `Replying in "${thread.title}"`);
+      // Images go in only from the founder: desks cannot attach any.
+      const images = unread.all.filter((m) => m.from === 'you').flatMap((m) => m.attachments ?? []);
+      await execute(p, liveRun, liveAgent, { item, reason: 'message', thread, unread: unread.all, images }, `Replying in "${thread.title}"`);
     });
   }
   p.commit();

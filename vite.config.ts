@@ -11,10 +11,14 @@ export default defineConfig({
     proxy: { '/api': process.env.HQ_API_URL ?? 'http://127.0.0.1:4747' },
   },
   build: {
+    // The editor chunk (ProseMirror + markdown) is about 510 kB; it loads after the app, in the background.
+    chunkSizeWarningLimit: 600,
     rollupOptions: {
       output: {
         // Separate long-lived vendor chunks so app changes don't re-download them.
         manualChunks(id) {
+          // The rich text editor loads on first use, in its own chunk.
+          if (/[\\/]node_modules[\\/](@tiptap|prosemirror-|marked|orderedmap|rope-sequence|w3c-keyname|linkifyjs)/.test(id)) return 'editor';
           if (MARKDOWN.test(id)) return 'markdown';
           if (/[\\/]node_modules[\\/](react|react-dom|scheduler)[\\/]/.test(id)) return 'react';
           if (/[\\/]node_modules[\\/]lucide-react[\\/]/.test(id)) return 'icons';

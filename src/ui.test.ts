@@ -1,15 +1,24 @@
 /**
- * UI helpers: markdown previews, hash routes, board filter, top-bar search, report links.
- * Run: npm run test:ui. Pure functions, no browser, no network.
+ * UI helpers: markdown previews, hash routes, board filter, top-bar search, report links, editor markdown.
+ * Run: npm run test:ui. Pure functions and a headless editor, no browser, no network.
  */
 import assert from 'node:assert/strict';
-import type { Agent, WorkItem } from '../shared/types';
+import { Editor } from '@tiptap/core';
+import { TaskItem, TaskList } from '@tiptap/extension-list';
+import { TableKit } from '@tiptap/extension-table';
+import { Markdown } from '@tiptap/markdown';
+import StarterKit from '@tiptap/starter-kit';
+import { titleFrom } from '../shared/plainText';
+import { canEditDescription, type Agent, type WorkItem } from '../shared/types';
 import { EMPTY_FILTER, filterItems, isFiltered } from './components/board/filter';
 import { searchItems } from './lib/search';
 import { plainText } from './markdown/plainText';
-import { isReportUrl, reportFileName, resolveReportHref } from './markdown/reportLinks';
+import { installTypedTextEscaping } from './editor/markdownEscape';
+import { fitWithin, imageFiles } from './lib/images';
+import { cleanMarkdown, escapeTypedText, looksLikeDiffOrTerminal, looksLikeMarkdown, needsPlainEditor } from './lib/markdownPaste';
+import { attachmentUrl, isAttachmentUrl, isReportUrl, reportFileName, resolveReportHref } from './markdown/reportLinks';
 import { parseRoute, projectPath } from './route';
-import { readableInk } from './util';
+import { latestDecision, readableInk } from './util';
 
 let passed = 0;
 function test(name: string, fn: () => void) {
@@ -75,6 +84,27 @@ test('plainText has no ** left and truncates on a word', () => {
 });
 test('plainText removes code blocks', () => {
   assert.equal(plainText('Before\n```ts\nconst a = 1;\n```\nAfter'), 'Before After');
+});
+test('plainText reads older escaped text as typed', () => {
+  assert.equal(plainText('Fix Q&amp;A for &lt;Header&gt; in C:\\\\repo\\\\src\\_x\\\\a\\_b.ts'), 'Fix Q&A for <Header> in C:\\repo\\src_x\\a_b.ts');
+  assert.equal(plainText('\\*not italic\\* and \\_\\_init\\_\\_ and \\[x\\](y)'), '*not italic* and __init__ and [x](y)');
+  assert.equal(plainText('a&nbsp;b &quot;q&quot; it&#39;s'), 'a b "q" it\'s');
+  assert.equal(plainText('\\# not a heading'), '# not a heading');
+  assert.equal(plainText('&amp;lt; stays one level'), '&lt; stays one level');
+});
+test('titleFrom: first line with words, code blocks skipped', () => {
+  assert.equal(titleFrom('```\nnpm test\n```\nFix the **header**', 0, 80), 'Fix the header');
+  assert.equal(titleFrom('---\n\n## Plan\nmore', 0, 80), 'Plan');
+  assert.equal(titleFrom('Look\n```\nnever closed', 0, 80), 'Look');
+  assert.equal(titleFrom('', 1, 80), 'Look at the attached image');
+  assert.equal(titleFrom('```\nonly code\n```', 2, 80), 'Look at the attached images');
+  assert.equal(titleFrom('```\nonly code\n```', 0, 80), 'New task');
+  assert.ok(titleFrom('word '.repeat(40), 0, 80).length <= 81);
+});
+test('titleFrom: threads take all the text', () => {
+  assert.equal(titleFrom('Hey @Leo\nwho owns checkout?', 0, 60, 'thread'), 'Hey @Leo who owns checkout?');
+  assert.equal(titleFrom('', 1, 60, 'thread'), 'Image from you');
+  assert.equal(titleFrom('```\nx\n```', 0, 60, 'thread'), 'New thread');
 });
 
 // ---------- routes ----------
@@ -207,6 +237,156 @@ test('readableInk reaches 4.5:1 on every color', () => {
         worst = Math.min(worst, (Math.max(a, i) + 0.05) / (Math.min(a, i) + 0.05));
       }
   assert.ok(worst >= 4.5, `worst contrast ${worst.toFixed(2)}`);
+});
+
+// ---------- images ----------
+test('fitWithin scales the long side to 1568 and never up', () => {
+  assert.deepEqual(fitWithin(3136, 1000), { w: 1568, h: 500, scaled: true });
+  assert.deepEqual(fitWithin(1000, 4000), { w: 392, h: 1568, scaled: true });
+  assert.deepEqual(fitWithin(800, 600), { w: 800, h: 600, scaled: false });
+  assert.deepEqual(fitWithin(1568, 1568), { w: 1568, h: 1568, scaled: false });
+  assert.equal(fitWithin(20000, 1).h, 1, 'never rounds to zero');
+});
+test('imageFiles keeps only the four image types', () => {
+  const f = (name: string, type: string) => new File(['x'], name, { type });
+  const picked = imageFiles([f('a.png', 'image/png'), f('b.svg', 'image/svg+xml'), f('c.jpg', 'image/jpeg'), f('d.pdf', 'application/pdf'), f('e.webp', 'image/webp'), f('g.gif', 'image/gif')]);
+  assert.deepEqual(picked.map((x) => x.name), ['a.png', 'c.jpg', 'e.webp', 'g.gif']);
+  assert.deepEqual(imageFiles(null), []);
+});
+test('attachment URLs: only HQ image paths count', () => {
+  const url = attachmentUrl('gecom-apps', 'att_0123456789ab.png');
+  assert.equal(url, '/api/projects/gecom-apps/attachments/att_0123456789ab.png');
+  assert.ok(isAttachmentUrl(url));
+  for (const bad of ['https://evil.example/att_0123456789ab.png', '/api/projects/x/attachments/att_0123456789ab.svg', '/api/projects/x/attachments/../db.json', '/api/projects/x/attachments/att_0123456789ab.png?x=1', 'javascript:alert(1)', '//evil/api/projects/x/attachments/att_0123456789ab.png']) {
+    assert.ok(!isAttachmentUrl(bad), bad);
+  }
+});
+test('latestDecision finds the newest decision comment', () => {
+  const it = item(40, { comments: [
+    { id: 'c1', from: 'leo', ts: '1', text: 'old ask', kind: 'decision', title: 'A' },
+    { id: 'c2', from: 'you', ts: '2', text: 'hm' },
+    { id: 'c3', from: 'leo', ts: '3', text: 'new ask', kind: 'decision', title: 'B' },
+    { id: 'c4', from: 'leo', ts: '4', text: 'fyi' },
+  ] });
+  assert.equal(latestDecision(it)?.title, 'B');
+  assert.equal(latestDecision(item(41)), undefined);
+});
+
+// ---------- editor ----------
+test('looksLikeMarkdown: markdown pastes format, plain text stays plain', () => {
+  for (const md of ['# Title', '## Plan\nDo it', '- one\n- two', '1. first\n2. second', '> quoted', '```ts\nx\n```', '| a | b |\n|---|---|\n| 1 | 2 |', '---', '- [ ] task', 'This is **bold** text', 'an _italic_ word', 'use `npm test`', 'see [docs](https://x.y/z)', '~~old~~ new']) {
+    assert.ok(looksLikeMarkdown(md), md);
+  }
+  for (const plain of ['', '   ', 'Just a sentence.', 'Price is 5 * 3 = 15', 'snake_case_name and other_name', 'https://example.com/a_b_c', 'C:\\Users\\patri\\file.txt', 'email me at a@b.co', '2 - 1 = 1', 'x*y*z']) {
+    assert.ok(!looksLikeMarkdown(plain), plain);
+  }
+});
+test('cleanMarkdown trims trailing blanks and treats an empty box as empty', () => {
+  assert.equal(cleanMarkdown(''), '');
+  assert.equal(cleanMarkdown('\n\n'), '');
+  assert.equal(cleanMarkdown('&nbsp;'), '');
+  assert.equal(cleanMarkdown('&nbsp;\n\n&nbsp;'), '');
+  assert.equal(cleanMarkdown('**hi**\n\n'), '**hi**');
+  assert.equal(cleanMarkdown('line one\n\nline two  \n'), 'line one\n\nline two');
+  assert.equal(cleanMarkdown('# Plan\n\n- first\n- second\n- \n\n'), '# Plan\n\n- first\n- second');
+  assert.equal(cleanMarkdown('1. one\n2. \n'), '1. one');
+  assert.equal(cleanMarkdown('> quote\n> \n'), '> quote');
+  assert.equal(cleanMarkdown('a - b'), 'a - b', 'a dash inside a line stays');
+});
+test('cleanMarkdown drops empty paragraphs and empty last tasks', () => {
+  assert.equal(cleanMarkdown('a\n\n&nbsp;\n\nb'), 'a\n\nb');
+  assert.equal(cleanMarkdown('a\n\n\u00a0\n\n&nbsp;\n\n\n\nb'), 'a\n\nb');
+  assert.equal(cleanMarkdown('&nbsp;\n\n\n\nHello'), 'Hello', 'leading empty paragraphs go');
+  assert.equal(cleanMarkdown('\n| a | b |\n| --- | --- |\n'), '| a | b |\n| --- | --- |');
+  assert.equal(cleanMarkdown('\n\nx\n\n\n\n- [ ] '), 'x', 'what the editor saves for empty lines and a fresh task');
+  assert.equal(cleanMarkdown('- [ ] one\n- [ ] '), '- [ ] one');
+  assert.equal(cleanMarkdown('- [x] done\n- [x]'), '- [x] done');
+  assert.equal(cleanMarkdown('```\n&nbsp;\n\n\n```'), '```\n&nbsp;\n\n\n```', 'code keeps its lines');
+  assert.equal(cleanMarkdown('a&nbsp;b'), 'a&nbsp;b', 'an &nbsp; inside a line stays');
+});
+test('escapeTypedText escapes only what would format', () => {
+  const same = ['5 * 3', 'foo_bar', 'src_x', 'a_b.ts', '~5 min', 'a ~ b', '[x] alone', 'C:\\repo\\src', 'Q&A <Header>', '@QA_Bot', 'C:\\repo\\src_x\\a_b.ts'];
+  for (const t of same) assert.equal(escapeTypedText(t), t, t);
+  assert.equal(escapeTypedText('a*b*c'), 'a\\*b\\*c');
+  assert.equal(escapeTypedText('*star*'), '\\*star\\*');
+  assert.equal(escapeTypedText('__init__'), '\\_\\_init\\_\\_');
+  assert.equal(escapeTypedText('_word_'), '\\_word\\_');
+  assert.equal(escapeTypedText('~~old~~'), '\\~\\~old\\~\\~');
+  assert.equal(escapeTypedText('use `npm`'), 'use \\`npm\\`');
+  assert.equal(escapeTypedText('[x](y)'), '\\[x\\](y)');
+  assert.equal(escapeTypedText('[a][b] and [c]'), '\\[a\\]\\[b\\] and \\[c\\]');
+});
+test('looksLikeDiffOrTerminal: diffs, terminal output and stack traces', () => {
+  for (const code of [
+    'diff --git a/x.ts b/x.ts\nindex 1a2b..3c4d 100644\n--- a/x.ts\n+++ b/x.ts\n@@ -1,2 +1,2 @@\n context\n-old\n+new',
+    '-old line\n+new line',
+    '\n> ai-team-hq@0.1.0 test:ui\n> tsx src/ui.test.ts\n\nui: 30 tests passed',
+    '> @scope/pkg@1.2.3 build',
+    '$ npm test\n\nok',
+    'PS C:\\Users\\patri> npm test',
+    'TypeError: x is undefined\n    at foo (src/a.ts:10:5)\n    at bar (src/b.ts:2:1)',
+    'Traceback (most recent call last):\n  File "a.py", line 1, in <module>',
+  ]) {
+    assert.ok(looksLikeDiffOrTerminal(code), code);
+  }
+  for (const text of ['', '- one\n- two', '- one\n  - nested', '1. first\n2. second', '> quoted text', '+1 for this', 'Costs $5 total', 'Just a sentence.', 'see at the docs (page 2)']) {
+    assert.ok(!looksLikeDiffOrTerminal(text), text);
+  }
+});
+test('needsPlainEditor: images, HTML and footnotes', () => {
+  for (const md of ['![shot](/a.png)', 'a <b>bold</b> word', 'line<br>break', 'note[^1]', '<details>\n<summary>x</summary>']) assert.ok(needsPlainEditor(md), md);
+  for (const md of ['**bold** and [a link](https://x.y)', 'a < b and c > d', '5<6', '- [ ] task']) assert.ok(!needsPlainEditor(md), md);
+});
+
+// ---------- editor markdown, with the real extensions and no browser ----------
+installTypedTextEscaping();
+const extensions = () => [
+  StarterKit.configure({ underline: false }),
+  TaskList,
+  TaskItem.configure({ nested: true }),
+  TableKit.configure({ table: { resizable: false } }),
+  Markdown.configure({ markedOptions: { gfm: true, breaks: true } }),
+];
+const paragraphs = (...texts: string[]) => ({ type: 'doc', content: texts.map((text) => ({ type: 'paragraph', content: [{ type: 'text', text }] })) });
+test('the editor saves typed text as typed', () => {
+  const typed = 'Fix Q&A for <Header> in C:\\repo\\src_x\\a_b.ts and foo_bar';
+  const ed = new Editor({ element: null, extensions: extensions(), content: paragraphs(typed) });
+  try {
+    assert.equal(ed.getMarkdown(), typed);
+    ed.commands.setContent(ed.getMarkdown(), { contentType: 'markdown' });
+    assert.equal(ed.getText(), typed, 'reads back as the same text');
+    // Escaped where it has to be, so it reads back as text and not formatting.
+    for (const text of ['*not italic* and 5 * 3', '__init__ and foo_bar', '~~not struck~~ in ~5 min', '[not](a link) and [x]', 'use `npm` here']) {
+      ed.commands.setContent(paragraphs(text));
+      ed.commands.setContent(ed.getMarkdown(), { contentType: 'markdown' });
+      assert.equal(ed.getText(), text, text);
+    }
+  } finally {
+    ed.destroy();
+  }
+});
+test('the editor keeps formatting: saves, reads back, saves the same', () => {
+  const ed = new Editor({ element: null, extensions: extensions(), content: { type: 'doc', content: [{ type: 'paragraph' }] } });
+  const round = (md: string) => {
+    ed.commands.setContent(md, { contentType: 'markdown' });
+    return cleanMarkdown(ed.getMarkdown());
+  };
+  try {
+    assert.equal(round('**bold** and *it* and `a_b * c` and [link](https://x.y/z) and ~~old~~'), '**bold** and *it* and `a_b * c` and [link](https://x.y/z) and ~~old~~');
+    assert.equal(round('- one\n- two\n  - nested\n\n1. a\n2. b'), '- one\n- two\n  - nested\n\n1. a\n2. b');
+    assert.equal(round('- [ ] todo\n- [x] done'), '- [ ] todo\n- [x] done');
+    for (const md of ['| a | b |\n| --- | --- |\n| 1 | C:\\x |', '```ts\nconst a_b = `x` * 2;\n```', '> quote with C:\\x and a_b', '# Plan\n\nShip **it** & tell <Team>']) {
+      const once = round(md);
+      assert.equal(round(once), once, md);
+    }
+    assert.equal(round('```ts\nconst a_b = `x` * 2;\n```'), '```ts\nconst a_b = `x` * 2;\n```', 'code is never escaped');
+  } finally {
+    ed.destroy();
+  }
+});
+test('descriptions are editable only in To do', () => {
+  assert.equal(canEditDescription('todo'), true);
+  for (const s of ['in-progress', 'needs-you', 'approved', 'held', 'sent-back', 'done'] as const) assert.equal(canEditDescription(s), false, s);
 });
 
 console.log(`ui: ${passed} tests passed`);

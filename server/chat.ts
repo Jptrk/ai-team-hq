@@ -1,5 +1,6 @@
-import type { Agent, Message, State, Thread, WorkItem } from '../shared/types';
+import type { Agent, Attachment, Message, State, Thread, WorkItem } from '../shared/types';
 import { mentionsIn, routeInstruction } from './agents';
+import { addComment } from './comments';
 import { now, today, uid } from './store';
 
 /**
@@ -69,15 +70,23 @@ function addParticipant(t: Thread, id: string): void {
   if (id !== 'hq' && !t.participants.includes(id)) t.participants.push(id);
 }
 
-function append(s: State, t: Thread, msg: Pick<Message, 'from' | 'to' | 'text'> & Partial<Pick<Message, 'undelivered' | 'runId'>>): Message {
+/** One-line preview text, so a message that is only images still says something. */
+export function previewText(text: string, attachments?: Attachment[]): string {
+  if (text.trim()) return text;
+  const n = attachments?.length ?? 0;
+  return n === 0 ? '' : n === 1 ? 'Sent an image' : `Sent ${n} images`;
+}
+
+function append(s: State, t: Thread, msg: Pick<Message, 'from' | 'to' | 'text'> & Partial<Pick<Message, 'undelivered' | 'runId' | 'attachments'>>): Message {
   t.count += 1;
   const message: Message = { id: uid('msg'), threadId: t.id, n: t.count, ts: now(), ...msg };
   if (!message.undelivered?.length) delete message.undelivered;
+  if (!message.attachments?.length) delete message.attachments;
   s.messages.push(message);
   if (s.messages.length > MAX_MESSAGES) s.messages = s.messages.slice(-MAX_MESSAGES);
   addParticipant(t, msg.from);
   for (const id of msg.to) addParticipant(t, id);
-  if (msg.from !== 'hq') t.last = { from: msg.from, to: msg.to, text: msg.text.slice(0, 200), ts: message.ts };
+  if (msg.from !== 'hq') t.last = { from: msg.from, to: msg.to, text: previewText(msg.text, message.attachments).slice(0, 200), ts: message.ts };
   t.updatedAt = message.ts;
   // The author has obviously seen everything up to their own message.
   if (msg.from === 'you') t.youSeen = t.count;
@@ -213,7 +222,7 @@ function lastDeskSpeaker(s: State, t: Thread): string | undefined {
  * Patrick posts. Never counts as a hop: it resets the counter and reopens the thread.
  * Wakes the @mentioned desks; with none, the last desk that spoke, or the router's pick.
  */
-export function postFounderMessage(s: State, t: Thread, text: string): Posted {
+export function postFounderMessage(s: State, t: Thread, text: string, attachments?: Attachment[]): Posted {
   const desks = s.agents.filter((a) => !a.isHuman && a.status !== 'off');
   let targets = mentionsIn(text, desks).map((a) => a.id);
   if (targets.length === 0) {
@@ -230,7 +239,7 @@ export function postFounderMessage(s: State, t: Thread, text: string): Posted {
     t.pausedReason = undefined;
   }
   t.agentHops = 0;
-  const message = append(s, t, { from: 'you', to: targets, text });
+  const message = append(s, t, { from: 'you', to: targets, text, attachments });
   addWaiting(t, targets);
   return { message, deliver: targets, paused: false };
 }
@@ -292,6 +301,10 @@ export interface SettleInput {
   /** Who spoke to the desk in the messages that woke it ('you' and/or desk ids). */
   askedBy: string[];
   summary: string;
+  /** Ticket runs: why the desk ran. A reply to your comment never closes the ticket. */
+  reason?: string;
+  /** The desk commented on its ticket during this run. */
+  commented?: boolean;
 }
 
 /**
@@ -310,6 +323,12 @@ export function settleAfterRun(s: State, input: SettleInput, log: (agentId: stri
 
   if (input.raised || input.finished) return [];
   const item = input.itemId ? s.items.find((i) => i.id === input.itemId) : undefined;
+  if (input.reason === 'comment') {
+    // Woken by your comment: answer it, and leave the ticket where it was.
+    const text = input.summary.trim();
+    if (item && !input.commented && text) addComment(item, { from: input.agentId, text: text.slice(0, 1500) });
+    return [];
+  }
   if (!item || item.status === 'needs-you' || item.assignee !== input.agentId) return [];
   if (input.awaiting.length) {
     const names = input.awaiting.map((id) => s.agents.find((a) => a.id === id)?.name ?? id).join(', ');

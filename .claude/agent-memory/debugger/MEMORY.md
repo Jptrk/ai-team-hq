@@ -1,0 +1,2 @@
+- [Verify without servers](feedback_verify_without_servers.md) — tsc + 4 tsx test scripts + build; no servers, no MCP, no model calls; test pure helpers
+- [Write probes with Write tool](feedback_write_probes_with_write_tool.md) — Bash heredocs collapse `\\`; probes needing packages go in a temp src/__probe/

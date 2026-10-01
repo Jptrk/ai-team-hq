@@ -18,6 +18,7 @@ import { useLayer } from './hooks/useLayer';
 import { useMediaQuery } from './hooks/useMediaQuery';
 import { useProjectActions } from './hooks/useProjectActions';
 import { useTheme } from './hooks/useTheme';
+import { ProjectIdContext } from './lib/projectContext';
 import { KEYS, storage } from './lib/storage';
 import { projectPath, useHashRoute, type ViewId } from './route';
 import { CreateModal, type CreateKind } from './shell/CreateModal';
@@ -342,6 +343,9 @@ export function App() {
           live={live}
           onClose={closePanel}
           onDecide={actions.decide}
+          onComment={actions.comment}
+          onAttach={actions.attachToItem}
+          onEditDescription={actions.editDescription}
           onRun={actions.runItem}
           onMove={actions.move}
           onOpenAgent={openAgent}
@@ -391,58 +395,60 @@ export function App() {
   );
 
   return (
-    <div className={`shell${inlineMode ? ` side-${inlineMode}` : ' side-none'}${panelOpen ? ' has-panel' : ''}`}>
-      <a className="skip-link" href="#main">
-        Skip to content
-      </a>
-      <TopBar
-        ref={searchRef}
-        meta={meta}
-        ownerName={owner?.name ?? 'You'}
-        ownerColor={owner?.color}
-        items={state?.items ?? null}
-        agents={state?.agents ?? []}
-        projectKey={state?.project.key ?? ''}
-        sidebarMode={wide ? (collapsed ? 'rail' : 'expanded') : 'overlay'}
-        sidebarOpen={wide ? !collapsed : overlayOpen}
-        onToggleSidebar={toggleSidebar}
-        onCreate={() => openCreate('task')}
-        createLabel={pid ? 'Create' : 'Create project'}
-        onOpenTicket={openTicket}
-        onAllProjects={() => navigate('/projects')}
-        theme={theme}
-        themePref={pref}
-        onThemePref={setPref}
-        onToggleTheme={toggle}
-        narrow={!mid}
-      />
-      {inlineMode && <div className="shell-side">{sidebar(inlineMode)}</div>}
-      {overlayOpen && !wide && (
-        <>
-          <div className="scrim" onClick={() => setOverlayOpen(false)} aria-hidden />
-          <div className="shell-overlay">{sidebar('overlay')}</div>
-        </>
-      )}
-      <main id="main" className={mainClass} tabIndex={-1}>
-        {error && <p className="banner danger main-error">Lost the server: {error}</p>}
-        {!live && meta && route.kind === 'project' && view === 'needs-you' && <p className="sim-note muted small">Sim mode: fake activity, no Claude calls.</p>}
-        {body}
-      </main>
-      <Drawer open={panelOpen} subjectKey={panelKey} label={panelLabel} onClose={closePanel} modal={!mid} returnFocus={returnFocus}>
-        {panel}
-      </Drawer>
-      {state && current && (
-        <CreateModal
-          open={createOpen}
-          initialKind={createKind}
-          agents={state.agents}
-          projectName={current.name}
-          onClose={() => setCreateOpen(false)}
-          onTask={actions.instruct}
-          onThread={(text) => actions.startThread(text)}
+    <ProjectIdContext.Provider value={pid}>
+      <div className={`shell${inlineMode ? ` side-${inlineMode}` : ' side-none'}${panelOpen ? ' has-panel' : ''}`}>
+        <a className="skip-link" href="#main">
+          Skip to content
+        </a>
+        <TopBar
+          ref={searchRef}
+          meta={meta}
+          ownerName={owner?.name ?? 'You'}
+          ownerColor={owner?.color}
+          items={state?.items ?? null}
+          agents={state?.agents ?? []}
+          projectKey={state?.project.key ?? ''}
+          sidebarMode={wide ? (collapsed ? 'rail' : 'expanded') : 'overlay'}
+          sidebarOpen={wide ? !collapsed : overlayOpen}
+          onToggleSidebar={toggleSidebar}
+          onCreate={() => openCreate('task')}
+          createLabel={pid ? 'Create' : 'Create project'}
+          onOpenTicket={openTicket}
+          onAllProjects={() => navigate('/projects')}
+          theme={theme}
+          themePref={pref}
+          onThemePref={setPref}
+          onToggleTheme={toggle}
+          narrow={!mid}
         />
-      )}
-      <Flags flags={flags} dismiss={dismiss} />
-    </div>
+        {inlineMode && <div className="shell-side">{sidebar(inlineMode)}</div>}
+        {overlayOpen && !wide && (
+          <>
+            <div className="scrim" onClick={() => setOverlayOpen(false)} aria-hidden />
+            <div className="shell-overlay">{sidebar('overlay')}</div>
+          </>
+        )}
+        <main id="main" className={mainClass} tabIndex={-1}>
+          {error && <p className="banner danger main-error">Lost the server: {error}</p>}
+          {!live && meta && route.kind === 'project' && view === 'needs-you' && <p className="sim-note muted small">Sim mode: fake activity, no Claude calls.</p>}
+          {body}
+        </main>
+        <Drawer open={panelOpen} subjectKey={panelKey} label={panelLabel} onClose={closePanel} modal={!mid} returnFocus={returnFocus}>
+          {panel}
+        </Drawer>
+        {state && current && (
+          <CreateModal
+            open={createOpen}
+            initialKind={createKind}
+            agents={state.agents}
+            projectName={current.name}
+            onClose={() => setCreateOpen(false)}
+            onTask={actions.instruct}
+            onThread={(text, ids) => actions.startThread(text, undefined, ids)}
+          />
+        )}
+        <Flags flags={flags} dismiss={dismiss} />
+      </div>
+    </ProjectIdContext.Provider>
   );
 }

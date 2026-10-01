@@ -31,6 +31,7 @@ const RUN_REASON: Record<Run['reason'], string> = {
   manual: 'started by you',
   message: 'teammate message',
   handoff: 'handed off',
+  comment: 'your comment',
 };
 
 const STATUS_TONE: Record<Agent['status'], Tone> = { working: 'success', waiting: 'warning', idle: 'neutral', off: 'neutral' };

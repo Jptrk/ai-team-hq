@@ -5,17 +5,34 @@ import path from 'node:path';
 import { router } from './routes';
 import { isLive, meta } from './runner';
 import { startSim } from './sim';
-import { flushAll, initStore, listMeta } from './store';
+import { sweepAttachments } from './attachments';
+import { allProjects, flushAll, initStore, listMeta } from './store';
 
 const app = express();
+// Browsers say where a request came from. A page on another site may not change anything here.
+// Requests without the header (curl, tests) pass.
+app.use('/api', (req, res, next) => {
+  if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS' || req.get('sec-fetch-site') !== 'cross-site') return next();
+  res.status(403).json({ error: 'Cross-site requests are not allowed' });
+});
 app.use(express.json({ limit: '64kb' }));
 app.use('/api', router);
 
 // Bad JSON bodies and unexpected throws come back as JSON, not an HTML stack trace.
-app.use('/api', (err: Error & { status?: number; type?: string }, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+app.use('/api', (err: Error & { status?: number; type?: string }, req: express.Request, res: express.Response, _next: express.NextFunction) => {
   const status = err.status ?? 500;
   if (status >= 500) console.error('[hq] api error:', err);
-  res.status(status).json({ error: err.type === 'entity.parse.failed' ? 'Request body is not valid JSON' : status >= 500 ? 'Server error' : err.message });
+  const message =
+    err.type === 'entity.parse.failed'
+      ? 'Request body is not valid JSON'
+      : err.type === 'entity.too.large'
+        ? req.path.includes('/attachments')
+          ? 'That is too large. Images can be at most 3.75 MB.'
+          : 'That request is too large.'
+        : status >= 500
+          ? 'Server error'
+          : err.message;
+  res.status(status).json({ error: message });
 });
 
 const dist = path.resolve('dist');
@@ -26,6 +43,10 @@ if (process.env.NODE_ENV === 'production' && fs.existsSync(dist)) {
 
 const live = isLive();
 initStore({ emptySeed: live });
+for (const p of allProjects()) {
+  const removed = sweepAttachments(p.id, p.state);
+  if (removed) console.log(`[hq] ${p.meta.key}: removed ${removed} unused image${removed === 1 ? '' : 's'}`);
+}
 if (!live && process.env.SIMULATE !== '0') startSim();
 
 // node --watch sends SIGTERM on restart; write any debounced changes first.

@@ -1,0 +1,2 @@
+- [Review conventions](review-conventions.md) — read-only reviews, allowed commands, file:line + severity + scenario + fix format
+- [Headless TipTap checks](headless-tiptap-checks.md) — run TipTap markdown round-trips in Node via scratchpad .mts, gotchas

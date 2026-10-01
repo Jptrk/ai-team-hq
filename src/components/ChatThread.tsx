@@ -3,8 +3,13 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import type { Message, StateResponse, Thread } from '../../shared/types';
 import { api } from '../api';
 import { Markdown } from '../markdown/Markdown';
+import { TextEditor, type EditorHandle } from '../editor/TextEditor';
+import { TEXT_LIMIT } from '../lib/markdownPaste';
+import { AttachmentGrid } from '../ui/attachments/AttachmentGrid';
+import { AttachButton, AttachmentTray } from '../ui/attachments/AttachmentTray';
+import { useAttachments } from '../ui/attachments/useAttachments';
 import { Avatar } from '../ui/Avatar';
-import { addMention, MentionChips } from '../ui/MentionChips';
+import { MentionChips } from '../ui/MentionChips';
 import { agentById, ticketKey, timeAgo } from '../util';
 import { speakerName } from './Chat';
 
@@ -31,6 +36,8 @@ export function ChatThread({ pid, thread, state, onBack, onOpenTicket, onChanged
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const pane = useRef<HTMLDivElement>(null);
+  const box = useRef<EditorHandle>(null);
+  const att = useAttachments(pid);
   const nearBottom = useRef(true);
   const agents = state.agents;
   const item = thread.itemId ? state.items.find((i) => i.id === thread.itemId) : undefined;
@@ -58,7 +65,11 @@ export function ChatThread({ pid, thread, state, onBack, onOpenTicket, onChanged
     if (el && nearBottom.current) el.scrollTop = el.scrollHeight;
   }, [messages?.length, thread.waiting.length]);
 
+  // A ref, not state: two key presses in the same moment both see busy as false.
+  const sending = useRef(false);
   const act = async (fn: () => Promise<unknown>) => {
+    if (sending.current) return;
+    sending.current = true;
     setBusy(true);
     setError(null);
     try {
@@ -68,16 +79,22 @@ export function ChatThread({ pid, thread, state, onBack, onOpenTicket, onChanged
     } catch (e) {
       setError(e instanceof Error ? e.message : 'That did not go through');
     } finally {
+      sending.current = false;
       setBusy(false);
     }
   };
 
+  const tooLong = text.length > TEXT_LIMIT;
+  const canSend = (text.trim().length > 0 || att.ids.length > 0) && !att.uploading && !busy && !tooLong;
   const send = () => {
     const value = text.trim();
-    if (!value || busy) return;
+    if (!canSend) return;
+    // Only the images ready now go out; ones pasted while this sends stay for the next message.
+    const { ids, keys } = att.take();
     void act(async () => {
-      await api.postMessage(pid, thread.id, value);
+      await api.postMessage(pid, thread.id, value, ids);
       setText('');
+      att.removeKeys(keys);
     });
   };
 
@@ -160,7 +177,8 @@ export function ChatThread({ pid, thread, state, onBack, onOpenTicket, onChanged
                   {to.length > 0 && <span className="muted"> → {to.join(', ')}</span>}
                   <span className="muted"> · {timeAgo(m.ts)}</span>
                 </div>
-                <Markdown source={m.text} variant="compact" breaks />
+                {m.text && <Markdown source={m.text} variant="compact" breaks />}
+                <AttachmentGrid pid={pid} attachments={m.attachments} from={speakerName(agents, m.from)} size="sm" />
                 {m.undelivered?.length ? <div className="msg-held">Not delivered to {m.undelivered.map((id) => speakerName(agents, id)).join(', ')} yet: thread paused</div> : null}
               </div>
             </div>
@@ -185,25 +203,35 @@ export function ChatThread({ pid, thread, state, onBack, onOpenTicket, onChanged
         })}
       </div>
 
-      <div className="composer">
+      <div className="composer" {...att.dropZone}>
         {thread.status === 'closed' && <p className="muted small">Closed. Posting here reopens it.</p>}
-        <textarea
-          rows={2}
+        <AttachmentTray att={att} />
+        <TextEditor
+          ref={box}
           value={text}
-          aria-label="Reply"
-          placeholder="Reply, or @Name to pull a desk in..."
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) send();
-          }}
+          label="Reply"
+          placeholder="Reply, @Name to pull a desk in, or paste an image..."
+          minHeight={48}
+          onChange={setText}
+          onSubmit={send}
+          onFiles={att.add}
         />
         <div className="composer-row">
-          <MentionChips agents={agents} onPick={(name) => setText((t) => addMention(t, name))} />
-          <button type="button" className="btn btn-primary btn-sm" disabled={busy || !text.trim()} onClick={send}>
-            {busy ? 'Sending...' : 'Send'}
+          <AttachButton att={att} />
+          <MentionChips
+            agents={agents}
+            onPick={(name) => {
+              // Once per desk, where the caret is.
+              if (!text.includes(`@${name}`)) box.current?.insertText(`@${name} `);
+            }}
+          />
+          <button type="button" className="btn btn-primary btn-sm" disabled={!canSend} onClick={send}>
+            {busy ? 'Sending...' : att.uploading ? 'Uploading...' : 'Send'}
           </button>
         </div>
-        <p className="field-hint">{error ?? `${replyHint} Your messages never count toward the limit. Ctrl+Enter to send.`}</p>
+        <p className={`field-hint${tooLong ? ' bad' : ''}`}>
+          {error ?? (tooLong ? `Too long: ${text.length} of ${TEXT_LIMIT} characters.` : `${replyHint} Your messages never count toward the limit. Ctrl+Enter to send.`)}
+        </p>
       </div>
     </div>
   );

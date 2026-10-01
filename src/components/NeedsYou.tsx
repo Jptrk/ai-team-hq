@@ -3,7 +3,7 @@ import type { Agent, Decision, Thread, WorkItem } from '../../shared/types';
 import { plainText } from '../markdown/plainText';
 import { Avatar } from '../ui/Avatar';
 import { TypeIcon } from '../ui/TypeIcon';
-import { agentById, ticketKey } from '../util';
+import { agentById, latestDecision, ticketKey } from '../util';
 import { DecisionBar } from './DecisionBar';
 
 interface Props {
@@ -12,7 +12,8 @@ interface Props {
   projectKey: string;
   paused: Thread[];
   onOpen: (key: string) => void;
-  onDecide: (id: string, decision: Decision, note?: string) => Promise<void>;
+  /** Resolves false when the decision did not go through. */
+  onDecide: (id: string, decision: Decision, note?: string, attachments?: string[]) => Promise<boolean | void>;
   onOpenAgent: (id: string) => void;
   onOpenThread: (id: string) => void;
   onResumeThread: (id: string) => Promise<void>;
@@ -22,6 +23,9 @@ interface Props {
 function Row({ item, agents, projectKey, onOpen, onDecide, onOpenAgent }: { item: WorkItem } & Pick<Props, 'agents' | 'projectKey' | 'onOpen' | 'onDecide' | 'onOpenAgent'>) {
   const owner = agentById(agents, item.assignee);
   const key = ticketKey(item, projectKey);
+  const ask = latestDecision(item);
+  const summary = ask ? `${ask.title ? `${ask.title}. ` : ''}${ask.text}` : item.summary;
+  const images = (item.attachments?.length ?? 0) + (item.comments ?? []).reduce((n, c) => n + (c.attachments?.length ?? 0), 0);
   return (
     <li className="inbox-row">
       <div className="inbox-main">
@@ -32,7 +36,7 @@ function Row({ item, agents, projectKey, onOpen, onDecide, onOpenAgent }: { item
             {item.title}
           </button>
         </div>
-        {item.summary && <p className="inbox-summary">{plainText(item.summary, 180)}</p>}
+        {summary && <p className="inbox-summary">{plainText(summary, 180)}</p>}
         <div className="inbox-meta">
           {owner && (
             <button type="button" className="person-link small" onClick={() => onOpenAgent(owner.id)}>
@@ -41,6 +45,7 @@ function Row({ item, agents, projectKey, onOpen, onDecide, onOpenAgent }: { item
             </button>
           )}
           {item.client && <span>{item.client}</span>}
+          {images > 0 && <span>{images} image{images === 1 ? '' : 's'}</span>}
           <span className="mono">{item.dated}</span>
         </div>
       </div>

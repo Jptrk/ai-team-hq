@@ -98,6 +98,64 @@ Links in a report behave safely:
 Reports are written by agents, so raw HTML shows as plain text and images are not loaded. An
 image shows as a link with its alt text instead.
 
+## Writing: the rich text box
+
+Every box you write in formats as you type, like Jira. That covers chat, Create, comments, the
+Instruct and Send back notes, and ticket descriptions.
+
+| Type | Becomes |
+| ---- | ------- |
+| `**bold**`, `_italic_`, `~~strike~~`, `` `code` `` | the formatting itself |
+| `# `, `## `, `### ` at the start of a line | a heading |
+| `- ` or `1. ` | a bulleted or numbered list |
+| `> ` | a quote |
+| three backticks | a code block |
+
+- **Shortcuts:** Ctrl+B, Ctrl+I and Ctrl+E (code) work, Ctrl+K adds a link (https or mailto only), and Ctrl+Enter sends. Create, comments and descriptions also have a button bar.
+- **Pasting markdown:** a table, list or heading pasted from somewhere else turns into the real thing. Plain sentences stay plain.
+- **Markdown underneath:** what gets saved and sent to desks is still plain markdown, so nothing else changes.
+- **Loading:** the editor loads in the background after HQ opens, in its own file. Until it arrives, a plain text box works the same way.
+
+**Editing a description.** A ticket's description can be edited only while the ticket is in **To do**.
+From In progress on it is locked: the Edit button goes away and the server refuses changes, so a
+desk never has the ground shift under it. If work starts while you are editing, the editor closes
+and nothing is saved. Add a comment instead. Tickets you make with Create start In progress right
+away, so their description stays as you first wrote it.
+
+Ticket and thread titles are plain text, so formatting is stripped from them.
+
+## Images and comments
+
+Paste an image (Ctrl+V), drop it, or use the image button in any text box. That covers chat
+messages, Create, the Instruct and Send back notes, and ticket comments. On a ticket, **Attach
+images** beside Description adds images to the description itself.
+
+- **Before you send,** images show as thumbnails under the text. The X removes one. Up to 6 go
+  with each message, comment or note.
+- **After sending,** they show under the message, comment or description. Click one to open it
+  full size; the arrow keys move between images.
+- **Big images are scaled down** in the browser to 1568px on the long side, the size Claude
+  recommends. Screenshots stay PNG so text stays sharp.
+- **Desks see your images directly.** They go into the desk's prompt with your text, up to 6 per
+  run. Each image costs roughly 1,000 to 1,600 tokens of your subscription in the run that
+  includes it. Older images are listed by file path, and a desk can open them with Read.
+
+**Comments.** Every ticket has a **Comments | History** switch.
+
+- Your comment wakes the desk that owns the ticket, and it answers with a comment. Answering
+  never closes the ticket.
+- Desks use `comment_on_ticket` to tell you something about a ticket. They no longer rewrite
+  the description, which stays exactly as you wrote it.
+- When a desk asks you to decide, that ask is a comment too. It shows in the ticket's callout and
+  in Needs you.
+- Your Instruct and Send back notes are kept as comments, with their images.
+
+**Safety.** Only PNG, JPEG, WebP and GIF are accepted, checked from the file's bytes, not its name.
+SVG is refused because it can carry script. Each image is at most 3.75 MB. Files are served with
+`nosniff` and a strict content policy, and only HQ's own image URLs are ever shown as images.
+Desks can read the attachments folder but never write to it. At startup, images nothing points at
+any more are deleted once they are a day old.
+
 ## Projects
 
 Switch projects from the picker at the top of the sidebar, like Jira. It lists every project with its
@@ -250,6 +308,7 @@ raise `HQ_MAX_BUDGET_USD`. On a subscription the figure is an estimate, not a ch
 | ---- | ---- |
 | `data/projects.json` | Registry: the founder's name and every project |
 | `data/projects/<id>/db.json` | One project's team, tickets, runs, and activity |
+| `data/projects/<id>/attachments/` | Images you pasted, named by the server |
 | `workspaces/<id>/<agent>/` | One desk's `ROLE.md`, `memory.md`, `reports/` |
 | `data/archive/` | Removed projects |
 | `data/backup/` | The single-project `db.json` from before projects existed |
@@ -263,11 +322,13 @@ project with key `HQ`. Old sessions are dropped because their folders moved; `me
 npm run test:guard
 npm run test:chat
 npm run test:ui
+npm run test:attachments
 ```
 
 - **`test:guard`** checks what an agent may read and write in its workspace and the linked folder. It also checks which MCP tools run freely, need approval, or are refused.
 - **`test:chat`** checks the chat core: recipients, the loop limit, resume and settle.
-- **`test:ui`** checks the UI helpers: routes, board filter, search ranking, report link resolution, markdown previews, and avatar text contrast.
+- **`test:ui`** checks the UI helpers: routes, board filter, search ranking, report link resolution, markdown previews, image sizing, and avatar text contrast.
+- **`test:attachments`** checks image uploads: type sniffing, file names, picking ids, the startup sweep, and the image blocks sent to desks.
 
 To try the UI against a copy of your data, run the API from another folder and point Vite at it.
 The API reads `data/` and `workspaces/` from its working directory.
@@ -299,9 +360,13 @@ Everything project-specific lives under `/api/projects/:pid`.
 | PATCH  | /api/projects/:pid | `{ name?, key?, path?, access? }` |
 | DELETE | /api/projects/:pid | archives it |
 | GET    | /api/projects/:pid/state | |
-| POST   | /api/projects/:pid/instructions | `{ text }` |
-| POST   | /api/projects/:pid/items/:id/decision | `{ decision, note? }` |
-| PATCH  | /api/projects/:pid/items/:id | `{ status }` |
+| POST   | /api/projects/:pid/instructions | `{ text, attachments? }` |
+| POST   | /api/projects/:pid/items/:id/decision | `{ decision, note?, attachments? }` |
+| POST   | /api/projects/:pid/items/:id/comments | `{ text, attachments? }`; wakes the owner |
+| POST   | /api/projects/:pid/items/:id/attachments | `{ attachments }`; adds to the description |
+| POST   | /api/projects/:pid/attachments | raw image body; returns the attachment |
+| GET    | /api/projects/:pid/attachments/:file | the image |
+| PATCH  | /api/projects/:pid/items/:id | `{ status?, summary? }`; summary only while To do |
 | POST   | /api/projects/:pid/items/:id/run | live only |
 | POST   | /api/projects/:pid/runs/:id/cancel | |
 | GET    | /api/projects/:pid/agents/:id | |
@@ -312,8 +377,8 @@ Everything project-specific lives under `/api/projects/:pid`.
 | POST   | /api/projects/:pid/connections/check | no prompt, no tool calls |
 | PUT    | /api/projects/:pid/connections/:name | `{ enabled?, desks?, mode? }` |
 | GET    | /api/projects/:pid/threads/:tid | thread + messages; marks read |
-| POST   | /api/projects/:pid/threads | `{ text, title?, itemId? }` |
-| POST   | /api/projects/:pid/threads/:tid/messages | `{ text }` |
+| POST   | /api/projects/:pid/threads | `{ text, title?, itemId?, attachments? }` |
+| POST   | /api/projects/:pid/threads/:tid/messages | `{ text, attachments? }` |
 | POST   | /api/projects/:pid/threads/:tid/resume | delivers held messages |
 | POST   | /api/projects/:pid/threads/:tid/close | |
 | GET    | /api/projects/:pid/workspaces/:agent/report | `?file=<path under reports/>` |

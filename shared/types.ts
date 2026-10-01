@@ -34,6 +34,34 @@ export type ItemStatus =
   | 'sent-back'
   | 'done';
 
+/** An image you pasted. The file lives in data/projects/<project>/attachments/<file>. */
+export interface Attachment {
+  id: string;
+  /** <id>.<ext>, named by the server. */
+  file: string;
+  type: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif';
+  size: number;
+  /** Who uploaded it: 'you' or an agent id. */
+  by: string;
+  ts: string;
+}
+
+export type CommentKind = 'comment' | 'note' | 'decision';
+
+/** A comment on a ticket. Desks comment instead of rewriting the description. */
+export interface Comment {
+  id: string;
+  /** Agent id or 'you'. */
+  from: string;
+  ts: string;
+  text: string;
+  attachments?: Attachment[];
+  /** note = your Instruct / Send back note; decision = a desk asking you to decide. */
+  kind?: CommentKind;
+  /** Decision comments: the short ask, e.g. "Reply to Paul: confirm Tue kickoff". */
+  title?: string;
+}
+
 export interface WorkItem {
   id: string;
   /** Per-project ticket number. Shown as <project key>-<number>, like Jira. */
@@ -52,6 +80,9 @@ export interface WorkItem {
   threadId?: string;
   /** Desk that handed this ticket over; it hears back when the ticket is done. */
   handoffFrom?: string;
+  /** Images on the description. */
+  attachments?: Attachment[];
+  comments?: Comment[];
 }
 
 export type InstructionStatus = 'queued' | 'assigned' | 'done';
@@ -63,6 +94,7 @@ export interface Instruction {
   status: InstructionStatus;
   assignedTo?: string;
   itemId?: string;
+  attachments?: Attachment[];
 }
 
 export interface Activity {
@@ -72,7 +104,7 @@ export interface Activity {
   text: string;
 }
 
-export type RunReason = 'instruction' | 'send-back' | 'instruct' | 'approved' | 'manual' | 'message' | 'handoff';
+export type RunReason = 'instruction' | 'send-back' | 'instruct' | 'approved' | 'manual' | 'message' | 'handoff' | 'comment';
 export type RunStatus = 'queued' | 'running' | 'done' | 'failed';
 
 /** One invocation of an agent: on a ticket, or woken by a chat message. */
@@ -198,6 +230,7 @@ export interface Message {
   runId?: string;
   /** Recipients not woken because the thread paused. Resume delivers them. */
   undelivered?: string[];
+  attachments?: Attachment[];
 }
 
 /** Everything that belongs to one project: its team, its board, its history. */
@@ -298,6 +331,19 @@ export const TEMPLATE_LABEL: Record<TeamTemplate, string> = {
 };
 
 export const MAX_TEAM = 12;
+
+/** You can edit a ticket's description only before work starts. From In progress on, add a comment. */
+export function canEditDescription(status: ItemStatus): boolean {
+  return status === 'todo';
+}
+/** Longest ticket description, in markdown characters. */
+export const MAX_DESCRIPTION = 4000;
+
+/** Images per message, comment, note or ticket upload. */
+export const MAX_ATTACHMENTS = 6;
+/** Claude's per-image limit is 5 MB of base64, about 3.75 MB of file. */
+export const MAX_ATTACHMENT_BYTES = 3_750_000;
+export const ATTACHMENT_TYPES: Attachment['type'][] = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
 
 export interface ThreadResponse {
   thread: Thread;

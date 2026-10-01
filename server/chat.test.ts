@@ -3,8 +3,9 @@
  * Run: npm run test:chat. Pure state, no Claude calls, touches nothing on disk.
  */
 import assert from 'node:assert/strict';
-import type { Agent, Run, State, WorkItem } from '../shared/types';
+import type { Agent, Attachment, Run, State, WorkItem } from '../shared/types';
 import { mentionsIn } from './agents';
+import { addComment } from './comments';
 import {
   ChatError,
   closeThread,
@@ -242,6 +243,46 @@ test("settle: a ticket run by someone other than the owner cannot finish the tic
   const item = ticket(s, 'leo');
   settleAfterRun(s, { mode: 'ticket', agentId: 'sam', itemId: item.id, raised: false, finished: false, sentToThread: false, awaiting: [], askedBy: [], summary: 'x' }, noLog, L);
   assert.equal(item.status, 'in-progress');
+});
+
+const image = (id: string): Attachment => ({ id, file: `${id}.png`, type: 'image/png', size: 10, by: 'you', ts: '2026-10-01T00:00:00Z' });
+
+test('images: a founder message can be only an image, and the preview says so', () => {
+  const s = fresh();
+  const t = createThread(s, { title: 'T', createdBy: 'you' });
+  const r = postFounderMessage(s, t, '@Leo', []);
+  assert.deepEqual(r.deliver, ['leo']);
+  postFounderMessage(s, t, '', [image('att_000000000001')]);
+  const last = messagesOf(s, t.id).at(-1)!;
+  assert.equal(last.attachments?.length, 1);
+  assert.equal(t.last?.text, 'Sent an image');
+  postFounderMessage(s, t, '', [image('att_000000000002'), image('att_000000000003')]);
+  assert.equal(t.last?.text, 'Sent 2 images');
+  postFounderMessage(s, t, 'plain text', []);
+  assert.equal(messagesOf(s, t.id).at(-1)!.attachments, undefined, 'no empty attachments list is stored');
+});
+
+test('settle: answering your comment leaves the ticket alone and posts the reply as a comment', () => {
+  const s = fresh();
+  const item = ticket(s, 'leo');
+  addComment(item, { from: 'you', text: 'Why blue?' });
+  settleAfterRun(s, { mode: 'ticket', agentId: 'leo', itemId: item.id, raised: false, finished: false, sentToThread: false, awaiting: [], askedBy: [], summary: 'Brand color.', reason: 'comment' }, noLog, L);
+  assert.equal(item.status, 'in-progress', 'a reply never closes the ticket');
+  assert.equal(item.comments?.at(-1)?.from, 'leo');
+  assert.equal(item.comments?.at(-1)?.text, 'Brand color.');
+  // When the desk already commented with the tool, the summary is not posted again.
+  settleAfterRun(s, { mode: 'ticket', agentId: 'leo', itemId: item.id, raised: false, finished: false, sentToThread: false, awaiting: [], askedBy: [], summary: 'again', reason: 'comment', commented: true }, noLog, L);
+  assert.equal(item.comments?.length, 2);
+});
+
+test('comments: kinds and titles are kept, plain comments stay plain', () => {
+  const s = fresh();
+  const item = ticket(s, 'leo');
+  addComment(item, { from: 'leo', text: 'Need a call', kind: 'decision', title: 'Approve the index?' });
+  addComment(item, { from: 'you', text: 'ok', kind: 'comment' });
+  assert.equal(item.comments?.[0].kind, 'decision');
+  assert.equal(item.comments?.[0].title, 'Approve the index?');
+  assert.equal(item.comments?.[1].kind, undefined);
 });
 
 let failed = 0;

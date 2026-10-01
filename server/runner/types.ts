@@ -1,4 +1,4 @@
-import type { Agent, Message, Run, RunReason, RunnerName, Thread, WorkItem } from '../../shared/types';
+import type { Agent, Attachment, Message, Run, RunReason, RunnerName, Thread, WorkItem } from '../../shared/types';
 import type { Project } from '../store';
 
 /** Passed in by the queue so the runner can wake desks without importing it (no cycle). */
@@ -20,6 +20,8 @@ export interface RunInput {
   thread?: Thread;
   /** Message runs: every message the desk had not seen yet. */
   unread?: Message[];
+  /** Images the founder sent with what woke this desk. They go straight into the prompt. */
+  images?: Attachment[];
   hooks: RunHooks;
 }
 

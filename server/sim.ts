@@ -1,6 +1,7 @@
 import type { WorkItem } from '../shared/types';
 import { leadOf, refreshStatuses, settleInstructions } from './agents';
 import { clearWaiting, markRead, messagesOf, postAgentMessage, threadForItem } from './chat';
+import { addComment } from './comments';
 import { allProjects, now, today, uid, type Project } from './store';
 
 /**
@@ -118,8 +119,31 @@ function tickChat(p: Project): void {
   }
 }
 
+/** General answers: none of them mention images. The "(looked at your image)" suffix is added only when there are some. */
+const COMMENT_REPLIES = [
+  'Got it. I will fold that into the next pass.',
+  'Seen. That changes the order, so I am starting with your point first.',
+  'Thanks, that is clear. I will adjust the plan to match.',
+  'Understood. I will comment here again when it is ready for you.',
+];
+
+/** Your plain comments get an answer from the ticket's desk, one tick later. Instruct and Send back notes do not. */
+function tickComments(p: Project): void {
+  for (const item of p.state.items) {
+    const last = item.comments?.at(-1);
+    if (!last || last.from !== 'you' || (last.kind && last.kind !== 'comment')) continue;
+    const agent = p.state.agents.find((a) => a.id === item.assignee && !a.isHuman);
+    if (!agent || agent.status === 'off') continue;
+    const seen = last.attachments?.length ? ` (looked at your ${last.attachments.length === 1 ? 'image' : `${last.attachments.length} images`})` : '';
+    addComment(item, { from: agent.id, text: `${pick(COMMENT_REPLIES) ?? 'Noted.'}${seen}` });
+    agent.lastActive = now();
+    p.log(agent.id, `Commented on ${p.ticket(item)} "${item.title}"`);
+  }
+}
+
 function tickProject(p: Project): void {
   const s = p.state;
+  tickComments(p);
 
   // Idle desks pick up routine work so the office never goes quiet.
   for (const agent of s.agents) {

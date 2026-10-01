@@ -28,18 +28,22 @@ export function useProjectActions({ pid, state, notify, after, openTicket, openT
     [notify],
   );
 
+  /** True once the server took the decision, false when it did not go through (the flag says why), so the note box can keep its draft. */
   const decide = useCallback(
-    async (id: string, decision: Decision, note?: string) => {
-      if (!pid || !state) return;
+    async (id: string, decision: Decision, note?: string, attachments: string[] = []): Promise<boolean> => {
+      if (!pid || !state) return false;
       const item = state.items.find((i) => i.id === id);
       const owner = item ? nameOf(item.assignee) : 'the desk';
+      let ok = false;
       await guard(async () => {
-        const { run } = await api.decide(pid, id, decision, note);
+        const { run } = await api.decide(pid, id, decision, note, attachments);
+        ok = true;
         const verb =
           decision === 'approve' ? 'Approved' : decision === 'hold' ? 'On hold' : decision === 'send-back' ? `Sent back to ${owner}` : `Instruction sent to ${owner}`;
         notify(run ? `${verb}. ${owner} is on it.` : verb, { tone: decision === 'approve' ? 'success' : 'info' });
         await after();
       }, 'That did not go through');
+      return ok;
     },
     [pid, state, guard, notify, after, nameOf],
   );
@@ -69,9 +73,9 @@ export function useProjectActions({ pid, state, notify, after, openTicket, openT
 
   /** Throws so the Create dialog can keep its draft and show the error. */
   const instruct = useCallback(
-    async (text: string) => {
+    async (text: string, attachments: string[] = []) => {
       if (!pid || !state) return;
-      const { item, run } = await api.instruct(pid, text);
+      const { item, run } = await api.instruct(pid, text, attachments);
       const key = ticketKey(item, state.project.key);
       notify(`${key} routed to ${nameOf(item.assignee)}${run ? ', working now' : ''}`, {
         tone: 'success',
@@ -84,15 +88,49 @@ export function useProjectActions({ pid, state, notify, after, openTicket, openT
 
   /** Throws so the caller can keep its draft. */
   const startThread = useCallback(
-    async (text: string, itemId?: string) => {
+    async (text: string, itemId?: string, attachments: string[] = []) => {
       if (!pid) return;
-      const res = await api.startThread(pid, { text, itemId });
+      const res = await api.startThread(pid, { text, itemId, attachments });
       const names = res.woke.map(nameOf);
       openThread(res.thread.id);
       notify(names.length ? `Sent to ${names.join(', ')}` : 'Thread started', { tone: 'success' });
       await after();
     },
     [pid, notify, after, nameOf, openThread],
+  );
+
+  /** Throws so the comment box can keep its draft. */
+  const comment = useCallback(
+    async (itemId: string, text: string, attachments: string[] = []) => {
+      if (!pid) return;
+      const { item, run } = await api.comment(pid, itemId, text, attachments);
+      const owner = nameOf(item.assignee);
+      if (run) notify(`Comment sent. ${owner} will answer.`, { tone: 'success' });
+      await after();
+    },
+    [pid, notify, after, nameOf],
+  );
+
+  /** Throws so the editor keeps the draft. Only To do tickets can be edited. */
+  const editDescription = useCallback(
+    async (itemId: string, summary: string) => {
+      if (!pid) return;
+      await api.editDescription(pid, itemId, summary);
+      notify('Description saved', { tone: 'success' });
+      await after();
+    },
+    [pid, notify, after],
+  );
+
+  /** Throws so the caller can show the error. */
+  const attachToItem = useCallback(
+    async (itemId: string, attachments: string[]) => {
+      if (!pid || !attachments.length) return;
+      await api.attachToItem(pid, itemId, attachments);
+      notify(`Attached ${attachments.length} image${attachments.length === 1 ? '' : 's'}`, { tone: 'success' });
+      await after();
+    },
+    [pid, notify, after],
   );
 
   const resumeThread = useCallback(
@@ -144,7 +182,7 @@ export function useProjectActions({ pid, state, notify, after, openTicket, openT
     [pid, guard, notify, after, nameOf],
   );
 
-  return { decide, move, runItem, instruct, startThread, resumeThread, addAgent, makeLead, removeAgent, guard };
+  return { decide, move, runItem, instruct, startThread, comment, attachToItem, editDescription, resumeThread, addAgent, makeLead, removeAgent, guard };
 }
 
 export type ProjectActions = ReturnType<typeof useProjectActions>;

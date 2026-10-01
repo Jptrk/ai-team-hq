@@ -1,4 +1,4 @@
-import type { Agent, AgentStatus, ItemStatus } from '../shared/types';
+import type { Agent, AgentStatus, Comment, ItemStatus, WorkItem } from '../shared/types';
 
 export function agentById(agents: Agent[], id: string): Agent | undefined {
   return agents.find((a) => a.id === id);
@@ -13,6 +13,11 @@ export function timeAgo(iso: string): string {
   if (h < 24) return `${h}h ago`;
   const d = Math.floor(h / 24);
   return `${d}d ago`;
+}
+
+/** The latest decision a desk asked for on this ticket. Older tickets have none and use the summary. */
+export function latestDecision(item: WorkItem): Comment | undefined {
+  return [...(item.comments ?? [])].reverse().find((c) => c.kind === 'decision');
 }
 
 /** GA-12 style ticket reference. */

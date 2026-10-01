@@ -1,23 +1,36 @@
-import { Check, ChevronDown, ExternalLink, FileText, Link as LinkIcon, MessagesSquare, Play, X } from 'lucide-react';
-import { useMemo, useState } from 'react';
-import type { Decision, ItemStatus, StateResponse, WorkItem } from '../../shared/types';
+import { Check, ChevronDown, ExternalLink, FileText, Link as LinkIcon, MessagesSquare, Pencil, Play, X } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { canEditDescription, MAX_DESCRIPTION, type Decision, type ItemStatus, type StateResponse, type WorkItem } from '../../shared/types';
+import { TextEditor } from '../editor/TextEditor';
 import { usePopover } from '../hooks/usePopover';
+import { needsPlainEditor } from '../lib/markdownPaste';
 import { Markdown } from '../markdown/Markdown';
 import { ReportViewer } from '../markdown/ReportViewer';
 import { isReportUrl } from '../markdown/reportLinks';
+import { AttachmentGrid } from '../ui/attachments/AttachmentGrid';
+import { AttachButton, AttachmentTray } from '../ui/attachments/AttachmentTray';
 import { Avatar } from '../ui/Avatar';
+import { Segmented } from '../ui/Segmented';
 import { StatusLozenge } from '../ui/Lozenge';
 import { TypeIcon, TYPE_LABEL } from '../ui/TypeIcon';
-import { agentById, ITEM_STATUS_LABEL, ticketKey, timeAgo } from '../util';
+import { agentById, ITEM_STATUS_LABEL, latestDecision, ticketKey, timeAgo } from '../util';
 import { DecisionBar } from './DecisionBar';
 import { ProjectAvatar } from './ProjectAvatar';
+import { TicketComments, useDescriptionImages } from './TicketComments';
 
 interface Props {
   item: WorkItem;
   state: StateResponse;
   live: boolean;
   onClose: () => void;
-  onDecide: (id: string, decision: Decision, note?: string) => Promise<void>;
+  /** Resolves false when the decision did not go through. */
+  onDecide: (id: string, decision: Decision, note?: string, attachments?: string[]) => Promise<boolean | void>;
+  /** Throws so the comment box keeps its draft. */
+  onComment: (itemId: string, text: string, attachments: string[]) => Promise<void>;
+  /** Throws so the panel can show the error. */
+  onAttach: (itemId: string, attachments: string[]) => Promise<void>;
+  /** Throws so the editor keeps the draft. Only To do tickets. */
+  onEditDescription: (itemId: string, summary: string) => Promise<void>;
   onRun: (id: string) => Promise<void>;
   onMove: (id: string, status: ItemStatus) => Promise<void>;
   onOpenAgent: (id: string) => void;
@@ -60,7 +73,120 @@ function StatusMenu({ item, onMove }: { item: WorkItem; onMove: Props['onMove'] 
   );
 }
 
-export function TicketView({ item, state, live, onClose, onDecide, onRun, onMove, onOpenAgent, onOpenThread, onDiscuss }: Props) {
+/** The description, editable only while the ticket is in To do. */
+function Description({ item, onEdit, onComment, onFiles }: { item: WorkItem; onEdit: Props['onEditDescription']; onComment: Props['onComment']; onFiles: (files: File[]) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(item.summary);
+  const [plain, setPlain] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [locked, setLocked] = useState(false);
+  const sending = useRef(false);
+  const editable = canEditDescription(item.status);
+  const dirty = draft !== item.summary;
+
+  // Work started while you were editing: the description locks, nothing is saved, and a changed
+  // draft stays to post as a comment. Not while a save is on its way; this runs again once it ends.
+  useEffect(() => {
+    if (editing && !editable && !sending.current) {
+      setEditing(false);
+      setError(null);
+      setLocked(dirty);
+    }
+  }, [editing, editable, saving, dirty]);
+
+  const start = () => {
+    setDraft(item.summary);
+    // Images, HTML and footnotes would not survive the rich editor, so those are edited as markdown.
+    setPlain(needsPlainEditor(item.summary));
+    setError(null);
+    setLocked(false);
+    setEditing(true);
+  };
+  const tooLong = draft.length > MAX_DESCRIPTION;
+  const save = async () => {
+    if (sending.current) return;
+    // Nothing changed: close without saving the text again.
+    if (!dirty) {
+      setEditing(false);
+      return;
+    }
+    if (tooLong) return;
+    sending.current = true;
+    setSaving(true);
+    setError(null);
+    try {
+      await onEdit(item.id, draft);
+      setEditing(false);
+      setLocked(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not save the description');
+    } finally {
+      sending.current = false;
+      setSaving(false);
+    }
+  };
+  const postAsComment = async () => {
+    if (sending.current) return;
+    sending.current = true;
+    setSaving(true);
+    setError(null);
+    try {
+      await onComment(item.id, draft, []);
+      setLocked(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not post the comment');
+    } finally {
+      sending.current = false;
+      setSaving(false);
+    }
+  };
+
+  if (editing) {
+    return (
+      <div className="description-edit">
+        {plain && <p className="field-hint">This description has images or HTML, so it is edited as plain markdown.</p>}
+        <TextEditor autoFocus toolbar plain={plain} minHeight={140} value={draft} label="Description" placeholder="What needs doing, and what done looks like" onChange={setDraft} onSubmit={() => void save()} onFiles={onFiles} />
+        <div className="form-actions">
+          <button type="button" className="btn btn-primary btn-sm" disabled={saving || tooLong || !dirty} onClick={() => void save()}>
+            {saving ? 'Saving...' : 'Save'}
+          </button>
+          <button type="button" className="btn btn-ghost btn-sm" disabled={saving} onClick={() => setEditing(false)}>
+            Cancel
+          </button>
+          <span className={`field-hint${error || tooLong ? ' bad' : ''}`}>{error ?? (tooLong ? `Too long: ${draft.length} of ${MAX_DESCRIPTION} characters.` : 'Ctrl+Enter to save. Locks once the ticket is in progress.')}</span>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <>
+      {item.summary.trim() ? <Markdown source={item.summary} breaks /> : !item.attachments?.length && <p className="muted">No description.</p>}
+      {editable && (
+        <button type="button" className="btn btn-ghost btn-sm description-edit-btn" onClick={start}>
+          <Pencil size={13} aria-hidden /> Edit description
+        </button>
+      )}
+      {locked && (
+        <div>
+          <p className="field-hint">Work started on this ticket, so the description is locked and your edit was not saved. Add a comment instead.</p>
+          <pre className="report-raw">{draft}</pre>
+          <div className="form-actions">
+            <button type="button" className="btn btn-primary btn-sm" disabled={saving || !draft.trim()} onClick={() => void postAsComment()}>
+              {saving ? 'Posting...' : 'Post as comment'}
+            </button>
+            <button type="button" className="btn btn-ghost btn-sm" disabled={saving} onClick={() => setLocked(false)}>
+              Discard
+            </button>
+            {error && <span className="field-hint bad">{error}</span>}
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+export function TicketView({ item, state, live, onClose, onDecide, onComment, onAttach, onEditDescription, onRun, onMove, onOpenAgent, onOpenThread, onDiscuss }: Props) {
   const key = ticketKey(item, state.project.key);
   const agents = state.agents;
   const assignee = agentById(agents, item.assignee);
@@ -72,6 +198,11 @@ export function TicketView({ item, state, live, onClose, onDecide, onRun, onMove
   const [active, setActive] = useState<string | null>(reports[0]?.url ?? null);
   const activeReport = active && reports.some((r) => r.url === active) ? active : (reports[0]?.url ?? null);
   const [copied, setCopied] = useState(false);
+  const [tab, setTab] = useState<'comments' | 'history'>('comments');
+  const pid = state.project.id;
+  const desc = useDescriptionImages(pid, item.id, onAttach);
+  const ask = latestDecision(item);
+  const commentCount = item.comments?.length ?? 0;
 
   const copyLink = async () => {
     try {
@@ -149,13 +280,25 @@ export function TicketView({ item, state, live, onClose, onDecide, onRun, onMove
             {decidable && (
               <section className="callout" aria-label="Your decision">
                 <h3 className="callout-title">{item.status === 'held' ? 'On hold. Decide when ready' : 'Needs your decision'}</h3>
+                {ask && (
+                  <div className="callout-ask">
+                    {ask.title && <p className="comment-title">{ask.title}</p>}
+                    <Markdown source={ask.text} variant="compact" breaks />
+                  </div>
+                )}
                 <DecisionBar item={item} ownerName={assignee?.name ?? 'the desk'} onDecide={onDecide} />
               </section>
             )}
 
-            <section className="ticket-section">
-              <h3 className="section-label">Description</h3>
-              {item.summary.trim() ? <Markdown source={item.summary} breaks /> : <p className="muted">No description.</p>}
+            <section className="ticket-section" {...desc.att.dropZone}>
+              <div className="section-head">
+                <h3 className="section-label">Description</h3>
+                <AttachButton att={desc.att} label="Attach images to the description" />
+              </div>
+              <Description item={item} onEdit={onEditDescription} onComment={onComment} onFiles={desc.att.add} />
+              <AttachmentGrid pid={pid} attachments={item.attachments} from={from?.name ?? (item.from === 'you' ? 'you' : undefined)} />
+              <AttachmentTray att={desc.att} />
+              {desc.error && <p className="field-hint bad">{desc.error}</p>}
             </section>
 
             {item.links.length > 0 && (
@@ -182,9 +325,23 @@ export function TicketView({ item, state, live, onClose, onDecide, onRun, onMove
               </section>
             )}
 
-            {item.history.length > 0 && (
-              <section className="ticket-section">
+            <section className="ticket-section">
+              <div className="section-head">
                 <h3 className="section-label">Activity</h3>
+                <Segmented
+                  as="tabs"
+                  label="Activity"
+                  value={tab}
+                  onChange={setTab}
+                  options={[
+                    { value: 'comments', label: commentCount ? `Comments ${commentCount}` : 'Comments' },
+                    { value: 'history', label: 'History' },
+                  ]}
+                />
+              </div>
+              {tab === 'comments' ? (
+                <TicketComments pid={pid} item={item} agents={agents} onComment={onComment} />
+              ) : item.history.length ? (
                 <ul className="timeline">
                   {[...item.history].reverse().map((h, i) => (
                     <li key={i}>
@@ -193,8 +350,10 @@ export function TicketView({ item, state, live, onClose, onDecide, onRun, onMove
                     </li>
                   ))}
                 </ul>
-              </section>
-            )}
+              ) : (
+                <p className="muted small">Nothing yet.</p>
+              )}
+            </section>
           </div>
 
           <aside className="ticket-details" aria-label="Details">

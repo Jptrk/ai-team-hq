@@ -1,0 +1,94 @@
+@layer views {
+  /* ---------- rich text box: looks like an input, formats like a message ---------- */
+  .md-editor {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    border: 1px solid var(--border-input);
+    border-radius: var(--radius-md);
+    background: var(--surface-input);
+    transition: border-color var(--ease);
+  }
+  .md-editor:hover {
+    border-color: var(--text-subtle);
+  }
+  .md-editor:focus-within {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: -1px;
+    border-color: transparent;
+  }
+  .md-editor.disabled {
+    opacity: 0.6;
+  }
+  .md-editor-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px;
+    padding: 3px 4px;
+    border-bottom: 1px solid var(--border);
+  }
+  .md-editor-toolbar .icon-btn.on {
+    background: var(--surface-selected);
+    color: var(--text);
+  }
+  .md-editor .md-editor-content {
+    min-height: var(--md-editor-min, 64px);
+    max-height: 50dvh;
+    overflow-y: auto;
+    padding: 7px 10px;
+    outline: none;
+    font-size: var(--fs-md);
+    line-height: 1.5;
+    color: var(--text);
+    cursor: text;
+  }
+  .md-editor .md-editor-content p.is-editor-empty:first-child::before {
+    content: attr(data-placeholder);
+    float: left;
+    height: 0;
+    color: var(--text-subtlest);
+    pointer-events: none;
+  }
+  .md-editor .md-editor-content .selectedCell {
+    background: var(--selection);
+  }
+  .md-editor .md-editor-content ul[data-type='taskList'] {
+    list-style: none;
+    padding-left: 4px;
+  }
+  .md-editor .md-editor-content li[data-type='taskItem'] {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+  }
+  .md-editor .md-editor-content li[data-type='taskItem'] > label {
+    flex: none;
+    padding-top: 1px;
+  }
+  .md-editor .md-editor-content li[data-type='taskItem'] > div {
+    flex: 1;
+    min-width: 0;
+  }
+  .md-editor .md-editor-content li[data-type='taskItem'] input {
+    accent-color: var(--success-bold);
+  }
+  /* The plain box shown for a moment while the editor loads. */
+  .md-editor-fallback {
+    width: 100%;
+    resize: vertical;
+  }
+
+  /* ---------- editing a ticket's description ---------- */
+  .description-edit {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .description-edit .form-actions .field-hint {
+    flex: 1;
+    min-width: 200px;
+  }
+  .description-edit-btn {
+    align-self: flex-start;
+  }
+}

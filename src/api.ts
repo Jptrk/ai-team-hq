@@ -1,5 +1,7 @@
 import type {
   Agent,
+  Attachment,
+  Comment,
   ConnectionMode,
   ConnectionsResponse,
   Decision,
@@ -56,11 +58,24 @@ export const api = {
     request<PathCheck>(`/api/fs/check?path=${encodeURIComponent(path)}${except ? `&except=${encodeURIComponent(except)}` : ''}`),
 
   state: (pid: string) => request<StateResponse>(`${pp(pid)}/state`),
-  instruct: (pid: string, text: string) =>
-    request<{ instruction: Instruction; item: WorkItem; run: Run | null }>(`${pp(pid)}/instructions`, json('POST', { text })),
-  decide: (pid: string, id: string, decision: Decision, note?: string) =>
-    request<{ item: WorkItem; run: Run | null }>(`${pp(pid)}/items/${id}/decision`, json('POST', { decision, note })),
+  instruct: (pid: string, text: string, attachments: string[] = []) =>
+    request<{ instruction: Instruction; item: WorkItem; run: Run | null }>(`${pp(pid)}/instructions`, json('POST', { text, attachments })),
+  decide: (pid: string, id: string, decision: Decision, note?: string, attachments: string[] = []) =>
+    request<{ item: WorkItem; run: Run | null }>(`${pp(pid)}/items/${id}/decision`, json('POST', { decision, note, attachments })),
+  comment: (pid: string, id: string, text: string, attachments: string[] = []) =>
+    request<{ item: WorkItem; comment: Comment; run: Run | null }>(`${pp(pid)}/items/${id}/comments`, json('POST', { text, attachments })),
+  attachToItem: (pid: string, id: string, attachments: string[]) => request<WorkItem>(`${pp(pid)}/items/${id}/attachments`, json('POST', { attachments })),
+  /** One image as the raw body. The server checks the bytes, not this header. */
+  uploadAttachment: async (pid: string, blob: Blob): Promise<Attachment> => {
+    const res = await fetch(`${pp(pid)}/attachments`, { method: 'POST', headers: { 'Content-Type': blob.type || 'application/octet-stream' }, body: blob });
+    if (!res.ok) {
+      const body = (await res.json().catch(() => ({}))) as { error?: string };
+      throw new Error(body.error ?? 'Upload failed');
+    }
+    return (await res.json()) as Attachment;
+  },
   move: (pid: string, id: string, status: ItemStatus) => request<WorkItem>(`${pp(pid)}/items/${id}`, json('PATCH', { status })),
+  editDescription: (pid: string, id: string, summary: string) => request<WorkItem>(`${pp(pid)}/items/${id}`, json('PATCH', { summary })),
   run: (pid: string, id: string) => request<Run>(`${pp(pid)}/items/${id}/run`, json('POST')),
   cancelRun: (pid: string, id: string) => request<{ ok: true }>(`${pp(pid)}/runs/${id}/cancel`, json('POST')),
   addAgent: (pid: string, body: AgentBody) => request<Agent>(`${pp(pid)}/agents`, json('POST', body)),
@@ -74,10 +89,10 @@ export const api = {
     request<ConnectionsResponse>(`${pp(pid)}/connections/${encodeURIComponent(name)}`, json('PUT', body)),
 
   thread: (pid: string, tid: string) => request<ThreadResponse>(`${pp(pid)}/threads/${tid}`),
-  startThread: (pid: string, body: { text: string; title?: string; itemId?: string }) =>
+  startThread: (pid: string, body: { text: string; title?: string; itemId?: string; attachments?: string[] }) =>
     request<ThreadResponse & { woke: string[] }>(`${pp(pid)}/threads`, json('POST', body)),
-  postMessage: (pid: string, tid: string, text: string) =>
-    request<ThreadResponse & { woke: string[] }>(`${pp(pid)}/threads/${tid}/messages`, json('POST', { text })),
+  postMessage: (pid: string, tid: string, text: string, attachments: string[] = []) =>
+    request<ThreadResponse & { woke: string[] }>(`${pp(pid)}/threads/${tid}/messages`, json('POST', { text, attachments })),
   resumeThread: (pid: string, tid: string) => request<ThreadResponse & { woke: string[] }>(`${pp(pid)}/threads/${tid}/resume`, json('POST')),
   closeThread: (pid: string, tid: string) => request<ThreadResponse>(`${pp(pid)}/threads/${tid}/close`, json('POST')),
 
