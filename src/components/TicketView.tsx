@@ -1,6 +1,6 @@
 import { Check, ChevronDown, Link as LinkIcon, MessagesSquare, Pencil, Play, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import { canEditDescription, MAX_DESCRIPTION, type Decision, type ItemStatus, type StateResponse, type WorkItem } from '../../shared/types';
+import { canEditDescription, hasQa, MAX_DESCRIPTION, type Decision, type ItemStatus, type StateResponse, type WorkItem } from '../../shared/types';
 import { TextEditor } from '../editor/TextEditor';
 import { usePopover } from '../hooks/usePopover';
 import { needsPlainEditor } from '../lib/markdownPaste';
@@ -12,7 +12,7 @@ import { Avatar } from '../ui/Avatar';
 import { Segmented } from '../ui/Segmented';
 import { StatusLozenge } from '../ui/Lozenge';
 import { TypeIcon, TYPE_LABEL } from '../ui/TypeIcon';
-import { agentById, ITEM_STATUS_LABEL, latestDecision, ticketKey, timeAgo } from '../util';
+import { agentById, doneSummary, ITEM_STATUS_LABEL, latestDecision, signoffVerdict, ticketKey, timeAgo } from '../util';
 import { DecisionBar } from './DecisionBar';
 import { ProjectAvatar } from './ProjectAvatar';
 import { ReportList } from './ReportList';
@@ -24,9 +24,9 @@ interface Props {
   live: boolean;
   onClose: () => void;
   /** Resolves false when the decision did not go through. */
-  onDecide: (id: string, decision: Decision, note?: string, attachments?: string[]) => Promise<boolean | void>;
+  onDecide: (id: string, decision: Decision, note?: string, attachments?: string[], includeNotes?: boolean) => Promise<boolean | void>;
   /** Throws so the comment box keeps its draft. */
-  onComment: (itemId: string, text: string, attachments: string[]) => Promise<void>;
+  onComment: (itemId: string, text: string, attachments: string[], includeNotes?: boolean) => Promise<void>;
   /** Throws so the panel can show the error. */
   onAttach: (itemId: string, attachments: string[]) => Promise<void>;
   /** Throws so the editor keeps the draft. Only To do tickets. */
@@ -39,9 +39,15 @@ interface Props {
 }
 
 const MOVE_TO: ItemStatus[] = ['todo', 'in-progress', 'needs-you', 'held', 'done'];
+// Dev-team projects can also send a ticket to QA by hand.
+const MOVE_TO_QA: ItemStatus[] = ['todo', 'in-progress', 'qa', 'needs-you', 'held', 'done'];
+// Menu order. The current status always shows, checked, even one you do not move to by hand (sign-off, approved, sent back).
+const MENU_ORDER: ItemStatus[] = ['todo', 'in-progress', 'sent-back', 'approved', 'qa', 'signoff', 'needs-you', 'held', 'done'];
 
-function StatusMenu({ item, onMove }: { item: WorkItem; onMove: Props['onMove'] }) {
+function StatusMenu({ item, onMove, qa }: { item: WorkItem; onMove: Props['onMove']; qa: boolean }) {
   const pop = usePopover<HTMLDivElement>();
+  const moves = qa ? MOVE_TO_QA : MOVE_TO;
+  const rows = MENU_ORDER.filter((s) => moves.includes(s) || s === item.status);
   return (
     <div className="popover-anchor" ref={pop.ref}>
       <button type="button" className="status-btn" aria-haspopup="menu" aria-expanded={pop.open} onClick={() => pop.setOpen((o) => !o)} title="Change status">
@@ -51,7 +57,7 @@ function StatusMenu({ item, onMove }: { item: WorkItem; onMove: Props['onMove'] 
       {pop.open && (
         <div className="popover menu" role="menu" aria-label="Move to">
           <p className="menu-label">Move to</p>
-          {MOVE_TO.map((s) => (
+          {rows.map((s) => (
             <button
               key={s}
               type="button"
@@ -193,8 +199,16 @@ export function TicketView({ item, state, live, onClose, onDecide, onComment, on
   const assignee = agentById(agents, item.assignee);
   const from = agentById(agents, item.from);
   const thread = item.threadId ? state.threads.find((t) => t.id === item.threadId) : undefined;
-  const decidable = item.status === 'needs-you' || item.status === 'held';
-  const runnable = live && assignee && !assignee.isHuman && !assignee.running && ['todo', 'in-progress', 'sent-back', 'approved'].includes(item.status);
+  const decidable = item.status === 'needs-you' || item.status === 'held' || item.status === 'signoff';
+  const qaProject = hasQa(state.project.template) || item.status === 'qa' || item.status === 'signoff';
+  // In QA, the QA desk is the one to put on it; otherwise the owner.
+  const qaDesk = agents.find((a) => a.qa && !a.isHuman);
+  const worker = item.status === 'qa' ? qaDesk : assignee;
+  const runnable = live && worker && !worker.isHuman && !worker.running && ['todo', 'in-progress', 'sent-back', 'approved', 'qa'].includes(item.status);
+  const checker = item.qa?.by ? agentById(agents, item.qa.by) : undefined;
+  // Waiting for your sign-off: QA's pass from this round, or, when QA did not check it, what the owner said it finished.
+  const verdict = signoffVerdict(item);
+  const finished = item.status === 'signoff' && !verdict ? doneSummary(item) : undefined;
   const [copied, setCopied] = useState(false);
   const [tab, setTab] = useState<'comments' | 'history'>('comments');
   const pid = state.project.id;
@@ -254,11 +268,11 @@ export function TicketView({ item, state, live, onClose, onDecide, onComment, on
         </h2>
 
         <div className="ticket-actions">
-          <StatusMenu item={item} onMove={onMove} />
-          {assignee?.running && <span className="running-note">{assignee.name} is working on it</span>}
+          <StatusMenu item={item} onMove={onMove} qa={qaProject} />
+          {worker?.running && <span className="running-note">{worker.name} is {item.status === 'qa' ? 'checking it' : 'working on it'}</span>}
           {runnable && (
             <button type="button" className="btn btn-outline btn-sm" onClick={() => void onRun(item.id)}>
-              <Play size={13} aria-hidden /> Put {assignee!.name} on it
+              <Play size={13} aria-hidden /> Put {worker!.name} on it
             </button>
           )}
           {thread ? (
@@ -277,8 +291,29 @@ export function TicketView({ item, state, live, onClose, onDecide, onComment, on
           <div className="ticket-main">
             {decidable && (
               <section className="callout" aria-label="Your decision">
-                <h3 className="callout-title">{item.status === 'held' ? 'On hold. Decide when ready' : 'Needs your decision'}</h3>
-                {ask && (
+                <h3 className="callout-title">
+                  {item.status === 'signoff'
+                    ? verdict
+                      ? `Passed QA${checker ? ` (${checker.name})` : ''}. Sign it off`
+                      : 'Finished. Check it and sign it off'
+                    : item.status === 'held'
+                      ? 'On hold. Decide when ready'
+                      : item.qa?.escalated
+                        ? 'Failed QA too often. Your call'
+                        : 'Needs your decision'}
+                </h3>
+                {verdict?.text && (
+                  <div className="callout-ask">
+                    <Markdown source={verdict.text} variant="compact" breaks />
+                  </div>
+                )}
+                {/* Without a Done summary, the description below says what it was for. */}
+                {finished && (
+                  <div className="callout-ask">
+                    <p>{finished}</p>
+                  </div>
+                )}
+                {item.status !== 'signoff' && ask && (
                   <div className="callout-ask">
                     {ask.title && <p className="comment-title">{ask.title}</p>}
                     <Markdown source={ask.text} variant="compact" breaks />
@@ -300,6 +335,21 @@ export function TicketView({ item, state, live, onClose, onDecide, onComment, on
             </section>
 
             <ReportList pid={pid} item={item} agents={agents} />
+
+            {item.changedFiles && item.changedFiles.length > 0 && (
+              <section className="ticket-section">
+                <h3 className="section-label">
+                  Files changed <span className="muted">({item.changedFiles.length})</span>
+                </h3>
+                <ul className="changed-files">
+                  {[...item.changedFiles].reverse().map((f) => (
+                    <li key={f} className="mono small">
+                      {f}
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
 
             <section className="ticket-section">
               <div className="section-head">
@@ -341,6 +391,24 @@ export function TicketView({ item, state, live, onClose, onDecide, onComment, on
               <dd>{person(item.from, item.from === 'you' ? 'You' : item.from)}</dd>
               <dt>Status</dt>
               <dd>{ITEM_STATUS_LABEL[item.status]}</dd>
+              {qaProject && (
+                <>
+                  <dt>QA</dt>
+                  <dd>
+                    {item.status === 'qa' && checker ? (
+                      <>Checking: {person(checker.id, checker.name)}</>
+                    ) : item.qa?.result ? (
+                      `${item.qa.result === 'pass' ? 'Passed' : 'Failed'}${checker ? ` (${checker.name})` : ''}${item.qa.fails ? `, failed ${item.qa.fails} time${item.qa.fails === 1 ? '' : 's'}` : ''}`
+                    ) : item.status === 'signoff' ? (
+                      'Not checked by QA this time. You sign it off'
+                    ) : qaDesk ? (
+                      `Not checked yet. ${qaDesk.name} checks it when it is finished`
+                    ) : (
+                      'No QA desk. You sign it off'
+                    )}
+                  </dd>
+                </>
+              )}
               <dt>Type</dt>
               <dd className="with-icon">
                 <TypeIcon kind={item.kind} /> {TYPE_LABEL[item.kind]}

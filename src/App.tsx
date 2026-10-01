@@ -4,12 +4,16 @@ import { Board } from './components/Board';
 import { ThreadList } from './components/Chat';
 import { ChatThread } from './components/ChatThread';
 import { ConnectionsPanel } from './components/ConnectionsPanel';
+import { HuddleList } from './components/huddles/HuddleList';
+import { HuddleSetup } from './components/huddles/HuddleSetup';
+import { HuddleView } from './components/huddles/HuddleView';
 import { NeedsYou } from './components/NeedsYou';
 import { Office } from './components/Office';
 import { ProjectAvatar } from './components/ProjectAvatar';
 import { ProjectForm } from './components/ProjectForm';
 import { ProjectsPage } from './components/ProjectsPage';
 import { Team } from './components/Team';
+import { TeamNotes } from './components/TeamNotes';
 import { TicketView } from './components/TicketView';
 import { useFlags } from './hooks/useFlags';
 import { useHotkeys } from './hooks/useHotkeys';
@@ -18,7 +22,9 @@ import { useLayer } from './hooks/useLayer';
 import { useMediaQuery } from './hooks/useMediaQuery';
 import { useProjectActions } from './hooks/useProjectActions';
 import { useTheme } from './hooks/useTheme';
-import { ProjectIdContext } from './lib/projectContext';
+import { roughTokens } from '../shared/huddle';
+import { hasQa } from '../shared/types';
+import { ProjectIdContext, TeamNotesContext, type TeamNotesInfo } from './lib/projectContext';
 import { KEYS, storage } from './lib/storage';
 import { projectPath, useHashRoute, type ViewId } from './route';
 import { CreateModal, type CreateKind } from './shell/CreateModal';
@@ -31,7 +37,7 @@ import { TopBar } from './shell/TopBar';
 import type { SearchHandle } from './shell/TopBarSearch';
 import { agentById, ticketKey } from './util';
 
-const VIEW_TITLE: Record<ViewId, string> = { 'needs-you': 'Needs you', chat: 'Chat', board: 'Board', team: 'Team', office: 'Office' };
+const VIEW_TITLE: Record<ViewId, string> = { 'needs-you': 'Needs you', chat: 'Chat', board: 'Board', huddles: 'Huddles', team: 'Team', office: 'Office', notes: 'Team notes' };
 
 export function App() {
   const [route, navigate] = useHashRoute();
@@ -81,6 +87,7 @@ export function App() {
   const current = useMemo(() => (pid && projects ? projects.find((p) => p.id === pid) : undefined), [pid, projects]);
   const view: ViewId = route.kind === 'project' ? route.view : 'needs-you';
   const threadId = route.kind === 'project' ? route.threadId : undefined;
+  const huddleId = route.kind === 'project' ? route.huddleId : undefined;
   const panelTicket = route.kind === 'project' ? route.ticket : undefined;
   const panelAgent = route.kind === 'project' ? route.agent : undefined;
 
@@ -98,14 +105,14 @@ export function App() {
     (subject: { ticket?: string; agent?: string }) => {
       if (!pid) return;
       const onProject = route.kind === 'project';
-      const path = projectPath(pid, onProject ? view : 'board', { threadId: onProject ? threadId : undefined, ...subject });
+      const path = projectPath(pid, onProject ? view : 'board', { threadId: onProject ? threadId : undefined, huddleId: onProject ? huddleId : undefined, ...subject });
       const replacing = Boolean(panelTicket || panelAgent);
       // Switching to another ticket or person drops what you typed in this one.
       if (replacing && (subject.ticket !== panelTicket || subject.agent !== panelAgent) && keepDrafts()) return;
       if (!replacing) pushedPanel.current = true;
       navigate(path, replacing);
     },
-    [pid, route.kind, view, threadId, panelTicket, panelAgent, navigate, keepDrafts],
+    [pid, route.kind, view, threadId, huddleId, panelTicket, panelAgent, navigate, keepDrafts],
   );
   const openTicket = useCallback((key: string) => openPanel({ ticket: key }), [openPanel]);
   const openAgent = useCallback((id: string) => openPanel({ agent: id }), [openPanel]);
@@ -115,12 +122,20 @@ export function App() {
     if (pushedPanel.current) {
       pushedPanel.current = false;
       window.history.back();
-    } else navigate(projectPath(pid, view, { threadId }), true);
+    } else navigate(projectPath(pid, view, { threadId, huddleId }), true);
     return true;
-  }, [pid, view, threadId, navigate, keepDrafts]);
+  }, [pid, view, threadId, huddleId, navigate, keepDrafts]);
   const openThread = useCallback((id: string) => pid && navigate(projectPath(pid, 'chat', { threadId: id })), [pid, navigate]);
+  const openHuddle = useCallback((id: string) => pid && navigate(projectPath(pid, 'huddles', { huddleId: id })), [pid, navigate]);
 
-  const actions = useProjectActions({ pid, state, notify, after, openTicket, openThread });
+  const actions = useProjectActions({ pid, state, notify, after, openTicket, openThread, openHuddle });
+  const [huddleSetupOpen, setHuddleSetupOpen] = useState(false);
+
+  // The "Include team notes" boxes: hidden when there are no notes.
+  const teamNotes = useMemo<TeamNotesInfo | null>(
+    () => (state?.teamNotes.trim() ? { tokens: roughTokens(state.teamNotes), always: state.notesEveryRun } : null),
+    [state?.teamNotes, state?.notesEveryRun],
+  );
 
   // ---------- create dialog ----------
   const [createOpen, setCreateOpen] = useState(false);
@@ -145,10 +160,12 @@ export function App() {
 
   // ---------- counts ----------
   const counts = useMemo(() => {
-    if (!state) return { needsYou: 0, paused: 0, unread: 0 };
+    if (!state) return { needsYou: 0, paused: 0, unread: 0, huddling: false };
     const paused = state.threads.filter((t) => t.status === 'paused').length;
+    const proposals = state.huddles.reduce((n, h) => n + h.proposals.filter((x) => x.status === 'pending').length, 0);
     return {
-      needsYou: state.items.filter((i) => i.status === 'needs-you').length + paused,
+      huddling: state.huddles.some((h) => h.status === 'running'),
+      needsYou: state.items.filter((i) => i.status === 'needs-you' || i.status === 'signoff').length + paused + proposals,
       paused,
       unread: state.threads.filter((t) => t.status !== 'closed' && t.count > t.youSeen).length,
     };
@@ -247,6 +264,9 @@ export function App() {
               agents={state.agents}
               projectKey={key}
               paused={state.threads.filter((t) => t.status === 'paused')}
+              huddles={state.huddles}
+              onDecideProposal={actions.decideProposal}
+              onOpenHuddle={openHuddle}
               onOpen={openTicket}
               onDecide={actions.decide}
               onOpenAgent={openAgent}
@@ -270,14 +290,70 @@ export function App() {
               onMove={actions.move}
               onDragActive={setPollPaused}
               flash={(t) => notify(t)}
+              showQa={hasQa(state.project.template)}
             />
+          </div>
+        );
+      } else if (view === 'huddles') {
+        const summary = huddleId ? state.huddles.find((h) => h.id === huddleId) : undefined;
+        const start = (
+          <button type="button" className="btn btn-primary" onClick={() => setHuddleSetupOpen(true)}>
+            Start huddle
+          </button>
+        );
+        body = (
+          <div className="page">
+            {header(huddleId ? undefined : start)}
+            {summary ? (
+              <HuddleView
+                key={summary.id}
+                pid={current.id}
+                summary={summary}
+                agents={state.agents}
+                items={state.items}
+                projectKey={key}
+                notesEveryRun={state.notesEveryRun}
+                onBack={() => navigate(projectPath(current.id, 'huddles'))}
+                onOpenTicket={openTicket}
+                onStop={actions.stopHuddle}
+                onResume={actions.resumeHuddle}
+                onSteer={actions.steerHuddle}
+                onDecide={actions.decideProposal}
+              />
+            ) : huddleId ? (
+              <div className="empty">
+                <p className="empty-title">Huddle not found</p>
+                <p>It is not on this project any more.</p>
+                <button type="button" className="btn btn-outline" onClick={() => navigate(projectPath(current.id, 'huddles'))}>
+                  All huddles
+                </button>
+              </div>
+            ) : (
+              <HuddleList huddles={state.huddles} agents={state.agents} onOpen={openHuddle} onStart={() => setHuddleSetupOpen(true)} />
+            )}
+            <HuddleSetup
+              open={huddleSetupOpen}
+              agents={state.agents}
+              live={live}
+              startedToday={state.huddleDay.day === new Date().toISOString().slice(0, 10) ? state.huddleDay.started : 0}
+              limit={state.huddleLimit}
+              onClose={() => setHuddleSetupOpen(false)}
+              onStart={actions.startHuddle}
+            />
+          </div>
+        );
+      } else if (view === 'notes') {
+        body = (
+          <div className="page">
+            {header()}
+            <TeamNotes teamNotes={state.teamNotes} notesEveryRun={state.notesEveryRun} onSave={actions.saveTeamNotes} />
           </div>
         );
       } else if (view === 'team') {
         body = (
           <div className="page">
             {header()}
-            <Team agents={state.agents} items={state.items} onSelect={openAgent} onAdd={actions.addAgent} />
+            <Team agents={state.agents} items={state.items} qa={hasQa(state.project.template)} onSelect={openAgent} onAdd={actions.addAgent} />
           </div>
         );
       } else if (view === 'office') {
@@ -391,7 +467,9 @@ export function App() {
           onClose={closePanel}
           onOpenTicket={openTicket}
           onOpenThread={openThread}
+          onOpenHuddle={openHuddle}
           onMakeLead={actions.makeLead}
+          onSetQa={actions.setQaDesk}
           onRemove={(id) => actions.removeAgent(id, closePanel)}
         />
       ) : null;
@@ -405,6 +483,7 @@ export function App() {
 
   return (
     <ProjectIdContext.Provider value={pid}>
+      <TeamNotesContext.Provider value={teamNotes}>
       <div className={`shell${inlineMode ? ` side-${inlineMode}` : ' side-none'}`}>
         <a className="skip-link" href="#main">
           Skip to content
@@ -458,6 +537,7 @@ export function App() {
         )}
         <Flags flags={flags} dismiss={dismiss} />
       </div>
+      </TeamNotesContext.Provider>
     </ProjectIdContext.Provider>
   );
 }

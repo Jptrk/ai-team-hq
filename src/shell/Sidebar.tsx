@@ -1,4 +1,4 @@
-import { Building2, FolderOpen, Inbox, MessagesSquare, Plug, Plus, Settings, SquareKanban, Users } from 'lucide-react';
+import { Building2, FolderOpen, Inbox, MessagesSquare, NotebookPen, Plug, Plus, Presentation, Settings, SquareKanban, Users } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { ProjectSummary } from '../../shared/types';
 import { ProjectSwitcher } from '../components/ProjectSwitcher';
@@ -10,7 +10,7 @@ interface Props {
   projects: ProjectSummary[];
   current?: ProjectSummary;
   route: Route;
-  counts: { needsYou: number; paused: number; unread: number };
+  counts: { needsYou: number; paused: number; unread: number; huddling: boolean };
   mode: SidebarMode;
   onNavigate: (to: string) => void;
   /** Called after a link is followed, to close the overlay sidebar. */
@@ -21,8 +21,10 @@ const NAV: { view: ViewId; label: string; Icon: typeof Inbox }[] = [
   { view: 'needs-you', label: 'Needs you', Icon: Inbox },
   { view: 'chat', label: 'Chat', Icon: MessagesSquare },
   { view: 'board', label: 'Board', Icon: SquareKanban },
+  { view: 'huddles', label: 'Huddles', Icon: Presentation },
   { view: 'team', label: 'Team', Icon: Users },
   { view: 'office', label: 'Office', Icon: Building2 },
+  { view: 'notes', label: 'Team notes', Icon: NotebookPen },
 ];
 
 function NavLink({ href, label, active, Icon, rail, trailing, onFollow }: { href: string; label: string; active: boolean; Icon: typeof Inbox; rail: boolean; trailing?: ReactNode; onFollow: () => void }) {
@@ -55,6 +57,12 @@ export function Sidebar({ projects, current, route, counts, mode, onNavigate, on
         <span className="badge amber nav-badge">
           {counts.paused}
           <span className="sr-only"> paused</span>
+        </span>
+      );
+    if (v === 'huddles' && counts.huddling)
+      return (
+        <span className="unread-dot nav-badge" title="A huddle is running">
+          <span className="sr-only">running</span>
         </span>
       );
     if (v === 'chat' && counts.unread > 0)

@@ -37,9 +37,9 @@ theme toggle and your menu. A left sidebar holds the project switcher and the vi
 
 | View | What it is |
 | ---- | ---------- |
-| Needs you | An inbox of decisions, holds and paused chat threads, with Approve / Hold / Send back / Instruct on each row |
+| Needs you | An inbox of decisions, tickets ready for sign-off, holds and paused chat threads, with Approve (or Mark done) / Hold / Send back / Instruct on each row |
 | Chat | Thread list and the open thread side by side (one pane under 900px) |
-| Board | Four columns with drag-and-drop, filters by text, assignee and "Needs me" |
+| Board | To do, In progress, Needs you and Done, plus QA on dev-team projects. Drag-and-drop, filters by text, assignee and "Needs me" |
 | Team | A card per desk; "Add teammate" is the dashed card |
 | Office | The pixel office |
 
@@ -234,12 +234,42 @@ settings. That's the same order Claude Code uses.
   calls no tool. The status is one of: connected, needs login, or failed.
 - **Turn a server on** and pick which desks may use it. Every desk is picked by default the
   first time.
-- **Mode**: *Ask before changes* (default) lets agents read freely. A tool that posts or
-  changes something is refused until you approve the ticket in Needs you, and only the run
-  after your approval may use it. *Read only* never allows changes.
+- **Mode**: pick one per server.
+  - *Ask before changes* (default): agents read freely. A tool that posts or changes something
+    is refused until you approve the ticket in Needs you, and only the run after your approval
+    may use it.
+  - *Read only*: changes are never allowed.
+  - *Auto*: agents post and change things on their own, as you. Anything that deletes or removes
+    still waits for your approval, the same way as Ask. HQ asks you to confirm before turning
+    Auto on. Turning a connection off puts it back on Ask.
+- **Changes count at once.** A run checks your saved choice on every tool call: turn a server off,
+  drop a desk, or pick a stricter mode, and a desk that is already working follows it straight
+  away. A looser mode waits for its next run.
+- **Deletes**: a tool counts as a delete when the server marks it destructive, or when its name
+  says delete, remove, destroy, drop, purge, erase, wipe, trash, revoke, unpublish, uninstall,
+  truncate, clear, rm, del, unlink, detach, disconnect, archive, discard, prune, flush, kill,
+  terminate, reset, overwrite or force (`force_push`), plural too. Run-together names count
+  (`deleteall`, `batchDelete`, `HTTPDelete`), but `undelete_note` and `get_removed_items` don't.
+  - Close, cancel, dismiss, revert, unassign and disable are changes, not deletes: they can be
+    undone. Edits that overwrite content (updating a page or a file) are changes too.
+  - On Auto, HQ also looks inside a tool's input: an action like `method: "remove"` or
+    `op: "delete"` (GitHub's `*_write` tools, batches), a key like `deleteContentRange` or
+    `force: true`, and common deletes in code or SQL (`DELETE FROM`, `DROP TABLE`, `.remove()`).
+  - Auto can't fully see inside tools that run code, scripts or batches (Figma `use_figma`, SQL
+    tools, browser tools). It catches common delete patterns only. Keep those servers on Ask if
+    that matters. What desks read through a connection (issues, pages, the web) can also steer
+    what they do.
+- **Auto changes are logged.** Each one that works goes in the activity feed, with the desk, the
+  server, the tool, what it touched (an id, number, title or link from the input) and the ticket.
+  If a run stops before a change's result comes back, the feed says it may have gone through.
+  Desks are also told to list what they changed in their reply, comment or summary.
+- **No repeats.** A run that fails after an auto change is not retried in a fresh session, since
+  the retry would do the whole task again. It stops and says which servers it changed.
+- **Huddles and QA checks stay read-only**, whatever the mode.
 - A tool counts as a read when its name reads (`get_`, `list_`, `search_`, `..._read`) and nothing
-  in the name sounds like a write. The server's own read-only hint counts, but never over a
-  write-sounding name. Unknown tools count as changes.
+  in the name sounds like a write or a delete. The server's own read-only hint counts, but never
+  over a name like that. Unknown tools count as changes. A read-named tool is trusted as a read on
+  every mode: its input is not checked.
 - Everything posts **as you**, under your own GitHub, Atlassian, or other account. There are
   no bot accounts. On your own PRs, GitHub won't let the author approve or request changes, so
   agents can only leave comments there.
@@ -251,6 +281,52 @@ settings. That's the same order Claude Code uses.
 To log in to a server that needs it, open Claude Code in the project folder and run `/mcp`.
 For a claude.ai connector, connect it in claude.ai under Settings, Connectors. Then check again.
 
+## QA (dev-team projects)
+
+On a project made from the **Dev team** template, finished work is checked before it's Done:
+
+1. **The owner finishes.** When a desk calls `report_done`, the ticket moves to the **QA** column
+   instead of Done.
+2. **The QA desk checks it.** The project's QA desk (Ivy by default) is woken. It reads the ticket,
+   the files the owner changed and the owner's reports, then records a verdict with `qa_result`.
+3. **Pass:** the ticket waits in QA as **sign-off** and shows in **Needs you** under "Ready for
+   sign-off". **Mark done** closes it. Send back, Instruct and Hold work as usual.
+4. **Fail:** the ticket goes back to the owner, tagged "QA failed", with the issues as a comment.
+   The owner is woken to fix them and finishes again, which sends it back to QA.
+5. **Too many fails:** after 2 fixes (`HQ_QA_MAX_FIXES`), the next fail comes to you in Needs you
+   instead. **Accept as is** closes it; Send back or Instruct gives the owner another round, and the
+   count starts over.
+
+- **The QA desk only reads.** In a QA check the project folder is read-only, connections are
+  read-only, and there is no shell and no web. So QA checks by reading, and says in its verdict what
+  should be run (tests, a build) to confirm. Each check starts a fresh session, so the QA desk's own
+  session is not filled with other tickets' code.
+- **Files changed.** HQ records each project file a desk changes for a ticket, once the write went
+  through (never the desk's own workspace). The QA check gets that list, and the ticket shows it
+  under "Files changed".
+- **Changed after QA.** If the owner changes project files on a ticket that is in QA or waiting for
+  your sign-off (answering a comment, say), it goes back to QA for a fresh check.
+- **Rounds.** Every trip into QA is a new round with no verdict yet. A check counts only for the
+  round it started in: if the ticket changed while QA was reading, that verdict is refused and the
+  new round gets its own check. A sign-off nobody checked this round says so, with the owner's
+  summary instead of an old verdict.
+- **Pick the QA desk** in the desk's panel (click its card in the Team tab): **Make QA desk** or
+  **Stop QA**. With no QA desk, or when the QA desk is off shift or did the work itself, a finished
+  ticket goes straight to your sign-off.
+- **Changing the QA desk.** Make another desk the QA desk, Stop QA, or remove the QA desk, and the
+  tickets waiting in QA go to the new QA desk, or to your sign-off. Your pick sticks across restarts,
+  none included; a reset starts the team again with Ivy as the QA desk.
+- **By hand.** Drag a card into QA, or pick "in QA" in a ticket's status menu, to have it checked.
+  "Put Ivy on it" on a ticket in QA runs the check again. A ticket you move to sign-off through the
+  API closes on **Mark done**, like one QA passed. A ticket that leaves sign-off any other way than
+  your Hold (a new ask from its desk, a move, the desk back on it) needs your Approve again.
+- **Cost.** Each check is one desk run, with the same caps as a ticket run.
+- Business and blank projects have no QA column and work as before.
+
+| Env | Default | What |
+| --- | ------- | ---- |
+| `HQ_QA_MAX_FIXES` | 2 | Fixes after a QA fail before the ticket comes to you instead |
+
 ## Chat (desks talking to each other)
 
 The **Chat** tab shows threads between desks, and you. Messages do real work: each message to
@@ -259,7 +335,8 @@ a desk wakes it for a live run, which spends usage.
 - **Desks message each other** with two HQ tools:
   - `send_message(to, text)` reaches up to 3 teammates, or "founder" to answer you.
   - `hand_off(to, title, brief)` gives a teammate a ticket of their own. The sender is told
-    automatically when that ticket is done.
+    automatically when that ticket is done: when its desk finishes it, when you sign it off, or
+    when you mark it done yourself.
 - **Threads.** A ticket gets one thread, created the first time someone discusses it.
   Threads you start from the Chat tab stand alone.
 - **You can post in any thread.** `@Name` pulls a desk in. With no mention, your message goes
@@ -277,8 +354,8 @@ a desk wakes it for a live run, which spends usage.
 - **Ownership.** A desk woken by a message can't finish someone else's ticket, and
   `raise_for_decision` opens a new ticket rather than taking over theirs. A ticket run that
   asked a teammate stays in progress until the reply.
-- **Trust.** Teammate messages are treated as colleague requests. They can't approve anything,
-  and MCP writes still need a run that follows your approval.
+- **Trust.** Teammate messages are treated as colleague requests. They can't approve anything.
+  On Ask, MCP writes need a run that follows your approval; on Auto, only deletes do.
 - **Message runs are cheap by design.** They're capped at 12 turns and $1 estimated. A small
   ask-and-answer came to about $0.05 to $0.08 per run.
 
@@ -290,6 +367,70 @@ a desk wakes it for a live run, which spends usage.
 | `HQ_MSG_MAX_BUDGET_USD` | 1 | Estimated-cost cap for a message run |
 
 In sim mode, desks answer with canned replies, so the tab works without spending usage.
+
+## Huddles (retro, brainstorm, planning)
+
+A huddle gets 2 to 6 desks thinking about one topic together. You start every huddle, and
+nothing it proposes happens until you approve it. Start one from the **Huddles** tab.
+
+- **Three kinds.** Each kind fills its own board:
+  - **Retro**: Went well, Did not go well, and Try next columns.
+  - **Brainstorm**: idea cards. The facilitator picks the strongest idea and says why.
+  - **Planning**: a task list. Each task has a desk to own it.
+- **Rounds.** Pick 1 to 3 rounds. In each round, every desk adds its part at the same time,
+  through the normal desk queue. Then the facilitator sums up the round. Desks in later rounds
+  react to the summary.
+- **The facilitator** is the project lead when the lead is in the huddle. Otherwise it's the
+  first desk you picked.
+- **The cost shows before you start.** The setup form shows how many desk runs the huddle will
+  take: desks × rounds, plus one summary per round. Each turn is a short run, capped like a
+  message run (12 turns, $1 estimated). A turn starts a fresh session, so it never mixes into
+  the desk's ticket session.
+- **Talk, not work.** During a huddle, desks can only read: their workspace, the project folder
+  and read-only connection tools. They can't write files, use the web, or change anything
+  through a connection. Each turn has a single HQ tool: `huddle_contribute`, or
+  `huddle_summarize` for the facilitator.
+- **Only you give instructions.** Each turn sees what teammates said quoted under their names,
+  as colleague input. Only your steer notes speak for you.
+- **Proposals wait for you** on the huddle page and in **Needs you**. The last summary can
+  propose two things:
+  - **Tickets.** They land in **To do**, owned by the desk named. You start them yourself.
+  - **Team notes.** They're added to the notes as one plain line of up to 300 characters, with
+    no headings or sections. You see the whole line before you approve it.
+- **Steer, stop, resume.** Your note in the steer box reaches the desks on their next turn,
+  and it wakes nobody. **Stop** cancels the desks mid-turn. **Resume** runs only the turns
+  still owed: desks that haven't added anything this round, including ones whose run failed
+  or was stopped. A summary that already landed doesn't run again. A desk that left the team
+  drops out, and if it was the facilitator, the lead (or the first desk left) takes over.
+  After a server restart, a running huddle comes back stopped, ready to resume.
+- **Limits.** Only one huddle runs at a time per project, and a project can start a set number
+  of huddles each day (see the table below). HQ keeps the 30 newest huddles, plus older ones
+  with proposals still waiting, up to 50 in all.
+- **Sim mode** answers with canned turns, so you can try it without spending usage.
+
+## Team notes
+
+**Team notes** is a short markdown page of what the team has learned, up to 8,000 characters.
+Retro lessons you approve are added to it, and you can edit it yourself.
+
+The notes cost tokens on every run that reads them, so desks only see them when you ask. Each of
+these has an **Include team notes** box, off by default:
+
+- a new instruction
+- a ticket comment
+- an Instruct or Send back note
+- a new huddle
+
+The box shows about how many tokens the notes add. To send the notes with every desk run, chat
+replies included, turn on **Include in every desk run** on the Team notes page.
+
+If a huddle note gets approved while you're editing the notes, the editor warns you and Save is
+refused, so the new note isn't lost. Copy your text, press **Cancel**, and edit again.
+
+| Env | Default | What |
+| --- | ------- | ---- |
+| `HQ_HUDDLES_PER_DAY` | 5 | Huddles a project can start per day. `0` turns huddles off |
+| `HQ_SIM_HUDDLE_MS` | 900 | Sim mode: about how long a canned huddle turn takes |
 
 ## Go live
 
@@ -323,8 +464,9 @@ What happens on an instruction:
 4. The agent either finishes (`report_done`) or hands you a decision (`raise_for_decision`).
 5. Approve / Send back / Instruct each start a follow-up run with your note. Hold does nothing.
 
-Nothing leaves the building. Agents cannot email, post, or call external systems. They draft,
-save to `reports/`, and ask.
+Without connections, nothing leaves the building. Agents cannot email, post, or call external
+systems. They draft, save to `reports/`, and ask. A connection lets them act only as far as its
+mode allows (see Connections).
 
 Edit `workspaces/<project>/<agent>/ROLE.md` to change how a desk behaves. It is read on every run.
 
@@ -357,11 +499,22 @@ npm run test:guard
 npm run test:chat
 npm run test:ui
 npm run test:attachments
+npm run test:huddles
+npm run test:qa
 ```
 
 - **`test:guard`** checks what an agent may read and write in its workspace and the linked folder. It also checks which MCP tools run freely, need approval, or are refused.
 - **`test:chat`** checks the chat core: recipients, the loop limit, resume and settle.
 - **`test:ui`** checks the UI helpers: routes, board filter, search ranking, report link resolution, markdown previews, image sizing, and avatar text contrast.
+- **`test:huddles`** checks huddles and team notes:
+  - what it takes to start one, the daily limit, and who facilitates
+  - what desks add, and the facilitator's summary and proposals
+  - approving a proposal into a ticket or a note, and notes kept to one plain line
+  - the round engine: turns that skip their tool, failed turns, stop and resume (also a quick
+    resume mid-turn, a removed facilitator, and a summary that landed before the stop)
+  - a restart mid-huddle, and the guard and prompt that keep huddle turns read-only
+  - saving the team notes after they changed mid-edit, and the daily limit setting
+- **`test:qa`** checks QA on dev-team projects: where a finished ticket goes, pass and fail verdicts, too many fails, rounds and stale verdicts, signing off, moving tickets by hand (through the API routes, in-process), changes after QA, changing or removing the QA desk, the QA desk default, changed files recorded only for writes that went through, the read-only, no-web fence around a QA check, and the quoting of desk-written text in its prompt.
 - **`test:attachments`** checks image uploads: type sniffing, file names, picking ids, the startup sweep, and the image blocks sent to desks. It also checks desk images: screenshot capture from connected tools (held in memory, saved only when attached) and attaching image files by path, links included.
 
 To try the UI against a copy of your data, run the API from another folder and point Vite at it.
@@ -394,27 +547,34 @@ Everything project-specific lives under `/api/projects/:pid`.
 | PATCH  | /api/projects/:pid | `{ name?, key?, path?, access? }` |
 | DELETE | /api/projects/:pid | archives it |
 | GET    | /api/projects/:pid/state | |
-| POST   | /api/projects/:pid/instructions | `{ text, attachments? }` |
-| POST   | /api/projects/:pid/items/:id/decision | `{ decision, note?, attachments? }` |
-| POST   | /api/projects/:pid/items/:id/comments | `{ text, attachments? }`; wakes the owner |
+| POST   | /api/projects/:pid/instructions | `{ text, attachments?, includeNotes? }` |
+| POST   | /api/projects/:pid/items/:id/decision | `{ decision, note?, attachments?, includeNotes? }` |
+| POST   | /api/projects/:pid/items/:id/comments | `{ text, attachments?, includeNotes? }`; wakes the owner |
 | POST   | /api/projects/:pid/items/:id/attachments | `{ attachments }`; adds to the description |
 | POST   | /api/projects/:pid/attachments | raw image body; returns the attachment |
 | GET    | /api/projects/:pid/attachments/:file | the image |
-| PATCH  | /api/projects/:pid/items/:id | `{ status?, summary? }`; summary only while To do |
+| PATCH  | /api/projects/:pid/items/:id | `{ status?, summary? }`; summary only while To do; status `qa` starts a QA check; `signoff` waits for your sign-off (Approve closes it); `done` tells the desk that handed it over |
 | POST   | /api/projects/:pid/items/:id/run | live only |
 | POST   | /api/projects/:pid/runs/:id/cancel | |
 | GET    | /api/projects/:pid/agents/:id | |
 | POST   | /api/projects/:pid/agents | `{ name, role, skills?, lead? }` |
-| PATCH  | /api/projects/:pid/agents/:id | `{ name?, role?, skills?, lead? }` |
+| PATCH  | /api/projects/:pid/agents/:id | `{ name?, role?, skills?, lead?, qa? }`; `qa` only on dev-team projects; tickets in QA follow the change |
 | DELETE | /api/projects/:pid/agents/:id | |
 | GET    | /api/projects/:pid/connections | |
 | POST   | /api/projects/:pid/connections/check | no prompt, no tool calls |
-| PUT    | /api/projects/:pid/connections/:name | `{ enabled?, desks?, mode? }` |
+| PUT    | /api/projects/:pid/connections/:name | `{ enabled?, desks?, mode? }`; mode is `ask`, `read` or `auto` |
 | GET    | /api/projects/:pid/threads/:tid | thread + messages; marks read |
 | POST   | /api/projects/:pid/threads | `{ text, title?, itemId?, attachments? }` |
 | POST   | /api/projects/:pid/threads/:tid/messages | `{ text, attachments? }` |
 | POST   | /api/projects/:pid/threads/:tid/resume | delivers held messages |
 | POST   | /api/projects/:pid/threads/:tid/close | |
+| GET    | /api/projects/:pid/huddles/:hid | board, transcript and proposals |
+| POST   | /api/projects/:pid/huddles | `{ kind, topic, participants, rounds, includeNotes }`; 409 while one runs, 429 at the daily limit |
+| POST   | /api/projects/:pid/huddles/:hid/steer | `{ text }`; seen from the next turn |
+| POST   | /api/projects/:pid/huddles/:hid/stop | |
+| POST   | /api/projects/:pid/huddles/:hid/resume | |
+| POST   | /api/projects/:pid/huddles/:hid/proposals/:prid | `{ decision: "approve" \| "decline" }` |
+| PUT    | /api/projects/:pid/team-notes | `{ teamNotes?, notesEveryRun?, base? }`; 409 when `base` (the notes your edit started from) is no longer the current notes |
 | GET    | /api/projects/:pid/items/:id/reports | the ticket's reports: title, desk, size, last change |
 | GET    | /api/projects/:pid/workspaces/:agent/report | `?file=<path under reports/>` |
 | POST   | /api/projects/:pid/reset | `?empty=1` |

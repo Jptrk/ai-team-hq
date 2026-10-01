@@ -7,15 +7,17 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
  *   #/projects                    all projects
  *   #/projects/new                create a project
  *   #/p/<pid>                     Needs you
- *   #/p/<pid>/<view>              chat | board | team | office
+ *   #/p/<pid>/<view>              chat | board | huddles | team | office | notes
  *   #/p/<pid>/chat/<threadId>     one thread
+ *   #/p/<pid>/huddles/<huddleId>  one huddle
+ *   #/p/<pid>/notes               team notes
  *   #/p/<pid>/settings            project settings
  *   #/p/<pid>/connections         MCP connections
  *   ...?ticket=GA-12 | ?agent=leo ticket or person modal
  */
 
-export type ViewId = 'needs-you' | 'chat' | 'board' | 'team' | 'office';
-export const VIEWS: ViewId[] = ['needs-you', 'chat', 'board', 'team', 'office'];
+export type ViewId = 'needs-you' | 'chat' | 'board' | 'huddles' | 'team' | 'office' | 'notes';
+export const VIEWS: ViewId[] = ['needs-you', 'chat', 'board', 'huddles', 'team', 'office', 'notes'];
 
 export interface PanelRef {
   ticket?: string;
@@ -26,7 +28,7 @@ export type Route =
   | { kind: 'home' }
   | { kind: 'projects' }
   | { kind: 'new' }
-  | ({ kind: 'project'; pid: string; view: ViewId; threadId?: string } & PanelRef)
+  | ({ kind: 'project'; pid: string; view: ViewId; threadId?: string; huddleId?: string } & PanelRef)
   | { kind: 'settings'; pid: string }
   | { kind: 'connections'; pid: string };
 
@@ -56,16 +58,19 @@ export function parseRoute(hash: string): Route {
     const threadId = view === 'chat' && parts[3] ? parts[3] : undefined;
     const ticket = query.get('ticket') || undefined;
     const agent = ticket ? undefined : query.get('agent') || undefined;
-    return { kind: 'project', pid, view, threadId, ticket, agent };
+    // Only on a huddle's own page, so every other route stays the same shape.
+    const huddle = view === 'huddles' && parts[3] ? { huddleId: parts[3] } : {};
+    return { kind: 'project', pid, view, threadId, ...huddle, ticket, agent };
   }
   return { kind: 'home' };
 }
 
 /** Path (without '#') for a project view, optionally with a thread and a modal subject (ticket or person). */
-export function projectPath(pid: string, view: ViewId = 'needs-you', o: { threadId?: string } & PanelRef = {}): string {
+export function projectPath(pid: string, view: ViewId = 'needs-you', o: { threadId?: string; huddleId?: string } & PanelRef = {}): string {
   let path = `/p/${encodeURIComponent(pid)}`;
   if (view !== 'needs-you') path += `/${view}`;
   if (view === 'chat' && o.threadId) path += `/${encodeURIComponent(o.threadId)}`;
+  if (view === 'huddles' && o.huddleId) path += `/${encodeURIComponent(o.huddleId)}`;
   const q = new URLSearchParams();
   if (o.ticket) q.set('ticket', o.ticket);
   else if (o.agent) q.set('agent', o.agent);

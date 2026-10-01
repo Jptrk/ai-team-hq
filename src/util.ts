@@ -20,6 +20,22 @@ export function latestDecision(item: WorkItem): Comment | undefined {
   return [...(item.comments ?? [])].reverse().find((c) => c.kind === 'decision');
 }
 
+/** The QA desk's latest verdict on a ticket. */
+export function latestQa(item: WorkItem): Comment | undefined {
+  return [...(item.comments ?? [])].reverse().find((c) => c.kind === 'qa');
+}
+
+/** QA's pass on a ticket waiting for your sign-off, only when QA checked it this round. An earlier round's verdict never shows. */
+export function signoffVerdict(item: WorkItem): Comment | undefined {
+  return item.status === 'signoff' && item.qa?.result === 'pass' ? latestQa(item) : undefined;
+}
+
+/** What the owner said when it last finished the ticket, from its history. */
+export function doneSummary(item: WorkItem): string | undefined {
+  const done = [...item.history].reverse().find((h) => h.text.startsWith('Done: '));
+  return done?.text.slice(6);
+}
+
 /** GA-12 style ticket reference. */
 export function ticketKey(item: { number?: number; id: string }, projectKey: string): string {
   return item.number ? `${projectKey}-${item.number}` : item.id;
@@ -81,6 +97,8 @@ export const ITEM_STATUS_TONE: Record<ItemStatus, Tone> = {
   'needs-you': 'accent',
   held: 'warning',
   approved: 'success',
+  qa: 'info',
+  signoff: 'accent',
   done: 'success',
 };
 
@@ -114,6 +132,8 @@ export const ITEM_STATUS_LABEL: Record<ItemStatus, string> = {
   approved: 'approved',
   held: 'on hold',
   'sent-back': 'sent back',
+  qa: 'in QA',
+  signoff: 'sign-off',
   done: 'done',
 };
 

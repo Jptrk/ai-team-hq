@@ -7,6 +7,7 @@ import { AttachButton, AttachmentTray } from '../ui/attachments/AttachmentTray';
 import { useAttachments } from '../ui/attachments/useAttachments';
 import { Segmented } from '../ui/Segmented';
 import { MentionChips } from '../ui/MentionChips';
+import { NotesToggle } from '../ui/NotesToggle';
 import { Modal } from './Modal';
 
 export type CreateKind = 'task' | 'thread';
@@ -17,7 +18,7 @@ interface Props {
   agents: Agent[];
   projectName: string;
   onClose: () => void;
-  onTask: (text: string, attachments: string[]) => Promise<void>;
+  onTask: (text: string, attachments: string[], includeNotes: boolean) => Promise<void>;
   onThread: (text: string, attachments: string[]) => Promise<void>;
 }
 
@@ -26,6 +27,7 @@ export function CreateModal({ open, initialKind, agents, projectName, onClose, o
   const [kind, setKind] = useState<CreateKind>(initialKind);
   const [text, setText] = useState('');
   const [another, setAnother] = useState(false);
+  const [withNotes, setWithNotes] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const att = useAttachments(useProjectId());
@@ -35,6 +37,7 @@ export function CreateModal({ open, initialKind, agents, projectName, onClose, o
     if (open) {
       setKind(initialKind);
       setError(null);
+      setWithNotes(false);
     }
   }, [open, initialKind]);
 
@@ -56,7 +59,7 @@ export function CreateModal({ open, initialKind, agents, projectName, onClose, o
     setBusy(true);
     setError(null);
     try {
-      await (kind === 'task' ? onTask(value, ids) : onThread(value, ids));
+      await (kind === 'task' ? onTask(value, ids, withNotes) : onThread(value, ids));
       setText('');
       att.removeKeys(keys);
       // Closing drops anything still in the tray, so it never reappears next time Create opens.
@@ -83,6 +86,7 @@ export function CreateModal({ open, initialKind, agents, projectName, onClose, o
               <input type="checkbox" checked={another} onChange={(e) => setAnother(e.target.checked)} /> Create another
             </label>
           )}
+          {kind === 'task' && <NotesToggle checked={withNotes} onChange={setWithNotes} />}
           <span className="grow" />
           <button type="button" className="btn btn-ghost" onClick={close}>
             Cancel

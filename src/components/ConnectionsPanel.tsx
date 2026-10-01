@@ -116,14 +116,51 @@ export function ConnectionsPanel({ pid, agents, ownerName, hasFolder }: Props) {
 
         {on && (
           <div className="conn-config">
-            <div className="conn-modes" role="radiogroup" aria-label={`${row.name} mode`}>
-              <button type="button" className={`seg${row.connection.mode === 'ask' ? ' on' : ''}`} disabled={busy === row.name} onClick={() => void update(row, { mode: 'ask' })}>
+            <div className="conn-modes" role="group" aria-label={`${row.name} mode`}>
+              <button
+                type="button"
+                className={`seg${row.connection.mode === 'ask' ? ' on' : ''}`}
+                aria-pressed={row.connection.mode === 'ask'}
+                disabled={busy === row.name}
+                onClick={() => void update(row, { mode: 'ask' })}
+              >
                 Ask before changes
               </button>
-              <button type="button" className={`seg${row.connection.mode === 'read' ? ' on' : ''}`} disabled={busy === row.name} onClick={() => void update(row, { mode: 'read' })}>
+              <button
+                type="button"
+                className={`seg${row.connection.mode === 'read' ? ' on' : ''}`}
+                aria-pressed={row.connection.mode === 'read'}
+                disabled={busy === row.name}
+                onClick={() => void update(row, { mode: 'read' })}
+              >
                 Read only
               </button>
+              <button
+                type="button"
+                className={`seg${row.connection.mode === 'auto' ? ' on' : ''}`}
+                aria-pressed={row.connection.mode === 'auto'}
+                disabled={busy === row.name}
+                onClick={() => {
+                  if (row.connection.mode === 'auto') return;
+                  // It acts as you on that service, so make it a deliberate choice.
+                  if (
+                    !window.confirm(
+                      `Desks will post and change things on ${row.name} as ${ownerName}, without asking you first. Deleting or removing anything still waits for your approval, but HQ can't fully see inside tools that run code, scripts or batches, so a delete there can slip through. What desks read (issues, pages, the web) can also steer what they do. Turn on Auto?`,
+                    )
+                  )
+                    return;
+                  void update(row, { mode: 'auto' });
+                }}
+              >
+                Auto
+              </button>
             </div>
+            {row.connection.mode === 'auto' && (
+              <p className="field-hint conn-auto-note">
+                <span className="warn">Auto:</span> desks change things on {row.name} as you without asking. Deletes still wait for your approval, but ones hidden inside code,
+                scripts or batches can slip through, and what desks read can steer them. Every change shows in the activity feed. Turning it off puts it back on Ask.
+              </p>
+            )}
             <div className="conn-desks">
               <span className="label">Desks</span>
               <div className="chips">
@@ -154,8 +191,8 @@ export function ConnectionsPanel({ pid, agents, ownerName, hasFolder }: Props) {
         </button>
       </div>
       <p className="muted conn-intro">
-        MCP servers act as {ownerName}. Anything posted shows up under your name. Reading runs on its own; anything that posts or changes something waits for
-        your approval in Needs you.
+        MCP servers act as {ownerName}. Anything posted shows up under your name. Reading runs on its own. With Ask before changes, anything that posts or
+        changes something waits for your approval in Needs you. With Auto, it runs on its own, except deletes.
         {data?.lastCheck ? ` Last checked ${timeAgo(data.lastCheck)}.` : ' Run a check to see status and to find your claude.ai connectors.'}
       </p>
       {error && <p className="banner danger">{error}</p>}

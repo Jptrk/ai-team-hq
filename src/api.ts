@@ -5,6 +5,9 @@ import type {
   ConnectionMode,
   ConnectionsResponse,
   Decision,
+  Huddle,
+  HuddleKind,
+  HuddleProposal,
   Instruction,
   ItemStatus,
   Meta,
@@ -42,11 +45,20 @@ export interface ProjectBody {
   template?: TeamTemplate;
 }
 
+export interface HuddleBody {
+  kind: HuddleKind;
+  topic: string;
+  participants: string[];
+  rounds: number;
+  includeNotes: boolean;
+}
+
 export interface AgentBody {
   name?: string;
   role?: string;
   skills?: string;
   lead?: boolean;
+  qa?: boolean;
 }
 
 export const api = {
@@ -59,12 +71,12 @@ export const api = {
     request<PathCheck>(`/api/fs/check?path=${encodeURIComponent(path)}${except ? `&except=${encodeURIComponent(except)}` : ''}`),
 
   state: (pid: string) => request<StateResponse>(`${pp(pid)}/state`),
-  instruct: (pid: string, text: string, attachments: string[] = []) =>
-    request<{ instruction: Instruction; item: WorkItem; run: Run | null }>(`${pp(pid)}/instructions`, json('POST', { text, attachments })),
-  decide: (pid: string, id: string, decision: Decision, note?: string, attachments: string[] = []) =>
-    request<{ item: WorkItem; run: Run | null }>(`${pp(pid)}/items/${id}/decision`, json('POST', { decision, note, attachments })),
-  comment: (pid: string, id: string, text: string, attachments: string[] = []) =>
-    request<{ item: WorkItem; comment: Comment; run: Run | null }>(`${pp(pid)}/items/${id}/comments`, json('POST', { text, attachments })),
+  instruct: (pid: string, text: string, attachments: string[] = [], includeNotes = false) =>
+    request<{ instruction: Instruction; item: WorkItem; run: Run | null }>(`${pp(pid)}/instructions`, json('POST', { text, attachments, includeNotes })),
+  decide: (pid: string, id: string, decision: Decision, note?: string, attachments: string[] = [], includeNotes = false) =>
+    request<{ item: WorkItem; run: Run | null }>(`${pp(pid)}/items/${id}/decision`, json('POST', { decision, note, attachments, includeNotes })),
+  comment: (pid: string, id: string, text: string, attachments: string[] = [], includeNotes = false) =>
+    request<{ item: WorkItem; comment: Comment; run: Run | null }>(`${pp(pid)}/items/${id}/comments`, json('POST', { text, attachments, includeNotes })),
   attachToItem: (pid: string, id: string, attachments: string[]) => request<WorkItem>(`${pp(pid)}/items/${id}/attachments`, json('POST', { attachments })),
   /** One image as the raw body. The server checks the bytes, not this header. */
   uploadAttachment: async (pid: string, blob: Blob): Promise<Attachment> => {
@@ -88,6 +100,17 @@ export const api = {
   checkConnections: (pid: string) => request<ConnectionsResponse>(`${pp(pid)}/connections/check`, json('POST')),
   updateConnection: (pid: string, name: string, body: { enabled?: boolean; desks?: string[]; mode?: ConnectionMode }) =>
     request<ConnectionsResponse>(`${pp(pid)}/connections/${encodeURIComponent(name)}`, json('PUT', body)),
+
+  huddle: (pid: string, hid: string) => request<Huddle>(`${pp(pid)}/huddles/${encodeURIComponent(hid)}`),
+  startHuddle: (pid: string, body: HuddleBody) => request<Huddle>(`${pp(pid)}/huddles`, json('POST', body)),
+  steerHuddle: (pid: string, hid: string, text: string) => request<Huddle>(`${pp(pid)}/huddles/${encodeURIComponent(hid)}/steer`, json('POST', { text })),
+  stopHuddle: (pid: string, hid: string) => request<Huddle>(`${pp(pid)}/huddles/${encodeURIComponent(hid)}/stop`, json('POST')),
+  resumeHuddle: (pid: string, hid: string) => request<Huddle>(`${pp(pid)}/huddles/${encodeURIComponent(hid)}/resume`, json('POST')),
+  decideProposal: (pid: string, hid: string, prid: string, decision: 'approve' | 'decline') =>
+    request<{ huddle: Huddle; proposal: HuddleProposal; item?: WorkItem }>(`${pp(pid)}/huddles/${encodeURIComponent(hid)}/proposals/${encodeURIComponent(prid)}`, json('POST', { decision })),
+  /** base: the notes the edit started from. A 409 says they changed meanwhile. */
+  saveTeamNotes: (pid: string, body: { teamNotes?: string; notesEveryRun?: boolean; base?: string }) =>
+    request<{ teamNotes: string; notesEveryRun: boolean }>(`${pp(pid)}/team-notes`, json('PUT', body)),
 
   thread: (pid: string, tid: string) => request<ThreadResponse>(`${pp(pid)}/threads/${tid}`),
   startThread: (pid: string, body: { text: string; title?: string; itemId?: string; attachments?: string[] }) =>

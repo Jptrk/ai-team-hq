@@ -6,6 +6,7 @@ import { refreshStatuses, settleInstructions } from '../agents';
 import { clearWaiting, findThread, markRead, needsWake, note, pauseForFailure, unreadFor } from '../chat';
 import { rewindCursor } from '../cursor';
 import { unansweredImages } from '../comments';
+import { clearSignoff, qaDeskOf, queuedQaRun, rerouteQa } from '../qa';
 import { now, uid, type Project } from '../store';
 import { claudeRunner, MODEL } from './claude';
 import { enqueue } from './queue';
@@ -13,8 +14,9 @@ import type { RunHooks, RunInput } from './types';
 
 /**
  * Picks the runner and turns work into queued agent runs:
- *   kickoff()  a desk works a ticket it owns
+ *   kickoff()  a desk works a ticket it owns, or the QA desk checks one
  *   deliver()  a desk is woken by a chat message
+ *   runHuddleDesk()  a desk takes its turn in a huddle
  * sim    = fake activity from server/sim.ts, no Claude calls
  * claude = real Claude Agent SDK sessions
  */
@@ -104,8 +106,16 @@ function skip(p: Project, run: Run, why: string, failed = false): void {
   p.commit();
 }
 
-/** Run one desk for one job and record the outcome. Shared by ticket runs and message runs. */
-async function execute(p: Project, run: Run, agent: Agent, input: Omit<RunInput, 'project' | 'run' | 'agent' | 'hooks'>, label: string): Promise<void> {
+/** How a run ended: the desk's full final reply, if it finished, and whether it failed because it was stopped through cancelRun. */
+export interface Executed {
+  reply?: string;
+  cancelled: boolean;
+}
+
+/** Run one desk for one job and record the outcome. Shared by every kind of run. */
+async function execute(p: Project, run: Run, agent: Agent, input: Omit<RunInput, 'project' | 'run' | 'agent' | 'hooks'>, label: string): Promise<Executed> {
+  let reply: string | undefined;
+  let stopped = false;
   const controller = new AbortController();
   controllers.set(run.id, controller);
   run.status = 'running';
@@ -122,13 +132,14 @@ async function execute(p: Project, run: Run, agent: Agent, input: Omit<RunInput,
     run.costUsd = charge(agent, out.sessionId, out.costUsd);
     run.turns = out.turns;
     run.summary = out.summary.slice(0, 500);
+    reply = out.summary;
   } catch (e) {
     const err = e as Error & { outcome?: { costUsd?: number; turns?: number; sessionId?: string } };
     run.status = 'failed';
     run.error = err.message.slice(0, 500);
     run.costUsd = charge(agent, err.outcome?.sessionId, err.outcome?.costUsd);
     run.turns = err.outcome?.turns;
-    const stopped = cancelled.has(run.id);
+    stopped = cancelled.has(run.id);
     const thread = input.thread ? findThread(p.state, input.thread.id) : undefined;
     // Not answered: the desk sees the same messages again on the next wake. A run the founder stopped stays read.
     const readThreadId = run.threadId ?? run.cursorThread;
@@ -156,23 +167,38 @@ async function execute(p: Project, run: Run, agent: Agent, input: Omit<RunInput,
     refreshStatuses(p.state);
     p.commit();
   }
+  return { reply, cancelled: stopped };
 }
 
-/** Queue a run for the ticket's owner. No-op in sim mode. Returns the Run, or null. */
-export function kickoff(p: Project, itemId: string, reason: RunReason, note?: string, images: Attachment[] = []): Run | null {
+export interface KickoffOptions {
+  /** Put the team notes in this run's prompt. */
+  includeNotes?: boolean;
+}
+
+/** Queue a run for the ticket's owner, or for the QA desk when reason is 'qa'. No-op in sim mode. Returns the Run, or null. */
+export function kickoff(p: Project, itemId: string, reason: RunReason, note?: string, images: Attachment[] = [], opts: KickoffOptions = {}): Run | null {
   if (!isLive()) return null;
   const s = p.state;
   const item = s.items.find((i) => i.id === itemId);
   if (!item) return null;
-  const agent = s.agents.find((a) => a.id === item.assignee);
+  const agent = reason === 'qa' ? qaDeskOf(s) : s.agents.find((a) => a.id === item.assignee);
   if (!agent || agent.isHuman) return null;
+  // One waiting QA check per ticket. A running one is not reused: it may be checking an older round, and its verdict will be refused.
+  if (reason === 'qa') {
+    const queued = queuedQaRun(s, item.id);
+    if (queued) return queued;
+  }
   // Comments batch: one queued comment run per desk per ticket answers every new comment when it starts.
   if (reason === 'comment') {
     const queued = s.runs.find((r) => r.agentId === agent.id && r.itemId === item.id && r.reason === 'comment' && r.status === 'queued');
-    if (queued) return queued;
+    if (queued) {
+      // Any comment in the batch that asked for the team notes gets them.
+      if (opts.includeNotes) queued.notes = true;
+      return queued;
+    }
   }
 
-  const run: Run = { id: uid('run'), agentId: agent.id, itemId: item.id, reason, status: 'queued', startedAt: now() };
+  const run: Run = { id: uid('run'), agentId: agent.id, itemId: item.id, reason, status: 'queued', startedAt: now(), ...(opts.includeNotes ? { notes: true } : {}) };
   track(p, run);
   item.history.push({ ts: now(), text: `Queued for ${agent.name} (${reason})` });
   p.commit();
@@ -184,11 +210,25 @@ export function kickoff(p: Project, itemId: string, reason: RunReason, note?: st
     const liveAgent = state.agents.find((a) => a.id === agent.id);
     const liveItem = state.items.find((i) => i.id === item.id);
     if (!liveRun) return;
-    if (!liveAgent) return skip(p, liveRun, 'Desk was removed before the run started', true);
     if (!liveItem) return skip(p, liveRun, 'Ticket disappeared before the run started', true);
+    if (reason === 'qa' && !liveAgent?.qa) {
+      // The QA desk left or stopped QA before its check: pass the ticket on, to the QA desk now or to your sign-off.
+      // Skipped first, so the new check is not taken for this one.
+      skip(p, liveRun, liveAgent ? `${liveAgent.name} is no longer the QA desk` : 'Desk was removed before the run started', !liveAgent);
+      if (rerouteQa(state, liveItem) === 'qa') kickoff(p, liveItem.id, 'qa');
+      p.commit();
+      return;
+    }
+    if (!liveAgent) return skip(p, liveRun, 'Desk was removed before the run started', true);
+    // A QA check runs only while the ticket is still in QA.
+    if (reason === 'qa' && liveItem.status !== 'qa') return skip(p, liveRun, `ticket is ${liveItem.status}, not in QA`);
     // Decisions made while queued make the run moot. A comment still gets an answer on any ticket.
-    if (reason !== 'approved' && reason !== 'comment' && ['done', 'approved', 'held'].includes(liveItem.status)) return skip(p, liveRun, `ticket is ${liveItem.status}`);
+    if (reason !== 'approved' && reason !== 'comment' && reason !== 'qa' && ['done', 'approved', 'held', 'qa', 'signoff'].includes(liveItem.status)) {
+      return skip(p, liveRun, `ticket is ${liveItem.status}`);
+    }
 
+    // The owner is back on it: it is not waiting on your sign-off any more, so Approve starts a run again. A comment answer changes nothing.
+    if (reason !== 'qa' && reason !== 'comment') clearSignoff(liveItem);
     if (liveItem.status === 'todo' && reason !== 'comment') liveItem.status = 'in-progress';
     const thread = liveItem.threadId ? findThread(state, liveItem.threadId) : undefined;
     if (thread) {
@@ -197,13 +237,62 @@ export function kickoff(p: Project, itemId: string, reason: RunReason, note?: st
       liveRun.cursorThread = thread.id;
       markRead(thread, liveAgent.id);
     }
-    const label = reason === 'comment' ? `Answering your comment on ${p.ticket(liveItem)}` : liveItem.title;
+    const label = reason === 'comment' ? `Answering your comment on ${p.ticket(liveItem)}` : reason === 'qa' ? `QA: ${liveItem.title}` : liveItem.title;
     // A comment run sees the images on every comment it has not answered yet, not only the first one's.
     const runImages = reason === 'comment' ? [...images, ...unansweredImages(liveItem, liveAgent.id)] : images;
-    await execute(p, liveRun, liveAgent, { item: liveItem, reason, note, thread, images: runImages }, label);
+    await execute(p, liveRun, liveAgent, { item: liveItem, reason, note, thread, images: runImages, includeNotes: liveRun.notes }, label);
   });
 
   return run;
+}
+
+/** How one desk's huddle turn went. skipped: the huddle was not running when its turn came, or a stop cut it short, so it keeps its place. */
+export interface HuddleTurn {
+  ran: boolean;
+  ok: boolean;
+  skipped?: boolean;
+  /** The desk's final reply. Used when it never called its huddle tool. */
+  reply: string;
+  error?: string;
+}
+
+/**
+ * What a finished huddle run tells the round engine. A run you stopped keeps the desk's place, even
+ * when the huddle is running again by the time it ends (Stop, then a quick Resume). Exported for tests.
+ */
+export function huddleTurnOf(run: Pick<Run, 'status' | 'error'>, out: Executed): HuddleTurn {
+  if (out.cancelled) return { ran: true, ok: false, skipped: true, reply: '' };
+  return { ran: true, ok: run.status === 'done', reply: out.reply ?? '', error: run.error };
+}
+
+/** One desk's turn in a huddle, queued like any other run. Resolves when it finishes or is skipped. Live mode only. */
+export async function runHuddleDesk(p: Project, huddleId: string, agentId: string, role: 'participant' | 'facilitator', label: string, includeNotes: boolean): Promise<HuddleTurn> {
+  const run: Run = { id: uid('run'), agentId, reason: 'huddle', huddleId, status: 'queued', startedAt: now(), ...(includeNotes ? { notes: true } : {}) };
+  track(p, run);
+  p.commit();
+  let turn: HuddleTurn = { ran: false, ok: false, reply: '', error: 'The run never started' };
+  try {
+    await enqueue(`${p.id}:${agentId}`, async () => {
+      const state = p.state;
+      const liveRun = state.runs.find((r) => r.id === run.id);
+      if (!liveRun) return;
+      const liveAgent = state.agents.find((a) => a.id === agentId && !a.isHuman);
+      if (!liveAgent) {
+        turn = { ran: false, ok: false, reply: '', error: 'Desk was removed' };
+        return skip(p, liveRun, 'Desk was removed before the run started', true);
+      }
+      const h = state.huddles.find((x) => x.id === huddleId);
+      if (!h || h.status !== 'running') {
+        turn = { ran: false, ok: false, skipped: true, reply: '' };
+        return skip(p, liveRun, 'the huddle was stopped');
+      }
+      const out = await execute(p, liveRun, liveAgent, { reason: 'huddle', huddle: { id: huddleId, role }, includeNotes }, label);
+      turn = huddleTurnOf(liveRun, out);
+    });
+  } catch (e) {
+    turn = { ran: false, ok: false, reply: '', error: (e as Error).message };
+  }
+  return turn;
 }
 
 /**

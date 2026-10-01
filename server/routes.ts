@@ -1,7 +1,7 @@
 import express, { Router, type Response } from 'express';
 import fs from 'node:fs';
-import type { Attachment, Decision, ItemStatus, ProjectAccess, ProjectMeta, ProjectSummary, ReportInfo, StateResponse, TeamTemplate, ThreadResponse } from '../shared/types';
-import { canEditDescription, MAX_ATTACHMENTS, MAX_DESCRIPTION } from '../shared/types';
+import type { Attachment, Decision, ItemStatus, ProjectAccess, ProjectMeta, ProjectSummary, ReportInfo, StateResponse, TeamTemplate, ThreadResponse, WorkItem } from '../shared/types';
+import { canEditDescription, hasQa, MAX_ATTACHMENTS, MAX_DESCRIPTION } from '../shared/types';
 import { acceptInstruction, addAgent, parseSkills, refreshStatuses, removeAgent, settleInstructions } from './agents';
 import { AttachmentError, pickAttachments, resolveAttachment, saveUpload } from './attachments';
 import {
@@ -11,6 +11,7 @@ import {
   findThread,
   HOP_LIMIT,
   messagesOf,
+  noticeHandoff,
   postFounderMessage,
   resumeThread,
   threadForItem,
@@ -19,7 +20,11 @@ import { titleFrom } from '../shared/plainText';
 import { parseReportUrl, reportTitleFrom, type ReportUrlParts } from '../shared/reportUrl';
 import { addComment } from './comments';
 import { checkConnections, listConnections, updateConnection, type ConnectionPatch } from './connections';
+import { MAX_STEER } from '../shared/huddle';
+import { addSteer, decideProposal, findHuddle, HUDDLES_PER_DAY, MAX_NOTES, notesConflict, pendingProposals, stripHuddle } from './huddle-core';
+import { resumeHuddleRun, startHuddle, stopHuddleRun } from './huddles';
 import { checkFolder, folderExists, KEY_PATTERN, suggestKey } from './paths';
+import { backToWork, closesOnApprove, moveByHand, qaDeskOf, rerouteAllQa, setQaDesk } from './qa';
 import { resolveReport } from './runner/claude';
 import { cancelRun, deliver, isLive, kickoff, meta } from './runner';
 import {
@@ -39,7 +44,7 @@ import {
 
 export const router = Router();
 
-const ITEM_STATUSES: ItemStatus[] = ['todo', 'in-progress', 'needs-you', 'approved', 'held', 'sent-back', 'done'];
+const ITEM_STATUSES: ItemStatus[] = ['todo', 'in-progress', 'needs-you', 'approved', 'held', 'sent-back', 'qa', 'signoff', 'done'];
 const DECISIONS: Decision[] = ['approve', 'hold', 'send-back', 'instruct'];
 const TEMPLATES: TeamTemplate[] = ['business', 'dev', 'blank'];
 const ACCESS: ProjectAccess[] = ['read', 'write'];
@@ -73,7 +78,7 @@ function summary(p: Project): ProjectSummary {
     teamSize: s.agents.length,
     openItems: s.items.filter((i) => i.status !== 'done').length,
     // Paused chat threads wait on Patrick too.
-    needsYou: s.items.filter((i) => i.status === 'needs-you').length + s.threads.filter((t) => t.status === 'paused').length,
+    needsYou: s.items.filter((i) => i.status === 'needs-you' || i.status === 'signoff').length + s.threads.filter((t) => t.status === 'paused').length + pendingProposals(s),
     running: s.agents.filter((a) => a.running).length,
     pathOk: p.meta.path ? folderExists(p.meta.path) : true,
   };
@@ -188,9 +193,9 @@ project.delete('/', (_req, res) => {
 
 project.get('/state', (_req, res) => {
   const p = P(res);
-  // Messages stay out of the 3-second poll; a thread's messages load when it opens.
-  const { messages: _messages, ...rest } = p.state;
-  const body: StateResponse = { ...rest, meta: meta(), project: p.meta };
+  // Messages stay out of the 3-second poll; a thread's messages load when it opens. Same for a huddle's board and transcript.
+  const { messages: _messages, huddles, ...rest } = p.state;
+  const body: StateResponse = { ...rest, huddles: huddles.map(stripHuddle), huddleLimit: HUDDLES_PER_DAY, meta: meta(), project: p.meta };
   res.json(body);
 });
 
@@ -316,14 +321,33 @@ project.patch('/agents/:id', (req, res) => {
   if (role) agent.role = role;
   if ('skills' in body && !agent.isHuman) agent.skills = parseSkills(body.skills);
   if (body.lead === true && !agent.isHuman) for (const a of p.state.agents) a.lead = a.id === agent.id;
+  // Dev-team projects: one QA desk, or none.
+  let recheck: WorkItem[] = [];
+  if ('qa' in body && !agent.isHuman) {
+    if (typeof body.qa !== 'boolean') return res.status(400).json({ error: 'qa must be true or false' });
+    if (body.qa && !hasQa(p.meta.template)) return res.status(400).json({ error: 'QA is for dev-team projects' });
+    if (body.qa) setQaDesk(p.state, agent.id);
+    else if (agent.qa) setQaDesk(p.state, null);
+    p.log('you', body.qa ? `${agent.name} is now the QA desk` : `${agent.name} is no longer the QA desk; finished tickets come to you to sign off`);
+    // Tickets waiting in QA go to the new QA desk, or to your sign-off, instead of waiting on a desk that stopped.
+    recheck = rerouteAllQa(p.state);
+  }
   p.commit();
+  for (const item of recheck) kickoff(p, item.id, 'qa');
   res.json(agent);
 });
 
 project.delete('/agents/:id', (req, res) => {
   const p = P(res);
+  const wasQa = Boolean(p.state.agents.find((a) => a.id === req.params.id)?.qa);
   const error = removeAgent(p, String(req.params.id));
   if (error) return res.status(error === 'agent not found' ? 404 : 409).json({ error });
+  // The QA desk left: tickets waiting in QA come to your sign-off (or a QA desk, if there still is one).
+  if (wasQa) {
+    const recheck = rerouteAllQa(p.state);
+    p.commit();
+    for (const item of recheck) kickoff(p, item.id, 'qa');
+  }
   res.json({ ok: true });
 });
 
@@ -336,7 +360,7 @@ project.post('/instructions', (req, res) => {
   if (bad) return res.status(400).json({ error: bad });
   const result = acceptInstruction(p, text, attachments);
   if (!result) return res.status(409).json({ error: 'This project has no teammates yet. Add one on the Team tab.' });
-  const run = kickoff(p, result.item.id, 'instruction', undefined, attachments);
+  const run = kickoff(p, result.item.id, 'instruction', undefined, attachments, { includeNotes: req.body?.includeNotes === true });
   res.status(201).json({ ...result, run });
 });
 
@@ -356,8 +380,19 @@ project.post('/items/:id/decision', (req, res) => {
   const name = agent?.name ?? item.assignee;
   const ref = p.ticket(item);
 
+  // Finished and checked (or QA gave up on it): approving signs it off. Nothing is left for a desk to do.
+  const signOff = decision === 'approve' && closesOnApprove(item);
+  // An instruction needs something to say. Checked before anything changes.
+  if (decision === 'instruct' && !note && !images.length) return res.status(400).json({ error: 'instruct needs a note' });
+
   switch (decision) {
     case 'approve':
+      if (signOff) {
+        item.status = 'done';
+        item.history.push({ ts: now(), text: item.qa?.escalated ? 'Accepted by you as it is, after QA' : 'Signed off by you' });
+        p.log('you', `Signed off ${ref} "${item.title}"`);
+        break;
+      }
       item.status = 'approved';
       item.history.push({ ts: now(), text: 'Approved by you' });
       p.log(item.assignee, `Approved: ${ref} "${item.title}", ${name} is executing`);
@@ -369,13 +404,16 @@ project.post('/items/:id/decision', (req, res) => {
       p.log('you', `Held ${ref} "${item.title}"`);
       break;
     case 'send-back':
+      // Your send-back makes it work again; QA counts fails afresh.
+      backToWork(item);
       item.status = 'sent-back';
       item.history.push({ ts: now(), text: note ? `Sent back to ${name}: ${note}` : `Sent back to ${name}` });
       p.log(item.assignee, `${ref} "${item.title}" came back for another pass`);
       if (agent) agent.currentTask = `Reworking: ${item.title}`;
       break;
     case 'instruct':
-      if (!note && !images.length) return res.status(400).json({ error: 'instruct needs a note' });
+      // Your instruction makes it work again too.
+      backToWork(item);
       item.status = 'in-progress';
       item.history.push({ ts: now(), text: note ? `Instruction from you: ${note}` : 'Instruction from you (images)' });
       p.log(item.assignee, `New instruction on ${ref} "${item.title}"`);
@@ -390,9 +428,17 @@ project.post('/items/:id/decision', (req, res) => {
   p.commit();
 
   // Live mode: the desk picks the ticket back up. Hold needs nothing from them.
+  const opts = { includeNotes: req.body?.includeNotes === true };
   let run = null;
-  if (decision === 'approve') {
-    run = kickoff(p, item.id, 'approved', note || undefined, images);
+  if (signOff) {
+    // A handed-off ticket reports back once you sign it off.
+    const posted = noticeHandoff(s, item, item.assignee, `Done with ${ref} (signed off by you).`);
+    if (posted) {
+      p.commit();
+      deliver(p, posted.threadId, posted.deliver);
+    }
+  } else if (decision === 'approve') {
+    run = kickoff(p, item.id, 'approved', note || undefined, images, opts);
     // Nobody to carry it out (it is yours, or its desk is gone): approving finishes it.
     if (!agent || agent.isHuman) {
       item.status = 'done';
@@ -402,8 +448,8 @@ project.post('/items/:id/decision', (req, res) => {
       p.commit();
     }
   }
-  else if (decision === 'send-back') run = kickoff(p, item.id, 'send-back', note || undefined, images);
-  else if (decision === 'instruct') run = kickoff(p, item.id, 'instruct', note, images);
+  else if (decision === 'send-back') run = kickoff(p, item.id, 'send-back', note || undefined, images, opts);
+  else if (decision === 'instruct') run = kickoff(p, item.id, 'instruct', note, images, opts);
 
   res.json({ item, run });
 });
@@ -437,13 +483,20 @@ project.patch('/items/:id', (req, res) => {
     item.summary = nextSummary;
     item.history.push({ ts: now(), text: 'Description edited by you' });
   }
-  if (nextStatus !== undefined && nextStatus !== item.status) {
-    item.status = nextStatus;
-    item.history.push({ ts: now(), text: `Moved to ${nextStatus} by you` });
-  }
+  // Into QA the QA desk checks it; into sign-off Approve closes it; anywhere else it stops waiting on a sign-off.
+  const moved = nextStatus !== undefined ? moveByHand(s, item, nextStatus) : null;
   settleInstructions(s);
   refreshStatuses(s);
   p.commit();
+  if (moved === 'qa') kickoff(p, item.id, 'qa');
+  if (moved === 'done') {
+    // A handed-off ticket you mark done reports back, as one a desk finishes does.
+    const posted = noticeHandoff(s, item, item.assignee, `Done with ${p.ticket(item)} (marked done by you).`);
+    if (posted) {
+      p.commit();
+      deliver(p, posted.threadId, posted.deliver);
+    }
+  }
   res.json(item);
 });
 
@@ -463,7 +516,7 @@ project.post('/items/:id/comments', (req, res) => {
   p.commit();
   const agent = s.agents.find((a) => a.id === item.assignee && !a.isHuman);
   // A desk that is off shift is not woken; the comment waits on the ticket.
-  const run = agent && agent.status !== 'off' ? kickoff(p, item.id, 'comment', text || undefined, attachments) : null;
+  const run = agent && agent.status !== 'off' ? kickoff(p, item.id, 'comment', text || undefined, attachments, { includeNotes: req.body?.includeNotes === true }) : null;
   res.status(201).json({ item, comment, run });
 });
 
@@ -492,11 +545,13 @@ project.post('/items/:id/run', (req, res) => {
   if (!isLive()) return res.status(409).json({ error: 'Live runner is off. Set HQ_RUNNER=claude in .env to enable it.' });
   const item = p.state.items.find((i) => i.id === req.params.id);
   if (!item) return res.status(404).json({ error: 'item not found' });
-  const agent = p.state.agents.find((a) => a.id === item.assignee);
-  if (!agent || agent.isHuman) return res.status(400).json({ error: 'no agent owns this ticket' });
+  // A ticket in QA gets its check again; anything else goes to its owner.
+  const inQa = item.status === 'qa';
+  const agent = inQa ? qaDeskOf(p.state) : p.state.agents.find((a) => a.id === item.assignee);
+  if (!agent || agent.isHuman) return res.status(400).json({ error: inQa ? 'This project has no QA desk. Pick one on the Team tab.' : 'no agent owns this ticket' });
   if (agent.running) return res.status(409).json({ error: `${agent.name} is already running` });
   // An approved ticket that did not get finished (a failed run) is retried as the approved action.
-  const run = kickoff(p, item.id, item.status === 'approved' ? 'approved' : 'manual');
+  const run = kickoff(p, item.id, inQa ? 'qa' : item.status === 'approved' ? 'approved' : 'manual');
   if (!run) return res.status(500).json({ error: 'could not queue the run' });
   res.status(202).json(run);
 });
@@ -506,6 +561,89 @@ project.post('/runs/:id/cancel', (req, res) => {
   if (!p.state.runs.some((r) => r.id === req.params.id)) return res.status(404).json({ error: 'run not found' });
   if (!cancelRun(String(req.params.id))) return res.status(404).json({ error: 'that run is not running' });
   res.json({ ok: true });
+});
+
+// ---------- huddles and team notes ----------
+
+/** One huddle with its board and transcript. The poll only carries summaries. */
+project.get('/huddles/:hid', (req, res) => {
+  const h = findHuddle(P(res).state, String(req.params.hid));
+  if (!h) return res.status(404).json({ error: 'huddle not found' });
+  res.json(h);
+});
+
+/** Start a huddle. Its desks get to work right away (live mode spends usage; sim mode answers with canned turns). */
+project.post('/huddles', (req, res) => {
+  const p = P(res);
+  const out = startHuddle(p, req.body);
+  if ('error' in out) return res.status(out.status).json({ error: out.error });
+  res.status(201).json(out);
+});
+
+/** A note from you to the huddle. Desks see it from their next turn. */
+project.post('/huddles/:hid/steer', (req, res) => {
+  const p = P(res);
+  const h = findHuddle(p.state, String(req.params.hid));
+  if (!h) return res.status(404).json({ error: 'huddle not found' });
+  if (h.status === 'done') return res.status(409).json({ error: 'This huddle is finished. Start a new one to keep going.' });
+  const text = str(req.body?.text);
+  if (!text || text.length > MAX_STEER) return res.status(400).json({ error: `The note must be 1-${MAX_STEER} characters` });
+  addSteer(h, text);
+  p.commit();
+  res.status(201).json(h);
+});
+
+project.post('/huddles/:hid/stop', (req, res) => {
+  const p = P(res);
+  const why = stopHuddleRun(p, String(req.params.hid));
+  if (why) return res.status(why === 'huddle not found' ? 404 : 409).json({ error: why });
+  res.json(findHuddle(p.state, String(req.params.hid)));
+});
+
+project.post('/huddles/:hid/resume', (req, res) => {
+  const p = P(res);
+  const why = resumeHuddleRun(p, String(req.params.hid));
+  if (why) return res.status(why === 'huddle not found' ? 404 : 409).json({ error: why });
+  res.json(findHuddle(p.state, String(req.params.hid)));
+});
+
+/** Approve or decline what a huddle proposed. An approved ticket lands in To do and waits for you to start it. */
+project.post('/huddles/:hid/proposals/:prid', (req, res) => {
+  const p = P(res);
+  const h = findHuddle(p.state, String(req.params.hid));
+  if (!h) return res.status(404).json({ error: 'huddle not found' });
+  const decision = req.body?.decision;
+  if (decision !== 'approve' && decision !== 'decline') return res.status(400).json({ error: 'decision must be approve or decline' });
+  const out = decideProposal(p, h, String(req.params.prid), decision);
+  if (typeof out === 'string') return res.status(409).json({ error: out });
+  refreshStatuses(p.state);
+  p.commit();
+  res.json({ huddle: h, ...out });
+});
+
+/** Edit the team notes, or whether every run gets them. base: the notes the edit started from, so a change made meanwhile is not lost. */
+project.put('/team-notes', (req, res) => {
+  const p = P(res);
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  if (!('teamNotes' in body) && !('notesEveryRun' in body)) return res.status(400).json({ error: 'Send teamNotes or notesEveryRun' });
+  if ('teamNotes' in body) {
+    if (typeof body.teamNotes !== 'string') return res.status(400).json({ error: 'teamNotes must be text' });
+    if (body.base !== undefined && typeof body.base !== 'string') return res.status(400).json({ error: 'base must be text' });
+    const next = body.teamNotes.replace(/\s+$/, '');
+    if (next.length > MAX_NOTES) return res.status(400).json({ error: `The team notes can be at most ${MAX_NOTES} characters` });
+    const conflict = notesConflict(p.state.teamNotes, body.base);
+    if (conflict) return res.status(409).json({ error: conflict });
+    if (next !== p.state.teamNotes) {
+      p.state.teamNotes = next;
+      p.log('you', 'Edited the team notes');
+    }
+  }
+  if ('notesEveryRun' in body) {
+    if (typeof body.notesEveryRun !== 'boolean') return res.status(400).json({ error: 'notesEveryRun must be true or false' });
+    p.state.notesEveryRun = body.notesEveryRun;
+  }
+  p.commit();
+  res.json({ teamNotes: p.state.teamNotes, notesEveryRun: p.state.notesEveryRun });
 });
 
 // ---------- connections (MCP servers per project) ----------
@@ -536,7 +674,7 @@ project.put('/connections/:name', (req, res) => {
     patch.desks = body.desks as string[];
   }
   if ('mode' in body) {
-    if (body.mode !== 'ask' && body.mode !== 'read') return res.status(400).json({ error: 'mode must be ask or read' });
+    if (body.mode !== 'ask' && body.mode !== 'read' && body.mode !== 'auto') return res.status(400).json({ error: 'mode must be ask, read or auto' });
     patch.mode = body.mode;
   }
   const result = updateConnection(p, String(req.params.name), patch);

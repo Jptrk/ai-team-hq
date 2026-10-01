@@ -18,7 +18,7 @@ export function isFiltered(f: BoardFilter): boolean {
 export function filterItems(items: WorkItem[], f: BoardFilter, projectKey: string): WorkItem[] {
   const q = f.text.trim().toLowerCase();
   return items.filter((i) => {
-    if (f.needsMe && i.status !== 'needs-you' && i.status !== 'held') return false;
+    if (f.needsMe && i.status !== 'needs-you' && i.status !== 'held' && i.status !== 'signoff') return false;
     if (f.assignees.length && !f.assignees.includes(i.assignee)) return false;
     if (q) {
       const hay = `${ticketKey(i, projectKey)} ${i.title} ${i.client ?? ''} ${i.summary}`.toLowerCase();

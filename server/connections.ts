@@ -88,8 +88,12 @@ export function updateConnection(p: Project, name: string, patch: ConnectionPatc
   }
   if (patch.desks !== undefined) conn.desks = patch.desks.filter((d) => desks.has(d));
   if (patch.mode !== undefined) conn.mode = patch.mode;
+  // A connection that is off never keeps Auto: turned back on, it starts at Ask, so Auto is picked again on purpose.
+  const backToAsk = !conn.enabled && conn.mode === 'auto';
+  if (backToAsk) conn.mode = 'ask';
 
-  p.log('you', `${conn.enabled ? 'Connection' : 'Turned off'} ${name}${conn.enabled ? ` for ${conn.desks.length} desk${conn.desks.length === 1 ? '' : 's'}, ${conn.mode === 'read' ? 'read only' : 'changes need approval'}` : ''}`);
+  const how = conn.mode === 'read' ? 'read only' : conn.mode === 'auto' ? 'changes run on their own, deletes need approval' : 'changes need approval';
+  p.log('you', `${conn.enabled ? 'Connection' : 'Turned off'} ${name}${conn.enabled ? ` for ${conn.desks.length} desk${conn.desks.length === 1 ? '' : 's'}, ${how}` : backToAsk ? ', Auto back to Ask' : ''}`);
   p.commit();
   return conn;
 }

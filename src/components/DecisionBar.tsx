@@ -7,12 +7,13 @@ import { useProjectId } from '../lib/projectContext';
 import { useUnsavedDraft } from '../shell/draftGuard';
 import { AttachButton, AttachmentTray } from '../ui/attachments/AttachmentTray';
 import { useAttachments } from '../ui/attachments/useAttachments';
+import { NotesToggle } from '../ui/NotesToggle';
 
 interface Props {
   item: WorkItem;
   ownerName: string;
   /** Resolves false when the decision did not go through, so the note and images stay. */
-  onDecide: (id: string, decision: Decision, note?: string, attachments?: string[]) => Promise<boolean | void>;
+  onDecide: (id: string, decision: Decision, note?: string, attachments?: string[], includeNotes?: boolean) => Promise<boolean | void>;
   /** Small buttons for inbox rows. */
   compact?: boolean;
 }
@@ -21,6 +22,7 @@ export function DecisionBar({ item, ownerName, onDecide, compact }: Props) {
   const [mode, setMode] = useState<'idle' | 'instruct' | 'send-back'>('idle');
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
+  const [withNotes, setWithNotes] = useState(false);
   const att = useAttachments(useProjectId());
   useUnsavedDraft(mode !== 'idle' && (note.trim().length > 0 || att.count > 0));
 
@@ -32,10 +34,13 @@ export function DecisionBar({ item, ownerName, onDecide, compact }: Props) {
     sending.current = true;
     setBusy(true);
     try {
-      const ok = await onDecide(item.id, decision, withNote, images?.ids ?? []);
+      // The box only applies to the note you are sending; Approve and Hold go without.
+      const notes = withNotes && (decision === 'instruct' || decision === 'send-back');
+      const ok = await onDecide(item.id, decision, withNote, images?.ids ?? [], notes);
       if (ok === false) return;
       setMode('idle');
       setNote('');
+      setWithNotes(false);
       if (images) att.removeKeys(images.keys);
       else att.clear();
     } finally {
@@ -45,6 +50,9 @@ export function DecisionBar({ item, ownerName, onDecide, compact }: Props) {
   };
 
   const held = item.status === 'held';
+  // Finished and checked (or QA gave up on it): Approve closes the ticket.
+  const closes = Boolean(item.qa?.ready) && (item.status === 'signoff' || item.status === 'needs-you' || held);
+  const approveLabel = !closes ? 'Approve' : item.qa?.escalated ? 'Accept as is' : 'Mark done';
   const size = compact ? ' btn-sm' : '';
   // Same rule for the button and Ctrl+Enter.
   const tooLong = note.length > TEXT_LIMIT;
@@ -54,7 +62,7 @@ export function DecisionBar({ item, ownerName, onDecide, compact }: Props) {
     <div className={`decision${compact ? ' compact' : ''}`}>
       <div className="decision-row">
         <button type="button" className={`btn btn-success${size}`} disabled={busy} onClick={() => void run('approve')}>
-          <Check size={compact ? 13 : 15} aria-hidden /> Approve
+          <Check size={compact ? 13 : 15} aria-hidden /> {approveLabel}
         </button>
         {!held && (
           <button type="button" className={`btn btn-outline${size}`} disabled={busy} onClick={() => void run('hold')}>
@@ -90,6 +98,7 @@ export function DecisionBar({ item, ownerName, onDecide, compact }: Props) {
           )}
           <div className="decision-row">
             <AttachButton att={att} />
+            <NotesToggle checked={withNotes} onChange={setWithNotes} />
             <span className="grow" />
             <button
               type="button"

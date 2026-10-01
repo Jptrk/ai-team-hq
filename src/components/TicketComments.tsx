@@ -9,6 +9,7 @@ import { AttachButton, AttachmentTray } from '../ui/attachments/AttachmentTray';
 import { useAttachments } from '../ui/attachments/useAttachments';
 import { Avatar } from '../ui/Avatar';
 import { Lozenge } from '../ui/Lozenge';
+import { NotesToggle } from '../ui/NotesToggle';
 import { agentById, timeAgo } from '../util';
 
 interface Props {
@@ -16,15 +17,16 @@ interface Props {
   item: WorkItem;
   agents: Agent[];
   /** Throws so the box keeps its draft. */
-  onComment: (itemId: string, text: string, attachments: string[]) => Promise<void>;
+  onComment: (itemId: string, text: string, attachments: string[], includeNotes?: boolean) => Promise<void>;
 }
 
-const KIND_LABEL: Record<NonNullable<Comment['kind']>, string> = { comment: '', note: 'Your note', decision: 'Asked for a decision' };
+const KIND_LABEL: Record<NonNullable<Comment['kind']>, string> = { comment: '', note: 'Your note', decision: 'Asked for a decision', qa: 'QA' };
 
 /** Comments on a ticket, newest first, with a box to add yours. */
 export function TicketComments({ pid, item, agents, onComment }: Props) {
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
+  const [withNotes, setWithNotes] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const att = useAttachments(pid);
   useUnsavedDraft(text.trim().length > 0 || att.count > 0);
@@ -43,8 +45,9 @@ export function TicketComments({ pid, item, agents, onComment }: Props) {
     setBusy(true);
     setError(null);
     try {
-      await onComment(item.id, text.trim(), ids);
+      await onComment(item.id, text.trim(), ids, withNotes);
       setText('');
+      setWithNotes(false);
       att.removeKeys(keys);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'The comment did not go through');
@@ -71,6 +74,7 @@ export function TicketComments({ pid, item, agents, onComment }: Props) {
         <AttachmentTray att={att} />
         <div className="comment-box-row">
           <AttachButton att={att} />
+          <NotesToggle checked={withNotes} onChange={setWithNotes} />
           <span className="field-hint">{error ? <span className="bad">{error}</span> : tooLong ? <span className="bad">Too long: {text.length} of {TEXT_LIMIT}</span> : 'Ctrl+Enter to send'}</span>
           <span className="grow" />
           <button type="button" className="btn btn-primary btn-sm" disabled={!canSend} onClick={() => void send()}>
@@ -92,7 +96,7 @@ export function TicketComments({ pid, item, agents, onComment }: Props) {
                 <div className="comment-body">
                   <div className="comment-head">
                     <strong>{nameOf(c.from)}</strong>
-                    {label && <Lozenge tone={c.kind === 'decision' ? 'warning' : 'neutral'}>{label}</Lozenge>}
+                    {label && <Lozenge tone={c.kind === 'decision' ? 'warning' : c.kind === 'qa' ? 'info' : 'neutral'}>{label}</Lozenge>}
                     <time className="comment-time" dateTime={c.ts} title={new Date(c.ts).toLocaleString()}>
                       {timeAgo(c.ts)}
                     </time>

@@ -1,6 +1,7 @@
 import type { Agent, Attachment, Message, State, Thread, WorkItem } from '../shared/types';
 import { mentionsIn, routeInstruction } from './agents';
 import { addComment } from './comments';
+import { finishWork } from './qa';
 import { now, today, uid } from './store';
 
 /**
@@ -315,6 +316,8 @@ export interface SettleInput {
   reason?: string;
   /** The desk commented on its ticket during this run. */
   commented?: boolean;
+  /** Dev-team projects: a finished ticket goes to QA instead of Done. */
+  qa?: boolean;
 }
 
 /**
@@ -339,15 +342,24 @@ export function settleAfterRun(s: State, input: SettleInput, log: (agentId: stri
     if (item && !input.commented && text) addComment(item, { from: input.agentId, text: text.slice(0, 1500) });
     return [];
   }
-  if (!item || item.status === 'needs-you' || item.assignee !== input.agentId) return [];
+  // Waiting on you, with QA, waiting for your sign-off, or already done: nothing for the owner's run to close.
+  if (!item || item.status === 'needs-you' || item.status === 'qa' || item.status === 'signoff' || item.status === 'done' || item.assignee !== input.agentId) return [];
   if (input.awaiting.length) {
     const names = input.awaiting.map((id) => s.agents.find((a) => a.id === id)?.name ?? id).join(', ');
     item.history.push({ ts: now(), text: `Waiting on ${names} in chat` });
     if (item.status === 'todo') item.status = 'in-progress';
     return [];
   }
-  item.status = 'done';
-  item.history.push({ ts: now(), text: `Done: ${input.summary.trim().slice(0, 800) || 'Finished without a summary.'}` });
-  log(input.agentId, `Finished "${item.title}"`);
+  const where = finishWork(s, item, input.summary, input.qa ?? false);
+  log(input.agentId, where === 'done' ? `Finished "${item.title}"` : `Finished "${item.title}", ${where === 'qa' ? 'sent to QA' : 'ready for your sign-off'}`);
   return [];
+}
+
+/** A handed-off ticket is done: tell the desk that handed it over, in the ticket's thread. Desks to wake, or null. */
+export function noticeHandoff(s: State, item: WorkItem, from: string, text: string): { threadId: string; deliver: string[] } | null {
+  const back = item.handoffFrom ? s.agents.find((a) => a.id === item.handoffFrom && !a.isHuman) : undefined;
+  const thread = item.threadId ? findThread(s, item.threadId) : undefined;
+  // Nobody to tell, or the ticket came back to the desk that handed it over.
+  if (!back || back.id === from || !thread || thread.status === 'closed') return null;
+  return { threadId: thread.id, deliver: postAgentMessage(s, thread, from, [back.id], text).deliver };
 }

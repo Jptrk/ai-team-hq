@@ -1,19 +1,24 @@
 import { MessagesSquare, Play, Plus } from 'lucide-react';
-import type { Agent, Decision, Thread, WorkItem } from '../../shared/types';
+import { HUDDLE_KIND_LABEL } from '../../shared/huddle';
+import type { Agent, Decision, HuddleSummary, Thread, WorkItem } from '../../shared/types';
 import { plainText } from '../markdown/plainText';
 import { Avatar } from '../ui/Avatar';
 import { TypeIcon } from '../ui/TypeIcon';
-import { agentById, latestDecision, ticketKey } from '../util';
+import { agentById, doneSummary, latestDecision, signoffVerdict, ticketKey } from '../util';
 import { DecisionBar } from './DecisionBar';
+import { ProposalRow, type ProposalDecision } from './huddles/Proposals';
 
 interface Props {
   items: WorkItem[];
   agents: Agent[];
   projectKey: string;
   paused: Thread[];
+  huddles: HuddleSummary[];
+  onDecideProposal: ProposalDecision;
+  onOpenHuddle: (id: string) => void;
   onOpen: (key: string) => void;
   /** Resolves false when the decision did not go through. */
-  onDecide: (id: string, decision: Decision, note?: string, attachments?: string[]) => Promise<boolean | void>;
+  onDecide: (id: string, decision: Decision, note?: string, attachments?: string[], includeNotes?: boolean) => Promise<boolean | void>;
   onOpenAgent: (id: string) => void;
   onOpenThread: (id: string) => void;
   onResumeThread: (id: string) => Promise<void>;
@@ -23,8 +28,13 @@ interface Props {
 function Row({ item, agents, projectKey, onOpen, onDecide, onOpenAgent }: { item: WorkItem } & Pick<Props, 'agents' | 'projectKey' | 'onOpen' | 'onDecide' | 'onOpenAgent'>) {
   const owner = agentById(agents, item.assignee);
   const key = ticketKey(item, projectKey);
-  const ask = latestDecision(item);
-  const summary = ask ? `${ask.title ? `${ask.title}. ` : ''}${ask.text}` : item.summary;
+  // Sign-off rows show QA's pass from this round, or what the owner said it finished; decisions show the ask.
+  const ask = item.status === 'signoff' ? signoffVerdict(item) : latestDecision(item);
+  const summary = ask
+    ? `${ask.title ? `${ask.title}. ` : ''}${ask.text}`
+    : item.status === 'signoff'
+      ? `Finished. Check it and sign it off. ${doneSummary(item) ?? item.summary}`
+      : item.summary;
   const images = (item.attachments?.length ?? 0) + (item.comments ?? []).reduce((n, c) => n + (c.attachments?.length ?? 0), 0);
   return (
     <li className="inbox-row">
@@ -60,8 +70,10 @@ function Row({ item, agents, projectKey, onOpen, onDecide, onOpenAgent }: { item
 export function NeedsYou(p: Props) {
   const decide = p.items.filter((i) => i.status === 'needs-you').sort((a, b) => b.dated.localeCompare(a.dated) || (b.number ?? 0) - (a.number ?? 0));
   const held = p.items.filter((i) => i.status === 'held');
+  const signoff = p.items.filter((i) => i.status === 'signoff').sort((a, b) => (b.number ?? 0) - (a.number ?? 0));
+  const proposals = p.huddles.flatMap((h) => h.proposals.filter((x) => x.status === 'pending').map((x) => ({ h, x })));
 
-  if (!decide.length && !held.length && !p.paused.length) {
+  if (!decide.length && !held.length && !p.paused.length && !proposals.length && !signoff.length) {
     return (
       <div className="empty inbox-empty">
         <p className="empty-title">Inbox zero.</p>
@@ -83,6 +95,41 @@ export function NeedsYou(p: Props) {
           <ul className="inbox-list">
             {decide.map((i) => (
               <Row key={i.id} item={i} {...p} />
+            ))}
+          </ul>
+        </section>
+      )}
+      {signoff.length > 0 && (
+        <section className="inbox-group">
+          <h2 className="inbox-heading">
+            Ready for sign-off <span className="badge muted">{signoff.length}</span>
+          </h2>
+          <ul className="inbox-list">
+            {signoff.map((i) => (
+              <Row key={i.id} item={i} {...p} />
+            ))}
+          </ul>
+        </section>
+      )}
+      {proposals.length > 0 && (
+        <section className="inbox-group">
+          <h2 className="inbox-heading">
+            From huddles <span className="badge muted">{proposals.length}</span>
+          </h2>
+          <ul className="inbox-list proposal-list">
+            {proposals.map(({ h, x }) => (
+              <ProposalRow
+                key={x.id}
+                huddleId={h.id}
+                proposal={x}
+                agents={p.agents}
+                items={p.items}
+                projectKey={p.projectKey}
+                onDecide={p.onDecideProposal}
+                onOpenTicket={p.onOpen}
+                compact
+                source={{ label: `${HUDDLE_KIND_LABEL[h.kind]} #${h.number}`, onOpen: () => p.onOpenHuddle(h.id) }}
+              />
             ))}
           </ul>
         </section>

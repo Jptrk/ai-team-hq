@@ -28,7 +28,7 @@ export function toolLabel(name: string): string {
   return cut === -1 ? rest : `${rest.slice(0, cut)} ${rest.slice(cut + 2)}`;
 }
 
-type Block = { type?: string; id?: string; name?: string; tool_use_id?: string; content?: unknown; source?: { type?: string; media_type?: string; data?: string } };
+type Block = { type?: string; id?: string; name?: string; tool_use_id?: string; is_error?: boolean; content?: unknown; source?: { type?: string; media_type?: string; data?: string } };
 
 function blocksOf(msg: unknown): Block[] {
   const content = (msg as { message?: { content?: unknown } } | null)?.message?.content;
@@ -49,6 +49,14 @@ export function toolResultIdsIn(msg: unknown): string[] {
   return blocksOf(msg)
     .filter((b) => b.type === 'tool_result' && typeof b.tool_use_id === 'string')
     .map((b) => b.tool_use_id!);
+}
+
+/** The tool results in a user message: which tool_use each answers, and whether the tool did its job. */
+export function toolResultsIn(msg: unknown): { id: string; ok: boolean }[] {
+  if ((msg as { type?: string } | null)?.type !== 'user') return [];
+  return blocksOf(msg)
+    .filter((b) => b.type === 'tool_result' && typeof b.tool_use_id === 'string')
+    .map((b) => ({ id: b.tool_use_id!, ok: b.is_error !== true }));
 }
 
 export interface ToolImage {

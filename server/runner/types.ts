@@ -22,6 +22,10 @@ export interface RunInput {
   unread?: Message[];
   /** Images the founder sent with what woke this desk. They go straight into the prompt. */
   images?: Attachment[];
+  /** Huddle runs: which huddle, and whether this desk adds its turn or sums up the round. */
+  huddle?: { id: string; role: 'participant' | 'facilitator' };
+  /** Put the team notes in the prompt for this run. */
+  includeNotes?: boolean;
   hooks: RunHooks;
 }
 
