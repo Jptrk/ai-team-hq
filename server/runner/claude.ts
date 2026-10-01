@@ -25,7 +25,7 @@ import { isReadOnlyTool } from '../mcp';
 import { folderExists, HQ_ROOT, instructionsFileIn, isInside } from '../paths';
 import { now, uid, WORKSPACES, type Project } from '../store';
 import { imageMarker, oneMessage, userContent } from './content';
-import { attachFiles, deskImages, isCaptureTool, keepShots, toolImagesIn, toolResultIdsIn, toolUsesIn, waitForShots, type ReadyImages, type Shots } from './screenshots';
+import { attachFiles, deskImages, isCaptureTool, keepLinkedShots, keepShots, toolImageLinksIn, toolImagesIn, toolResultIdsIn, toolUsesIn, waitForShots, webImages, withImageNote, type ReadyImages, type Shots } from './screenshots';
 import type { AgentRunner, RunHooks, RunInput, RunOutcome } from './types';
 
 /**
@@ -125,6 +125,25 @@ function systemPromptFor(p: Project, agent: Agent, dir: string, connections: All
     `Tickets on this project are numbered ${meta.key}-1, ${meta.key}-2, and so on.`,
     '',
     `Your workspace is the current folder (${dir}). ROLE.md describes your desk. memory.md is yours: read it first, and update it when you learn something durable. Put every deliverable and full write-up in reports/ as a markdown file with a short kebab-case name.`,
+    '',
+    '## How your writing shows up',
+    `Your messages, comments, ticket briefs and decision summaries are shown to ${ownerName} as formatted markdown. Write them in markdown, still short:`,
+    '- **Bold** for names, decisions and key terms. Never ALL CAPS for emphasis.',
+    '- A "-" list for three or more parallel items, and "1." for steps or numbered questions.',
+    '- `Code` formatting for file paths, commands and identifiers.',
+    '- A short "###" heading only when a long message has separate sections. Never for a one-paragraph reply.',
+    '- Links as [text](url). A table only for a real side-by-side comparison.',
+    'Titles, post_update lines and report_done summaries are shown as plain text, so no markdown in those.',
+    '',
+    '## Voice',
+    `Write to ${ownerName} like a sharp colleague, not a report generator: first person, contractions, plain everyday words.`,
+    '- Lead with the answer or the result, then the reason.',
+    '- If you got something wrong, say so in one line ("Fair, I missed that.") and move on. No grovelling, no repeated apologies.',
+    '- No filler: no "Great question", no "I hope this helps", no sign-offs, no emojis.',
+    '- Never claim feelings or experiences you did not have, and never describe work you did not do. Accuracy comes before tone.',
+    `- Anything you post outside HQ through a connection goes out under ${ownerName}'s name: write it plainly, the way ${ownerName} would, not in a persona.`,
+    '- Messages to teammates stay strictly about the work (see Talking to teammates).',
+    'ROLE.md may give your desk its own voice; follow it within these rules.',
   ];
 
   if (projectDir) {
@@ -150,7 +169,8 @@ function systemPromptFor(p: Project, agent: Agent, dir: string, connections: All
     '- Call post_update once when you start so the founder sees what you are on.',
     "- To tell the founder something about a ticket (progress, a question, an answer), use comment_on_ticket. Never rewrite a ticket's description; it stays as the founder wrote it.",
     '- Images the founder attached are shown to you with the prompt. Older ones are listed by file path; open them with Read when you need them.',
-    '- To show the founder an image: take it with a connected tool (for example Figma get_screenshot), then pass screenshots: 1 to comment_on_ticket, send_message or raise_for_decision to attach the latest one. A PNG, JPEG, WebP or GIF file you can read goes with files: ["path"]. Show, do not describe, when a picture is the point.',
+    '- To show the founder an image: take it with a connected tool (for example Figma get_screenshot), then pass screenshots: 1 to comment_on_ticket, send_message or raise_for_decision to attach the latest one. This works when the tool returns a picture and when it returns an image link (Figma does): HQ downloads the link for you. A PNG, JPEG, WebP or GIF file you can read goes with files: ["path"]. A public image on the web goes with urls: ["https://…/photo.jpg"], the address of the image file itself, not the page it is on; HQ downloads it and credits the site. Show, do not describe, when a picture is the point.',
+    '- Never paste an image link as markdown (![...](url)) instead of attaching it: HQ does not load outside images, so it shows as a plain link, and the link expires.',
     '- Do not invent facts about clients, numbers, code, or history you have no record of. Say what you would need and where it should come from.',
     reason === 'comment'
       ? '- You were woken by the founder commenting on your ticket. Answer with comment_on_ticket. Only do more work if a comment asks for it; if that work needs the founder, use raise_for_decision. Never close the ticket to answer a comment.'
@@ -417,7 +437,7 @@ function hqServer(ctx: RunContext) {
 
   const postUpdate = tool(
     'post_update',
-    'Post a one-line status to the activity feed saying what you are doing right now. Call it once when you start a task.',
+    'Post a one-line status to the activity feed saying what you are doing right now. Call it once when you start a task. Plain text, no markdown.',
     { text: z.string().min(3).max(200).describe('One line, present tense, e.g. "Drafting the reply to Paul"') },
     async ({ text }) => {
       const agent = p.state.agents.find((a) => a.id === ctx.agent.id);
@@ -433,17 +453,27 @@ function hqServer(ctx: RunContext) {
   const imageArgs = {
     screenshots: z.number().int().min(1).max(6).optional().describe('Attach your latest N screenshots taken this run with a connected tool, e.g. Figma get_screenshot. Usually 1.'),
     files: z.array(z.string().min(1).max(400)).max(6).optional().describe('PNG, JPEG, WebP or GIF files to attach, from your workspace or the project folder'),
+    urls: z
+      .array(z.string().min(8).max(2000))
+      .max(6)
+      .optional()
+      .describe('Public https addresses of image files to download and attach, e.g. https://images.pexels.com/photos/…/photo.jpeg (the image itself, not the web page it is on). HQ adds where each came from.'),
   };
   const projectDir = projectDirOf(p);
   const readable = [ctx.dir, ...(projectDir ? [projectDir] : []), attachmentsDir(p.id)];
   /** Check the images a call asks for, after any screenshot still coming back this turn. Nothing is saved until save(). */
-  const imagesFrom = async (args: { screenshots?: number; files?: string[] }): Promise<ReadyImages | string> => {
-    if ((args.screenshots ?? 0) > 0 && !(await waitForShots(ctx.shots))) return 'A screenshot is still on its way. Call this again once its result is back.';
+  const imagesFrom = async (args: { screenshots?: number; files?: string[]; urls?: string[] }): Promise<ReadyImages | string> => {
+    // Web images are downloaded and checked first; nothing is saved unless the whole call goes through.
+    const web = args.urls?.length ? await webImages(args.urls) : [];
+    if (typeof web === 'string') return web;
+    // A screenshot that came back as a link is downloaded first (up to 10 seconds), so wait a little longer than that.
+    if ((args.screenshots ?? 0) > 0 && !(await waitForShots(ctx.shots, 12_000))) return 'A screenshot is still on its way. Call this again once its result is back.';
     return deskImages(
       args,
       ctx.shots,
       (files) => attachFiles(p.id, ctx.agent.id, files, readable, ctx.dir),
       (data) => saveUpload(p.id, data, ctx.agent.id),
+      web,
     );
   };
   const shown = (r: ReadyImages) => (r.count ? ` with ${r.count} image${r.count === 1 ? '' : 's'} (from ${r.sources.join(', ')})` : '');
@@ -453,7 +483,7 @@ function hqServer(ctx: RunContext) {
     'Hand something to the founder. Use it for anything that would leave the building (email, message, post, merge), commit money, promise a date, or needs a call only they can make. The task pauses until they decide.',
     {
       title: z.string().min(5).max(120).describe('Short, specific, starts with a verb, e.g. "Reply to Paul: confirm Tue kickoff"'),
-      summary: z.string().min(20).max(1200).describe('2-5 sentences: what you did, what you need from them, what happens if they approve'),
+      summary: z.string().min(20).max(1200).describe('In markdown, 2-5 sentences: what you did, what you need from them, what happens if they approve. Bold the decision; use a short list when there are several items.'),
       kind: z.enum(['decide', 'review']).describe('decide = yes/no on an action; review = look at a draft, a diff, or a plan'),
       report: z.string().max(200).optional().describe('File name under reports/ of the draft or full write-up, e.g. "plan.md"'),
       client: z.string().max(80).optional().describe('Client, app, or area this concerns'),
@@ -472,7 +502,7 @@ function hqServer(ctx: RunContext) {
       if (!ctx.raised && context && owns(ctx)) {
         // The founder's description stays as written. The ask is a comment on the ticket.
         target = context;
-        addComment(target, { from: ctx.agent.id, kind: 'decision', title: args.title, text: args.summary, attachments: images });
+        addComment(target, { from: ctx.agent.id, kind: 'decision', title: args.title, text: withImageNote(args.summary, ready), attachments: images });
         if (ctx.item && target.id === ctx.item.id) ctx.commented = true;
         target.kind = args.kind as ItemKind;
         target.status = 'needs-you';
@@ -485,7 +515,7 @@ function hqServer(ctx: RunContext) {
           kind: args.kind as ItemKind,
           status: 'needs-you',
           title: args.title,
-          summary: args.summary,
+          summary: withImageNote(args.summary, ready),
           client: args.client ?? context?.client,
           from: ctx.agent.id,
           assignee: ctx.agent.id,
@@ -516,7 +546,7 @@ function hqServer(ctx: RunContext) {
     'comment_on_ticket',
     "Comment on a ticket so the founder sees it: progress, a question, an answer to their comment. Use this instead of rewriting a ticket's description.",
     {
-      text: z.string().min(2).max(1500).describe('The comment. Short and concrete.'),
+      text: z.string().min(2).max(1500).describe('The comment, in markdown: **bold** key terms, - lists, `code` for paths. Short and concrete.'),
       ticket: z.string().max(40).optional().describe(`Ticket key like ${p.meta.key}-12. Leave out for the ticket you are on.`),
       ...imageArgs,
     },
@@ -533,7 +563,7 @@ function hqServer(ctx: RunContext) {
       // Images last, so a refused call leaves no files behind.
       const ready = await imagesFrom(args);
       if (typeof ready === 'string') return fail(ready);
-      addComment(target, { from: ctx.agent.id, text: args.text, attachments: ready.save() });
+      addComment(target, { from: ctx.agent.id, text: withImageNote(args.text, ready), attachments: ready.save() });
       ctx.comments += 1;
       if (ctx.item && target.id === ctx.item.id) ctx.commented = true;
       p.log(ctx.agent.id, `Commented on ${p.ticket(target)} "${target.title}"`);
@@ -546,7 +576,7 @@ function hqServer(ctx: RunContext) {
     'report_done',
     'Mark your ticket finished. Use it for routine internal work that needed no decision, or after the founder approved something and you finalized it. Only the ticket owner can do this.',
     {
-      summary: z.string().min(10).max(800).describe('1-3 sentences on what was done and where to find it'),
+      summary: z.string().min(10).max(800).describe('1-3 plain sentences (shown as plain text, no markdown) on what was done and where to find it'),
       report: z.string().max(200).optional().describe('File name under reports/ of the deliverable, e.g. "apps-inventory.md"'),
     },
     async (args) => {
@@ -582,7 +612,7 @@ function hqServer(ctx: RunContext) {
     `Message up to ${MAX_SENDS_PER_RUN === 3 ? '3' : MAX_SENDS_PER_RUN} teammates, or "founder" to answer ${ownerName}. Each teammate you message is woken for a real run, so only message when you need something. You are woken again with their reply.`,
     {
       to: z.array(z.string().min(1).max(40)).min(1).max(3).describe('Teammate names, e.g. ["Leo"], or ["founder"]'),
-      text: z.string().min(2).max(1500).describe('The message. Short and concrete.'),
+      text: z.string().min(2).max(1500).describe('The message, in markdown: **bold** key terms, - lists for 3+ items, `code` for paths. Short and concrete.'),
       thread: z.string().max(40).optional().describe('Thread id. Leave out to use the thread you were woken for, or your ticket\'s thread. "new" starts a new thread.'),
       title: z.string().min(3).max(80).optional().describe('Title, only when starting a new thread'),
       ...imageArgs,
@@ -602,7 +632,7 @@ function hqServer(ctx: RunContext) {
       const to = [...r.agents.map((a) => a.id), ...(r.founder ? ['you'] : [])];
       let posted;
       try {
-        posted = postAgentMessage(s, picked, ctx.agent.id, to, args.text, undefined, ready.save());
+        posted = postAgentMessage(s, picked, ctx.agent.id, to, withImageNote(args.text, ready), undefined, ready.save());
       } catch (e) {
         if (e instanceof ChatError) return fail(e.message);
         throw e;
@@ -632,7 +662,7 @@ function hqServer(ctx: RunContext) {
     {
       to: z.string().min(1).max(40).describe('Teammate name'),
       title: z.string().min(5).max(120).describe('Ticket title, starts with a verb'),
-      brief: z.string().min(20).max(1500).describe('What to do, what done looks like, and anything they need to know'),
+      brief: z.string().min(20).max(1500).describe('In markdown: what to do, what done looks like, and anything they need to know. Use a short list for steps.'),
       thread: z.string().max(40).optional().describe('Thread id to discuss it in. Leave out for the current one.'),
     },
     async (args) => {
@@ -855,7 +885,11 @@ async function runOnce(input: RunInput, ctx: RunContext, resume: string | undefi
         }
       } else if (msg.type === 'user') {
         keepShots(ctx.shots, toolImagesIn(msg, toolById));
-        for (const id of toolResultIdsIn(msg)) ctx.shots.pending.delete(id);
+        // Figma's online server returns a screenshot as a link that expires: download it now. Those calls stay pending until it lands.
+        const links = toolImageLinksIn(msg, toolById);
+        const fetching = new Set(links.map((l) => l.id));
+        for (const id of toolResultIdsIn(msg)) if (!fetching.has(id)) ctx.shots.pending.delete(id);
+        if (links.length) void keepLinkedShots(ctx.shots, links);
       }
       if (msg.type !== 'result') continue;
       const sessionId = (msg as { session_id?: string }).session_id;

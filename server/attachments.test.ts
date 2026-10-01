@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { Attachment, State } from '../shared/types';
-import type { Shots } from './runner/screenshots';
+import type { FetchLike, Shots, WebImage } from './runner/screenshots';
 
 // The store reads data/ from the working directory, so move into a scratch folder first.
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hq-attach-'));
@@ -341,6 +341,121 @@ test('reports: a link inside reports/ that points outside is refused', () => {
   assert.equal(claude.resolveReport(PID, 'leo', 'linked/secret.md'), null);
   assert.equal(claude.resolveReport(PID, 'leo', 'linked'), null, 'the link itself too');
   assert.equal(claude.resolveReport(PID, 'leo', 'plan.md'), path.join(reports, 'plan.md'), 'real reports beside the link still resolve');
+});
+
+// ---------- screenshots that come back as a link (Figma's online server) ----------
+const FIGMA_ASSET = 'https://www.figma.com/api/mcp/asset/124d3eeb-7043-41f1-b617-13a1e6669ab9.png';
+const figmaResult = (id: string, url = FIGMA_ASSET) =>
+  toolResult(id, [{ type: 'text', text: JSON.stringify({ image_url: url, width: 1024, height: 431, format: 'png' }) }, { type: 'text', text: 'Download the PNG by running: curl …' }]);
+/** A fetch that serves from a table: url -> response. Records every url asked for. */
+const fakeFetch = (table: Record<string, () => Response>, asked: string[] = []) =>
+  (async (url: string) => {
+    asked.push(url);
+    const hit = table[url];
+    if (!hit) throw new Error('offline');
+    return hit();
+  }) as FetchLike;
+const pngResponse = (buf: Buffer) => () => new Response(new Uint8Array(buf), { status: 200, headers: { 'content-type': 'image/png' } });
+
+test('image links: only https links on Figma hosts are downloaded', () => {
+  assert.ok(shotsMod.allowedImageLink(FIGMA_ASSET));
+  assert.ok(shotsMod.allowedImageLink('https://s3-figma-videos.figma.com/x.png'));
+  for (const bad of ['http://www.figma.com/x.png', 'https://evil.example/x.png', 'https://figma.com.evil.example/x.png', 'https://user:pw@www.figma.com/x.png', 'https://www.figma.com:8443/x.png', 'https://127.0.0.1/x.png', 'https://[::1]/x.png', 'https://bucket.s3.amazonaws.com/x.png', 'file:///C:/x.png', 'not a url']) {
+    assert.equal(shotsMod.allowedImageLink(bad), null, bad);
+  }
+});
+
+test('image links: found in a connected tool result, never from HQ tools or prose', () => {
+  const byId = new Map([['t1', 'mcp__figma__get_screenshot'], ['t2', 'mcp__hq__send_message'], ['t3', 'mcp__figma__get_screenshot']]);
+  const links = shotsMod.toolImageLinksIn(figmaResult('t1'), byId);
+  assert.deepEqual(links, [{ id: 't1', tool: 'mcp__figma__get_screenshot', url: FIGMA_ASSET }]);
+  assert.equal(shotsMod.toolImageLinksIn(figmaResult('t2'), byId).length, 0, 'HQ tools never count');
+  assert.equal(shotsMod.toolImageLinksIn(toolResult('t3', [{ type: 'text', text: `see ${FIGMA_ASSET}` }]), byId).length, 0, 'a link in prose is not picked up');
+  assert.equal(shotsMod.toolImageLinksIn(figmaResult('t1', 'https://evil.example/x.png'), byId).length, 0, 'a link off Figma is ignored');
+});
+
+test('image links: downloaded, size-capped, redirects only to allowed hosts', async () => {
+  const S3 = 'https://figma-alpha-api.s3.us-west-2.amazonaws.com/images/abc.png';
+  const redirectTo = (to: string) => () => new Response(null, { status: 302, headers: { location: to } });
+  assert.ok(Buffer.isBuffer(await shotsMod.fetchImageLink(FIGMA_ASSET, fakeFetch({ [FIGMA_ASSET]: pngResponse(PNG) }))));
+  const viaS3 = await shotsMod.fetchImageLink(FIGMA_ASSET, fakeFetch({ [FIGMA_ASSET]: redirectTo(S3), [S3]: pngResponse(PNG) }));
+  assert.ok(Buffer.isBuffer(viaS3) && viaS3.equals(PNG), 'a redirect to storage is followed');
+  const asked: string[] = [];
+  assert.match(String(await shotsMod.fetchImageLink(FIGMA_ASSET, fakeFetch({ [FIGMA_ASSET]: redirectTo('http://169.254.169.254/latest/meta-data') }, asked))), /redirected somewhere/);
+  assert.deepEqual(asked, [FIGMA_ASSET], 'the bad redirect target is never fetched');
+  assert.match(String(await shotsMod.fetchImageLink(FIGMA_ASSET, fakeFetch({ [FIGMA_ASSET]: pngResponse(Buffer.concat([PNG, Buffer.alloc(3_800_000)])) }))), /3\.75 MB/);
+  assert.match(String(await shotsMod.fetchImageLink(FIGMA_ASSET, fakeFetch({ [FIGMA_ASSET]: () => new Response('gone', { status: 403 }) }))), /HTTP 403/);
+  assert.match(String(await shotsMod.fetchImageLink(FIGMA_ASSET, fakeFetch({}))), /failed or took too long/);
+  assert.match(String(await shotsMod.fetchImageLink('https://evil.example/x.png', fakeFetch({}))), /not on a host/);
+});
+
+test('image links: held like an inline screenshot, pending until downloaded, junk skipped with a reason', async () => {
+  const shots = newShots();
+  const links = shotsMod.toolImageLinksIn(figmaResult('t1'), new Map([['t1', 'mcp__figma__get_screenshot']]));
+  const done = shotsMod.keepLinkedShots(shots, links, fakeFetch({ [FIGMA_ASSET]: pngResponse(pngNo(7)) }));
+  assert.ok(shots.pending.has('t1'), 'the call stays pending while it downloads');
+  await done;
+  assert.equal(shots.pending.size, 0);
+  assert.equal(shots.recent.length, 1);
+  assert.ok(shots.recent[0].data.equals(pngNo(7)));
+  // Then a desk asks for screenshots: 1 and gets it.
+  const ready = shotsMod.deskImages({ screenshots: 1 }, shots, noFiles, saveAsLeo);
+  assert.ok(typeof ready !== 'string' && ready.count === 1 && ready.sources[0] === 'figma get_screenshot');
+  // A link that serves HTML instead of an image is skipped and explained.
+  const bad = newShots();
+  await shotsMod.keepLinkedShots(bad, links, fakeFetch({ [FIGMA_ASSET]: () => new Response('<html>login</html>', { status: 200 }) }));
+  assert.equal(bad.recent.length, 0);
+  assert.match(String(bad.skipped), /not a PNG/);
+  const failed = newShots();
+  await shotsMod.keepLinkedShots(failed, links, fakeFetch({}));
+  assert.match(String(failed.skipped), /could not be downloaded/);
+  assert.match(String(shotsMod.deskImages({ screenshots: 1 }, failed, noFiles, saveAsLeo)), /could not be downloaded/);
+});
+
+// ---------- images from the open web ----------
+test('web images: only public addresses count', () => {
+  for (const ok of ['8.8.8.8', '151.101.1.69', '2606:4700::6810:84e5']) assert.ok(shotsMod.isPublicAddress(ok), ok);
+  for (const bad of ['127.0.0.1', '10.1.2.3', '172.16.0.1', '172.31.255.255', '192.168.1.10', '169.254.169.254', '100.64.0.1', '0.0.0.0', '224.0.0.1', '255.255.255.255', '192.0.2.5', '198.18.0.1', '203.0.113.9', '::1', '::', 'fc00::1', 'fd12::1', 'fe80::1', 'ff02::1', '::ffff:127.0.0.1', '::ffff:10.0.0.1', '64:ff9b::10.0.0.1', '2001:db8::1', 'not-an-ip']) {
+    assert.equal(shotsMod.isPublicAddress(bad), false, bad);
+  }
+});
+
+test('web images: only https addresses of named public sites are tried', () => {
+  assert.ok(shotsMod.webImageUrl('https://images.pexels.com/photos/1/pexels-photo-1.jpeg'));
+  assert.ok(shotsMod.webImageUrl('https://example.com:443/a.png'));
+  for (const bad of ['http://images.pexels.com/a.jpg', 'https://127.0.0.1/a.png', 'https://[::1]/a.png', 'https://localhost/a.png', 'https://app.localhost/a.png', 'https://intranet/a.png', 'https://user:pw@example.com/a.png', 'https://example.com:8443/a.png', 'ftp://example.com/a.png', 'file:///C:/a.png', 'javascript:alert(1)', 'nope']) {
+    assert.equal(shotsMod.webImageUrl(bad), null, bad);
+  }
+});
+
+test('web images: a name that resolves to this machine is refused before connecting', async () => {
+  // localhost.localtest.me style names are not needed: "localhost" is refused by name, and a raw IP by shape.
+  assert.match(String(await shotsMod.fetchWebImage('https://127.0.0.1/a.png')), /public websites/);
+  assert.match(String(await shotsMod.fetchWebImage('http://example.com/a.png')), /public websites/);
+});
+
+test('web images: downloads are checked as images, pages are explained, and the site is credited', async () => {
+  const table: Record<string, Buffer | string> = {
+    'https://images.pexels.com/photos/1/a.jpeg': JPEG,
+    'https://www.pexels.com/photo/a-cat-1/': Buffer.from('<!doctype html><title>Cat</title>'),
+    'https://cdn.example.com/b.png': PNG,
+  };
+  const fetchOne = async (u: string) => table[u] ?? 'the download failed';
+  const good = await shotsMod.webImages(['https://images.pexels.com/photos/1/a.jpeg', 'https://cdn.example.com/b.png'], fetchOne);
+  assert.ok(Array.isArray(good) && good.length === 2 && good[0].source === 'images.pexels.com');
+  assert.match(String(await shotsMod.webImages(['https://www.pexels.com/photo/a-cat-1/'], fetchOne)), /not an image file \(it may be a web page\)/);
+  assert.match(String(await shotsMod.webImages(['https://nowhere.example/x.png'], fetchOne)), /Could not attach the image from nowhere\.example: the download failed/);
+  assert.match(String(await shotsMod.webImages(Array.from({ length: 7 }, (_, i) => `https://cdn.example.com/${i}.png`), fetchOne)), /at most 6/i);
+  const before = fileCount();
+  const ready = shotsMod.deskImages({}, newShots(), noFiles, saveAsLeo, good as WebImage[]);
+  assert.ok(typeof ready !== 'string');
+  if (typeof ready === 'string') return;
+  assert.equal(ready.count, 2);
+  assert.equal(ready.note, 'Images from images.pexels.com, cdn.example.com');
+  assert.equal(fileCount(), before, 'nothing is saved before save()');
+  assert.equal(ready.save().length, 2);
+  assert.equal(shotsMod.withImageNote('Here you go', ready), 'Here you go\n\n*Images from images.pexels.com, cdn.example.com*');
+  assert.equal(shotsMod.withImageNote('No web images', { note: undefined }), 'No web images');
 });
 
 let failed = 0;

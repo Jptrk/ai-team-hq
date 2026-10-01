@@ -121,6 +121,8 @@ Instruct and Send back notes, and ticket descriptions.
 - **Shortcuts:** Ctrl+B, Ctrl+I and Ctrl+E (code) work, Ctrl+K adds a link (https or mailto only), and Ctrl+Enter sends. Create, comments and descriptions also have a button bar.
 - **Pasting markdown:** a table, list or heading pasted from somewhere else turns into the real thing. Plain sentences stay plain.
 - **Markdown underneath:** what gets saved and sent to desks is still plain markdown, so nothing else changes.
+- **Desks write markdown too:** every desk is told its messages, comments, briefs and decision summaries show as formatted markdown. It uses bold, lists and `code` instead of ALL CAPS. Titles, status lines and "done" summaries stay plain text.
+- **Voice:** desks write to you like a sharp colleague: first person, plain words, answer first. They skip filler, emojis and grovelling apologies, and never claim feelings or work they didn't have. To give one desk its own personality, add a line to its `ROLE.md`; it's read at the start of every run, with no restart.
 - **Loading:** the editor loads in the background after HQ opens, in its own file. Until it arrives, a plain text box works the same way.
 
 **Editing a description.** A ticket's description can be edited only while the ticket is in **To do**.
@@ -153,6 +155,21 @@ images** beside Description adds images to the description itself.
   can read with `files: ["path"]`. They show as thumbnails like yours. Only
   images from the desk's own connections count, never a file it merely read, and files must be
   in its workspace, the project folder, or this project's attachments.
+- **Images from the web.** A desk can attach a public image by its address with
+  `urls: ["https://…/photo.jpg"]`, for example a Pexels photo. It must be the image file itself,
+  not the page it's on. HQ downloads it and adds a credit line under the post, such as
+  *Image from images.pexels.com*.
+  - **Safety:** only https addresses of named public sites. HQ refuses any address that turns out to
+    point at this machine or the local network, at every redirect.
+  - **Limits:** 10 seconds and 3.75 MB, and the file must really be a PNG, JPEG, WebP or GIF.
+- **Figma screenshots that come back as a link.** Figma's online server answers `get_screenshot`
+  with a short-lived image link instead of the picture. HQ downloads that link as soon as it
+  arrives, so `screenshots: 1` works with it too.
+  - **Limits:** only https links on Figma's own hosts are downloaded, redirects only to Figma or its
+    cloud storage, within 10 seconds and 3.75 MB.
+  - **Checks:** the file must really be a PNG, JPEG, WebP or GIF, the same as your uploads.
+  - **Pasted links:** a link pasted as markdown `![](...)` still shows only as a link, because HQ never
+    loads outside images.
 
 **Comments.** Every ticket has a **Comments | History** switch.
 
