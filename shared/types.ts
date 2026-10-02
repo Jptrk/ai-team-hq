@@ -206,6 +206,33 @@ export interface ProjectConnection {
   desks: string[];
   /** ask = reads run, changes wait for approval; read = changes are never allowed; auto = changes run, deletes wait for approval. */
   mode: ConnectionMode;
+  /**
+   * Which server it was when you turned it on: a hash of its masked shape, never the command or URL
+   * itself. If Claude Code's setup changes, the connection stops until you turn it on again.
+   */
+  fingerprint?: string;
+}
+
+/** A sign-in running for one server. */
+export interface ConnectionLogin {
+  state: 'starting' | 'waiting' | 'failed';
+  /** The page to sign in on, once the server gives one. */
+  authUrl?: string;
+  error?: string;
+  /** This SDK can't sign in from HQ: log in from a terminal instead. */
+  unsupported?: boolean;
+  expiresAt: string;
+}
+
+/** What Add connection saves, for you to review before it does. */
+export interface AddPreview {
+  /** Send back as confirm. Secrets are masked. */
+  preview: string;
+  /** The command it runs on this PC, for local servers. */
+  runs: string | null;
+  /** Which file it goes in. */
+  location: string;
+  warnings: string[];
 }
 
 export type ConnectionState = 'connected' | 'needs-login' | 'failed' | 'disabled' | 'unchecked';
@@ -223,12 +250,20 @@ export interface ConnectionRow extends McpServerInfo {
   check?: ConnectionCheck;
   /** False when the server is saved in HQ but no longer in any config. */
   present: boolean;
+  /** Its setup in Claude Code changed since you turned it on, so desks don't get it until you turn it on again. */
+  changed?: boolean;
+  login?: ConnectionLogin;
 }
 
 export interface ConnectionsResponse {
   rows: ConnectionRow[];
   /** claude.ai connectors are found by a check; this is when the last check ran. */
   lastCheck?: string;
+  /** HQ can open Windows Terminal in the project folder. */
+  canTerminal?: boolean;
+  /** Set after an add: the new server's name. */
+  added?: string;
+  warnings?: string[];
 }
 
 export type ThreadStatus = 'open' | 'paused' | 'closed';

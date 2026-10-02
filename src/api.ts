@@ -1,9 +1,12 @@
+import type { AddRequest } from '../shared/mcpSpec';
 import type {
+  AddPreview,
   Agent,
   Attachment,
   Comment,
   ConnectionMode,
   ConnectionsResponse,
+  McpSource,
   Decision,
   Huddle,
   HuddleKind,
@@ -97,7 +100,17 @@ export const api = {
   reset: (pid: string) => request<StateResponse>(`${pp(pid)}/reset`, json('POST')),
 
   connections: (pid: string) => request<ConnectionsResponse>(`${pp(pid)}/connections`),
-  checkConnections: (pid: string) => request<ConnectionsResponse>(`${pp(pid)}/connections/check`, json('POST')),
+  /** All servers plus claude.ai connectors, or just `names`. */
+  checkConnections: (pid: string, names?: string[]) => request<ConnectionsResponse>(`${pp(pid)}/connections/check`, json('POST', names ? { names } : {})),
+  previewConnection: (pid: string, body: AddRequest) => request<AddPreview>(`${pp(pid)}/connections/preview`, json('POST', body)),
+  addConnection: (pid: string, body: AddRequest, confirm: string) => request<ConnectionsResponse>(`${pp(pid)}/connections`, json('POST', { ...body, confirm })),
+  removeConnection: (pid: string, name: string, source: McpSource) =>
+    request<ConnectionsResponse>(`${pp(pid)}/connections/${encodeURIComponent(name)}?source=${encodeURIComponent(source)}`, json('DELETE')),
+  loginConnection: (pid: string, name: string) => request<ConnectionsResponse>(`${pp(pid)}/connections/${encodeURIComponent(name)}/login`, json('POST', {})),
+  cancelLogin: (pid: string, name: string) => request<ConnectionsResponse>(`${pp(pid)}/connections/${encodeURIComponent(name)}/login`, json('DELETE')),
+  logoutConnection: (pid: string, name: string) => request<ConnectionsResponse>(`${pp(pid)}/connections/${encodeURIComponent(name)}/logout`, json('POST', {})),
+  /** Windows Terminal in the project folder, optionally running `claude mcp login <login>`. */
+  openTerminal: (pid: string, login?: string) => request<{ ok: true }>(`${pp(pid)}/terminal`, json('POST', login ? { login } : {})),
   updateConnection: (pid: string, name: string, body: { enabled?: boolean; desks?: string[]; mode?: ConnectionMode }) =>
     request<ConnectionsResponse>(`${pp(pid)}/connections/${encodeURIComponent(name)}`, json('PUT', body)),
 

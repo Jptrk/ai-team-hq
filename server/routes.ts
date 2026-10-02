@@ -19,7 +19,22 @@ import {
 import { titleFrom } from '../shared/plainText';
 import { parseReportUrl, reportTitleFrom, type ReportUrlParts } from '../shared/reportUrl';
 import { addComment } from './comments';
-import { checkConnections, listConnections, updateConnection, type ConnectionPatch } from './connections';
+import {
+  addConnection,
+  cancelConnectionLogin,
+  checkConnections,
+  ConnectionError,
+  listConnections,
+  loginConnection,
+  logoutConnection,
+  openProjectTerminal,
+  previewAdd,
+  removeConnection,
+  updateConnection,
+  type ConnectionPatch,
+} from './connections';
+import { jsonOnly } from './http';
+import { parseAddRequest } from '../shared/mcpSpec';
 import { MAX_STEER } from '../shared/huddle';
 import { addSteer, decideProposal, findHuddle, HUDDLES_PER_DAY, MAX_NOTES, notesConflict, pendingProposals, stripHuddle } from './huddle-core';
 import { resumeHuddleRun, startHuddle, stopHuddleRun } from './huddles';
@@ -652,16 +667,96 @@ project.get('/connections', (_req, res) => {
   res.json(listConnections(P(res)));
 });
 
-/** Connect to every server and list tools. Sends no prompt and calls no tool. */
-project.post('/connections/check', async (_req, res) => {
+/** A ConnectionError carries its own status and a safe sentence. Anything else stays generic: it could hold a command line. */
+function connectionFailed(res: Response, e: unknown, fallback: string) {
+  if (e instanceof ConnectionError) return res.status(e.status).json({ error: e.message });
+  console.error('[hq] connections:', e instanceof Error ? e.name : 'error');
+  return res.status(500).json({ error: fallback });
+}
+
+/** Connect to every server (or just `names`) and list tools. Sends no prompt and calls no tool. */
+project.post('/connections/check', jsonOnly, async (req, res) => {
+  const names = (req.body as { names?: unknown } | undefined)?.names;
+  if (names !== undefined && (!Array.isArray(names) || !names.every((n) => typeof n === 'string') || names.length > 50)) {
+    return res.status(400).json({ error: 'names must be a list of server names' });
+  }
   try {
-    res.json(await checkConnections(P(res)));
+    res.json(await checkConnections(P(res), names as string[] | undefined));
   } catch (e) {
-    res.status(409).json({ error: e instanceof Error ? e.message : 'Check failed' });
+    connectionFailed(res, e, 'Check failed');
   }
 });
 
-project.put('/connections/:name', (req, res) => {
+/** What adding a server would save, masked, for you to review. Changes nothing. */
+project.post('/connections/preview', jsonOnly, (req, res) => {
+  const parsed = parseAddRequest(req.body);
+  if (typeof parsed === 'string') return res.status(400).json({ error: parsed });
+  try {
+    res.json(previewAdd(P(res), parsed));
+  } catch (e) {
+    connectionFailed(res, e, 'Could not check those details');
+  }
+});
+
+/** Save a new server through `claude mcp add-json`. It starts off. `confirm` is the preview you reviewed. */
+project.post('/connections', jsonOnly, async (req, res) => {
+  const parsed = parseAddRequest(req.body);
+  if (typeof parsed === 'string') return res.status(400).json({ error: parsed });
+  const confirm = (req.body as { confirm?: unknown }).confirm;
+  try {
+    res.status(201).json(await addConnection(P(res), parsed, typeof confirm === 'string' ? confirm : undefined));
+  } catch (e) {
+    connectionFailed(res, e, 'Could not add it');
+  }
+});
+
+/** Remove a server from where ?source= says it lives. Also clears its saved sign-in. */
+project.delete('/connections/:name', jsonOnly, async (req, res) => {
+  try {
+    res.json(await removeConnection(P(res), String(req.params.name), str(req.query.source)));
+  } catch (e) {
+    connectionFailed(res, e, 'Could not remove it');
+  }
+});
+
+/** Start signing in. The row shows the sign-in page to open; you sign in yourself in your browser. */
+project.post('/connections/:name/login', jsonOnly, (req, res) => {
+  try {
+    res.status(202).json(loginConnection(P(res), String(req.params.name)));
+  } catch (e) {
+    connectionFailed(res, e, 'Could not start signing in');
+  }
+});
+
+project.delete('/connections/:name/login', jsonOnly, (req, res) => {
+  try {
+    res.json(cancelConnectionLogin(P(res), String(req.params.name)));
+  } catch (e) {
+    connectionFailed(res, e, 'Could not cancel');
+  }
+});
+
+project.post('/connections/:name/logout', jsonOnly, async (req, res) => {
+  try {
+    res.json(await logoutConnection(P(res), String(req.params.name)));
+  } catch (e) {
+    connectionFailed(res, e, 'Could not log out');
+  }
+});
+
+/** Open Windows Terminal in the project folder, optionally running `claude mcp login <login>`. */
+project.post('/terminal', jsonOnly, async (req, res) => {
+  const login = (req.body as { login?: unknown } | undefined)?.login;
+  if (login !== undefined && typeof login !== 'string') return res.status(400).json({ error: 'login must be a server name' });
+  try {
+    await openProjectTerminal(P(res), login as string | undefined);
+    res.status(202).json({ ok: true });
+  } catch (e) {
+    connectionFailed(res, e, 'Could not open a terminal');
+  }
+});
+
+project.put('/connections/:name', jsonOnly, (req, res) => {
   const p = P(res);
   const body = (req.body ?? {}) as Record<string, unknown>;
   const patch: ConnectionPatch = {};

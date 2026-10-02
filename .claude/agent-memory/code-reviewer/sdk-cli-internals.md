@@ -11,5 +11,8 @@ The SDK JS is `node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs` (minified, ~
 - Verified 2026-10-01 (SDK 0.3.282 / CLI 2.1.282): `Query.readMessages` calls `handleControlRequest` unawaited (in-process MCP tool calls and can_use_tool) while normal messages go to a queue the `for await` consumer drains, so control requests can overtake queued messages.
 - MCP image results become `{type:'image', source:{type:'base64', media_type, data}}` after the CLI resizes them (function `Ay`); unsupported image types are saved to a file and replaced by text.
 - `StreamingToolExecutor` runs tools as promises outside the generator pull, so a later tool in the same assistant turn can execute before an earlier tool's result is written to stdout.
+- Verified 2026-10-02 (MCP sign-in review): `Query.mcpAuthenticate(name)` sends `mcp_authenticate`; the CLI runs the OAuth flow with `skipBrowserOpen:true` and answers `{authUrl, requiresUserAction:true, callbackExpected:true, redirectScheme, state, callbackPort}` (or `{requiresUserAction:false}`); after the callback it reconnects using the session's own client config (`ownerConfig` checks live `mcp.clients` first), so status turns `connected`. SDK control requests have no timeout; pending ones reject on close. `mcpClearAuth` exists too.
+- CLI 2.1.282 has `mcp login <name>` (`--no-browser`), `mcp logout <name>`, `mcp add-json <name> <json>` (positional JSON only, so secrets go on argv), `mcp remove <name> -s`. Exported chunk names survive minification (`export{V$ as getMcpConfigByName}`), so grep `as <originalName>` to find a minified symbol.
+- Windows Terminal splits on any unescaped `;` inside an argv element (regex `^;|[^\\];`), so names passed to wt.exe need escaping too.
 
 Related: [[review-conventions]].
