@@ -1,197 +1,258 @@
 @layer views {
+  /* The full content width: a wide screen gets the 2× or 3× scene (it only scales by whole numbers). */
   .office {
     display: flex;
     flex-direction: column;
     gap: 12px;
-    max-width: 980px;
-    margin: 0 auto;
   }
-  .office-bar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    flex-wrap: wrap;
-  }
-  .office-bar p {
+  .office-hint {
     margin: 0;
   }
+
+  /* The stage: the floor stays light in both themes; only the room around it follows the theme. */
+  .office-wrap {
+    position: relative;
+  }
   .office-stage {
+    position: relative;
+    overflow-x: auto;
+    overflow-y: hidden;
     border-radius: var(--radius-xl);
-    overflow: hidden;
     border: 1px solid var(--border);
     box-shadow: var(--shadow-raised);
+    background: var(--office-stage);
+    /* Centre the scene when there's room; scroll sideways when there isn't. */
+    display: flex;
+    justify-content: safe center;
   }
   .office-svg {
     display: block;
-    width: 100%;
-    height: auto;
-    background: linear-gradient(180deg, var(--office-bg-top) 0%, var(--office-bg-bottom) 100%);
+    flex: none;
+    image-rendering: pixelated;
+    font-family: var(--font-ui);
   }
-
-  /* scene fills */
-  .o-floor-top {
-    stop-color: var(--office-floor-top);
-  }
-  .o-floor-bottom {
-    stop-color: var(--office-floor-bottom);
-  }
-  .o-gym {
-    fill: var(--office-gym);
-    stroke: var(--office-gym-stroke);
-  }
-  .o-slab-front {
-    fill: var(--office-slab-front);
-  }
-  .o-slab-side {
-    fill: var(--office-slab-side);
-  }
-  .o-tile-a {
-    fill: var(--office-tile-a);
-    stroke: var(--office-tile-line);
-  }
-  .o-tile-b {
-    fill: var(--office-tile-b);
-    stroke: var(--office-tile-line);
-  }
-  .o-rug {
-    fill: var(--office-rug);
-  }
-  .o-plant-pot {
-    fill: var(--office-plant-pot);
-  }
-  .o-plant-leaf {
-    fill: var(--office-plant-leaf);
-  }
-  .o-plant-leaf-2 {
-    fill: var(--office-plant-leaf-2);
-  }
-  .o-desk-top {
-    fill: var(--office-desk-top);
-    stroke: var(--office-desk-right);
-  }
-  .o-desk-left {
-    fill: var(--office-desk-left);
-  }
-  .o-desk-right {
-    fill: var(--office-desk-right);
-  }
-  .o-monitor {
-    fill: var(--office-monitor);
-  }
-  .o-shadow {
-    fill: var(--office-shadow);
-  }
-  .o-status-ring {
-    stroke: var(--office-status-ring);
-  }
-  .o-speech {
-    fill: var(--office-speech-bg);
-  }
-  .o-bubble {
-    fill: var(--office-bubble-bg);
-    stroke: var(--office-bubble-stroke);
-  }
-  .o-bubble-dot {
-    fill: var(--office-bubble-dot);
-  }
-  .o-tag {
-    fill: var(--office-tag-bg);
-    stroke: var(--office-tag-stroke);
-  }
-  .o-tag-pointer {
-    fill: var(--office-tag-stroke);
+  /* Only people take the pointer: walls and furniture drawn over someone never block a click. The keyboard
+     targets sit on top of everything, so they let the pointer through to the people under them. */
+  .office-svg use,
+  .office-svg .o-shadow,
+  .office-svg .o-top > :not(.o-person),
+  .office-svg .o-targets {
+    pointer-events: none;
   }
 
   /* people */
-  .office-svg .person {
+  .o-shadow {
+    fill: var(--office-shadow);
+  }
+  .o-person {
     cursor: pointer;
-    transition: transform 1.8s ease-in-out;
   }
-  .office-svg .person:hover rect,
-  .office-svg .person:focus rect {
-    filter: brightness(1.08);
+  .o-hit {
+    fill: transparent;
+    stroke: transparent;
+    stroke-width: 2;
   }
-  .office-svg .person:focus {
+  .o-target {
     outline: none;
   }
-  .office-svg .person:focus-visible .o-tag {
-    stroke: var(--focus-ring);
-    stroke-width: 1.5;
+  .o-ring {
+    fill: none;
+    stroke: transparent;
   }
-  .office-svg .walking rect:nth-of-type(1),
-  .office-svg .walking rect:nth-of-type(2) {
-    animation: step 0.45s steps(2) infinite;
+  /* Two rings, so focus reads at 3:1 or better on every floor tone (dark ring) and on the dark stage (light ring). */
+  .o-target:focus-visible .o-ring-out {
+    stroke: var(--office-focus-outer);
+    stroke-width: 5;
   }
-  @keyframes step {
-    to {
-      transform: translateY(-1.5px);
-    }
+  .o-target:focus-visible .o-ring-in {
+    stroke: var(--office-focus-inner);
+    stroke-width: 2;
   }
-  .office-svg .tag-name {
-    font-family: var(--font-mono);
-    font-size: 8px;
+  .o-person:hover .o-hit {
+    stroke: var(--office-name-text);
+    stroke-opacity: 0.25;
+  }
+
+  /* final pass: names, labels, the door */
+  .o-name rect {
+    fill: var(--office-name-bg);
+  }
+  .o-name text {
+    fill: var(--office-name-text);
+    font-size: 10px;
+    font-weight: 700;
+  }
+  .o-plate {
+    opacity: 0.55;
+  }
+  .o-label {
+    fill: var(--office-label);
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .o-off-label {
+    fill: var(--office-off-label);
+    font-size: 10px;
+    font-weight: 700;
+  }
+  .o-off-name {
+    fill: var(--office-off-name);
+    font-size: 10px;
+    font-weight: 700;
+  }
+  .o-off-back {
+    fill: var(--office-off-label);
+    font-size: 9px;
     font-weight: 600;
-    fill: var(--text);
-    letter-spacing: 0.04em;
   }
-  .office-svg .tag-role {
-    font-family: var(--font-mono);
-    font-size: 6.5px;
-    fill: var(--text-subtle);
+  .o-door:not(.lit) .o-lamp {
+    filter: grayscale(1) brightness(0.85);
   }
-  .office-svg .office-sign {
-    font-family: var(--font-mono);
-    font-size: 8px;
-    font-weight: 600;
-    fill: var(--office-sign);
-    letter-spacing: 0.15em;
+  .o-halo {
+    fill: var(--office-halo);
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: office-halo 1.4s ease-in-out infinite;
   }
-  .office-svg .bubble {
-    animation: bob 1.4s ease-in-out infinite;
+  .o-badge circle {
+    fill: var(--office-badge);
   }
-  @keyframes bob {
+  .o-door.long .o-badge circle {
+    fill: var(--office-badge-long);
+  }
+  .o-badge text {
+    fill: var(--office-badge-text);
+    font-size: 10px;
+    font-weight: 700;
+  }
+  /* The only animation in the room (spec §5). */
+  @keyframes office-halo {
     0%,
     100% {
-      transform: translate(12px, -44px);
+      opacity: 0.25;
+      transform: scale(0.8);
     }
     50% {
-      transform: translate(12px, -47px);
+      opacity: 0.9;
+      transform: scale(1.25);
     }
   }
-  .office-svg .speech {
-    animation: speech-bob 1.6s ease-in-out infinite;
-  }
-  @keyframes speech-bob {
-    0%,
-    100% {
-      transform: translate(10px, -50px);
-    }
-    50% {
-      transform: translate(10px, -53px);
+  @media (prefers-reduced-motion: reduce) {
+    .o-halo {
+      animation: none;
+      opacity: 0.6;
     }
   }
-  .office-svg .speech-text {
-    font-family: var(--font-mono);
-    font-size: 8px;
+
+  /* hover card (spec §4) */
+  .office-card {
+    position: absolute;
+    z-index: 2;
+    width: 252px;
+    max-width: calc(100% - 16px);
+    transform: translate(-50%, calc(-100% - 8px));
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1.5px solid var(--office-st-off);
+    background: var(--office-card-bg);
+    color: var(--office-card-text);
+    box-shadow: var(--shadow-overlay);
+    font-size: var(--fs-sm);
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .office-card.below {
+    transform: translate(-50%, 8px);
+  }
+  .office-card.st-coding {
+    border-color: var(--office-st-code);
+  }
+  .office-card.st-working {
+    border-color: var(--office-st-work);
+  }
+  .office-card.st-chatting {
+    border-color: var(--office-st-chat);
+  }
+  .office-card.st-idle {
+    border-color: var(--office-st-idle);
+  }
+  .office-card.st-waiting {
+    border-color: var(--office-st-wait);
+  }
+  .office-card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .office-card-name {
+    font-weight: 700;
+    font-size: var(--fs-md);
+  }
+  .office-card-head .icon-btn {
+    color: var(--office-card-muted);
+  }
+  .office-card-role,
+  .office-card-time {
+    color: var(--office-card-muted);
+  }
+  .office-card-state {
     font-weight: 600;
-    fill: var(--office-speech-text);
+  }
+  .office-card-glyph {
+    display: inline-block;
+    min-width: 2.2ch;
+    margin-right: 4px;
+    font-family: var(--font-mono);
+  }
+  .office-card-task {
+    color: var(--office-card-muted);
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+  .office-card-open {
+    align-self: flex-start;
+    margin-top: 6px;
+    color: var(--office-card-text);
+    border-color: var(--office-card-muted);
   }
 
   /* stat tiles */
   .stats {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 12px;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 10px;
   }
   .stat {
     display: flex;
     flex-direction: column;
     gap: 2px;
-    padding: 12px 16px;
+    padding: 10px 12px;
     border: 1px solid var(--border);
+    border-left-width: 4px;
     border-radius: var(--radius-lg);
     background: var(--surface-raised);
+  }
+  .stat.st-coding {
+    border-left-color: var(--office-st-code);
+  }
+  .stat.st-working {
+    border-left-color: var(--office-st-work);
+  }
+  .stat.st-chatting {
+    border-left-color: var(--office-st-chat);
+  }
+  .stat.st-idle {
+    border-left-color: var(--office-st-idle);
+  }
+  .stat.st-waiting {
+    border-left-color: var(--office-st-wait);
+  }
+  .stat.st-off {
+    border-left-color: var(--office-st-off);
   }
   .stat-n {
     font-family: var(--font-display);
@@ -203,9 +264,20 @@
     font-size: var(--fs-sm);
     color: var(--text-subtle);
   }
-  @media (max-width: 719px) {
+  .office-dot {
+    display: inline-block;
+    min-width: 2.2ch;
+    margin-right: 4px;
+    font-family: var(--font-mono);
+  }
+  @media (max-width: 1023px) {
     .stats {
-      grid-template-columns: 1fr;
+      grid-template-columns: repeat(3, 1fr);
+    }
+  }
+  @media (max-width: 519px) {
+    .stats {
+      grid-template-columns: repeat(2, 1fr);
     }
   }
 }

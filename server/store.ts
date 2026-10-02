@@ -1,7 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { stampNeedsYou } from '../shared/activity';
 import type { Activity, ProjectAccess, ProjectMeta, State, TeamTemplate } from '../shared/types';
 import { defaultQaDesk, hasQa } from '../shared/types';
+import { assignDeskNumbers } from '../shared/desks';
 import { rewindCursor } from './cursor';
 import { slug } from './paths';
 import { seed } from './seed';
@@ -69,6 +71,8 @@ export class Project {
 
   /** Debounced write so a burst of edits hits disk once. */
   commit(): void {
+    // Every change that moves a ticket commits, so this is where Needs-you tickets get their start time.
+    stampNeedsYou(this.state.items, now());
     if (this.timer) clearTimeout(this.timer);
     this.timer = setTimeout(() => {
       this.timer = null;
@@ -217,6 +221,8 @@ export function migrateState(s: State, template?: TeamTemplate): State {
   s.huddleSeq ??= s.huddles.reduce((n, h) => Math.max(n, h.number ?? 0), 0);
   s.teamNotes ??= '';
   s.notesEveryRun ??= false;
+  // The Office's waiting clock. Before the restart notes below add history, so they don't count as the start.
+  stampNeedsYou(s.items, now(), true);
   // A huddle mid-round when the server stopped: it stops too, and Resume picks it up.
   for (const h of s.huddles) {
     if (h.status !== 'running') continue;
@@ -224,6 +230,8 @@ export function migrateState(s: State, template?: TeamTemplate): State {
     h.stopReason = 'restart';
   }
   for (const a of s.agents) a.running = false;
+  // Office desks: every desk gets a number it keeps (see shared/desks.ts).
+  assignDeskNumbers(s.agents);
   // Nobody is mid-reply after a restart.
   for (const t of s.threads) {
     t.waiting = [];

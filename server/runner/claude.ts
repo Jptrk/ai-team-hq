@@ -49,6 +49,7 @@ import {
   type ReadyImages,
   type Shots,
 } from './screenshots';
+import { noteTools } from './liveTools';
 import type { AgentRunner, RunHooks, RunInput, RunOutcome } from './types';
 
 /**
@@ -1471,6 +1472,8 @@ async function runOnce(input: RunInput, ctx: RunContext, systemPrompt: string, r
   const onAbort = () => controller.abort();
   signal.addEventListener('abort', onAbort, { once: true });
   const projectDir = projectDirOf(ctx.project);
+  // For the Office's Coding: only a run the guard lets write the project folder can be coding there.
+  const codeDir = projectDir && ctx.project.meta.access === 'write' && ctx.mode !== 'qa' && ctx.mode !== 'huddle' ? projectDir : null;
   const attachments = attachmentsDir(ctx.project.id);
   fs.mkdirSync(attachments, { recursive: true });
 
@@ -1516,6 +1519,8 @@ async function runOnce(input: RunInput, ctx: RunContext, systemPrompt: string, r
           ctx.contextTokens = turn.context;
           ctx.firstTurn ??= turn;
         }
+        // For the Office: was the last tool writing code in the project folder?
+        noteTools(input.run.id, msg, codeDir, ctx.dir);
         for (const [id, name] of toolUsesIn(msg)) {
           toolById.set(id, name);
           // An HQ tool in the same turn may run before this result is back; it waits on pending.

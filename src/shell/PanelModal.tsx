@@ -21,7 +21,8 @@ interface Props {
  */
 export function PanelModal({ open, subjectKey, label, onClose, returnFocus, children }: Props) {
   const ref = useRef<HTMLDialogElement>(null);
-  const opener = useRef<HTMLElement | null>(null);
+  // An SVG element can open it too: a person in the Office.
+  const opener = useRef<HTMLElement | SVGElement | null>(null);
   const shown = useRef(false);
   // The props drop the selector as the modal closes, so keep the last one.
   const lastReturn = useRef<string | undefined>(undefined);
@@ -60,7 +61,7 @@ export function PanelModal({ open, subjectKey, label, onClose, returnFocus, chil
     if (open) {
       if (!d.open) {
         const active = document.activeElement;
-        opener.current = active instanceof HTMLElement && active !== document.body ? active : null;
+        opener.current = (active instanceof HTMLElement || active instanceof SVGElement) && active !== document.body ? active : null;
         // StrictMode runs effects twice; showModal() on an open dialog throws.
         d.showModal();
       }

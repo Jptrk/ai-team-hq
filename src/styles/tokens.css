@@ -129,35 +129,30 @@
   --code-bg: #efe7d4;
   --table-stripe: #f7f3ea;
 
-  --office-bg-top: #9cab47;
-  --office-bg-bottom: #8a983a;
-  --office-floor-top: #e2d4ac;
-  --office-floor-bottom: #d5c69c;
-  --office-slab-front: #a8956b;
-  --office-slab-side: #8f7d56;
-  --office-tile-a: #e6dab5;
-  --office-tile-b: #dccfa6;
-  --office-tile-line: #cdbf95;
-  --office-rug: #b7563c;
-  --office-plant-pot: #b5653f;
-  --office-plant-leaf: #4f7d3a;
-  --office-plant-leaf-2: #5c8f45;
-  --office-desk-top: #c99a68;
-  --office-desk-left: #a67c52;
-  --office-desk-right: #8c6644;
-  --office-monitor: #2b2b2b;
-  --office-gym: #6f8f4c;
-  --office-gym-stroke: #5b7640;
-  --office-sign: #f4f0e6;
-  --office-tag-bg: #fbf8f1;
-  --office-tag-stroke: #c4b99f;
-  --office-speech-bg: #26241f;
-  --office-speech-text: #f4f0e6;
-  --office-bubble-bg: #fbf8f1;
-  --office-bubble-stroke: #c4b99f;
-  --office-bubble-dot: #26241f;
-  --office-status-ring: #fbf8f1;
-  --office-shadow: rgba(0, 0, 0, 0.18);
+  /* Office stage (Figma 109:2). The pixel sprites carry their own fixed palette. */
+  --office-stage: #ece9e2;
+  --office-label: #4c4f5c;
+  --office-off-label: #5e616d;
+  --office-off-name: #1f2029;
+  --office-name-bg: rgba(255, 255, 255, 0.92);
+  --office-name-text: #1f2029;
+  --office-shadow: rgba(13, 13, 18, 0.3);
+  --office-card-bg: #12151c;
+  --office-card-text: #e8e4d9;
+  --office-card-muted: #a9a38f;
+  --office-badge: #c8401f;
+  --office-badge-long: #9e2b14;
+  --office-badge-text: #ffffff;
+  --office-halo: rgba(255, 210, 77, 0.55);
+  --office-st-code: #35c46a;
+  --office-st-work: #4c8dff;
+  --office-st-chat: #ffb020;
+  --office-st-idle: #9b8cff;
+  --office-st-wait: #ff5c39;
+  --office-st-off: #6e7681;
+  /* Focus ring on the floor: the same in both themes, since the floor is. Dark outside for the light floor, light inside for the dark stage. */
+  --office-focus-outer: #12151c;
+  --office-focus-inner: #ffffff;
 }
 
 [data-theme='dark'] {
@@ -243,33 +238,28 @@
   --code-bg: #181912;
   --table-stripe: #25261d;
 
-  --office-bg-top: #2b3016;
-  --office-bg-bottom: #1d210c;
-  --office-floor-top: #5a5140;
-  --office-floor-bottom: #4f4737;
-  --office-slab-front: #3d3528;
-  --office-slab-side: #322b20;
-  --office-tile-a: #5e5543;
-  --office-tile-b: #564e3d;
-  --office-tile-line: #4a4334;
-  --office-rug: #8a3f2c;
-  --office-plant-pot: #7f4a30;
-  --office-plant-leaf: #3f6a2f;
-  --office-plant-leaf-2: #4b7a3a;
-  --office-desk-top: #8a6a48;
-  --office-desk-left: #735739;
-  --office-desk-right: #5f472f;
-  --office-monitor: #0f0f0c;
-  --office-gym: #4a6334;
-  --office-gym-stroke: #3c5229;
-  --office-sign: #ece6d6;
-  --office-tag-bg: #2f3025;
-  --office-tag-stroke: #4d4e3e;
-  --office-speech-bg: #ece6d6;
-  --office-speech-text: #1f2018;
-  --office-bubble-bg: #2f3025;
-  --office-bubble-stroke: #4d4e3e;
-  --office-bubble-dot: #ece6d6;
-  --office-status-ring: #2f3025;
-  --office-shadow: rgba(0, 0, 0, 0.35);
+  /* Office stage (Figma 109:2). The pixel sprites carry their own fixed palette. */
+  --office-stage: #171a21;
+  --office-label: #8a93a3;
+  --office-off-label: #8a93a3;
+  --office-off-name: #e8e4d9;
+  --office-name-bg: rgba(255, 255, 255, 0.92);
+  --office-name-text: #1f2029;
+  --office-shadow: rgba(13, 13, 18, 0.3);
+  --office-card-bg: #12151c;
+  --office-card-text: #e8e4d9;
+  --office-card-muted: #a9a38f;
+  --office-badge: #c8401f;
+  --office-badge-long: #9e2b14;
+  --office-badge-text: #ffffff;
+  --office-halo: rgba(255, 210, 77, 0.55);
+  --office-st-code: #35c46a;
+  --office-st-work: #4c8dff;
+  --office-st-chat: #ffb020;
+  --office-st-idle: #9b8cff;
+  --office-st-wait: #ff5c39;
+  --office-st-off: #6e7681;
+  /* Focus ring on the floor: the same in both themes, since the floor is. Dark outside for the light floor, light inside for the dark stage. */
+  --office-focus-outer: #12151c;
+  --office-focus-inner: #ffffff;
 }

@@ -1,3 +1,5 @@
+import { stampNeedsYou } from '../shared/activity';
+import { assignDeskNumbers } from '../shared/desks';
 import type { Agent, State, TeamTemplate, WorkItem } from '../shared/types';
 import { hasQa, MAX_TEAM } from '../shared/types';
 
@@ -200,12 +202,16 @@ export interface SeedOptions {
 export function seed(template: TeamTemplate, opts: SeedOptions): State {
   const agents = [founder(opts.ownerName), ...TEAMS[template]()].slice(0, MAX_TEAM);
   assignSeats(agents);
+  // A reset or a fresh project skips migrateState, so number the Office desks here too.
+  assignDeskNumbers(agents);
   const lead = agents.find((a) => a.lead) ?? agents.find((a) => !a.isHuman);
 
   const demo = template === 'business' && !opts.empty;
   const items = demo ? businessDemo() : [];
   let seq = 0;
   for (const item of [...items].reverse()) item.number = ++seq;
+  // The demo's waiting clocks start when each ticket was flagged.
+  stampNeedsYou(items, ago(0), true);
 
   if (demo) {
     const working: Record<string, { status: Agent['status']; task: string }> = {

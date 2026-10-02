@@ -41,6 +41,7 @@ import { resumeHuddleRun, startHuddle, stopHuddleRun } from './huddles';
 import { checkFolder, folderExists, KEY_PATTERN, suggestKey } from './paths';
 import { backToWork, closesOnApprove, moveByHand, qaDeskOf, rerouteAllQa, setQaDesk } from './qa';
 import { resolveReport } from './runner/claude';
+import { officeState } from './office';
 import { cancelRun, deliver, isLive, kickoff, meta } from './runner';
 import {
   allProjects,
@@ -210,7 +211,7 @@ project.get('/state', (_req, res) => {
   const p = P(res);
   // Messages stay out of the 3-second poll; a thread's messages load when it opens. Same for a huddle's board and transcript.
   const { messages: _messages, huddles, ...rest } = p.state;
-  const body: StateResponse = { ...rest, huddles: huddles.map(stripHuddle), huddleLimit: HUDDLES_PER_DAY, meta: meta(), project: p.meta };
+  const body: StateResponse = { ...rest, huddles: huddles.map(stripHuddle), office: officeState(p), huddleLimit: HUDDLES_PER_DAY, meta: meta(), project: p.meta };
   res.json(body);
 });
 

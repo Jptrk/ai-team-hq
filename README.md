@@ -45,7 +45,7 @@ theme toggle and your menu. A left sidebar holds the project switcher and the vi
 | Chat | Thread list and the open thread side by side (one pane under 900px) |
 | Board | To do, In progress, Needs you and Done, plus QA on dev-team projects. Drag-and-drop, filters by text, assignee and "Needs me" |
 | Team | A card per desk; "Add teammate" is the dashed card |
-| Office | The pixel office |
+| Office | The pixel office: where every desk is and what it's doing right now (see [Office](#office)) |
 
 Tickets and people open in a large **modal** over whatever view you are on, like Jira's issue
 view: the ticket on the left, its details (assignee, from, status, type, client, thread) on the
@@ -83,6 +83,55 @@ Light keeps the original olive, cream, rust and green. Dark is a night version o
 palette: olive-black surfaces, cream text, and a softer rust. Every text color is 4.5:1 or better
 on its background in both themes. Colors live in `src/styles/tokens.css`; nothing else in the app
 hardcodes a color.
+
+## Office
+
+The Office view is the design team's pixel-art office (office-room.svg v3, ATHD-18), drawn from
+their sprite files on a 2:1 isometric grid. It has six rooms: the office with desk pods, a play
+area, the hall, your room, the meeting room and the kitchen. Everyone shows up where their state
+puts them:
+
+| State | Tag | Where |
+| ----- | --- | ----- |
+| Coding | green `</>` | At their desk. Mid-run, and the last tool wrote or edited a file in the project folder |
+| Working | blue page | At their desk. Mid-run on anything else, or has work in progress or queued |
+| Chatting | amber dots | Two desks talking to each other face across the meeting table; a huddle fills the chairs from the middle, then the standing spots. A desk answering you chats from its own desk |
+| Idle | purple controller | The play area or the kitchen |
+| Waiting on you | red `!` | Your bench first, then the two spots beside it, then the queue. More than that shows as a count on your door |
+| Off shift | grey `Z` | A chip outside, with the time they're back. Chips wrap into columns of three |
+
+- **Nobody walks, and nobody is bumped.** A change of state moves someone from one spot to the next.
+  Whoever holds a lounge spot, a meeting chair or a place on the bench keeps it while their state
+  lasts; newcomers take what's free. The only animation is the glow of the lamp over your door
+  while someone waits; it's off if your system asks for reduced motion. After two hours of
+  waiting the count turns to `!!`. The wait counts from when the ticket went into Needs you, so a
+  comment or a restart doesn't reset it.
+- **Nothing hides someone waiting on you.** Their tags and names draw last, and the meeting chairs
+  whose tags would sit on the bench or the queue are used only when nothing else is free.
+- **Hover or tap someone** for a card with what they're on and for how long (`<1m`, `42m`,
+  `1h 12m`, `1d 4h`), who they're talking to, and their task (idle and off shift have no task;
+  off shift shows when they're back instead of a time). On a touch screen a tap pins the card;
+  it has an Open button and a ×, and a tap anywhere else closes it. Esc closes any card. Click
+  someone, or press Enter or Space on them, to open their panel. Focus comes back to them when it
+  closes, and stays on them when others move. Screen readers get a list of who is where.
+- **Desks keep their number.** Each desk has a desk number that stays when someone leaves; a new
+  teammate takes the lowest free one. An owned desk keeps a dimmed nameplate while its owner is
+  elsewhere. Up to 4 desks make one pod, up to 8 two (the approved layout), up to 12 a third,
+  following the spec's growth rules: your room, the meeting room and the kitchen move right to make
+  space.
+- **Sharp pixels.** The scene only scales by whole numbers. The Office uses the full page width, so
+  it shows at 2× once there's room for twice the scene (about 1,520 px at 8 desks, 1,330 px at
+  4), and 3× at three times. On a narrow screen it stays at 1× and scrolls sideways.
+- The floor stays light in both themes; the room around it follows the theme.
+
+State is worked out on every poll (`office` in `GET /state`) and never saved. The sprites come from
+the design folder: `npm run office:sync` checks and copies them into `src/office/sprites/` and turns
+office-room.svg into `src/office/zones.v3.json` (set `OFFICE_DESIGN_DIR` if the folder isn't at
+`C:\Users\patri\Desktop\ai-team-hq-design`). Both are committed, so a build never needs the design
+folder. Never hand-edit a sprite: the design team rebuilds them with their `build-sprites.js`. The
+app puts sprite markup straight into the page, so the sync refuses any file that holds more than
+pixel-run `<path>` elements (a script, an event handler, a link, styles), and the app keeps only
+those paths too.
 
 ## Reports and markdown
 
@@ -615,11 +664,20 @@ npm run test:attachments
 npm run test:huddles
 npm run test:qa
 npm run test:mcp
+npm run test:office
+npm run test:activity
 ```
 
 - **`test:guard`** checks what an agent may read and write in its workspace and the linked folder. It also checks which MCP tools run freely, need approval, or are refused.
 - **`test:chat`** checks the chat core: recipients, the loop limit, resume and settle.
 - **`test:ui`** checks the UI helpers: routes, board filter, search ranking, report link resolution, markdown previews, image sizing, and avatar text contrast.
+- **`test:office`** checks the office floor:
+  - the approved v3 layout exactly, and growth from 1 to 12 desks
+  - the design team's route checks: every seat reachable, nothing inside a wall or a table, doorways only through gaps
+  - sprites and their footprints, walls, labels clear of the floor and of each other
+  - who stands where: the bench and queue, chat pairs and huddles, idle spots that stick, off shift, overflow
+  - the pixel people and the draw order
+- **`test:activity`** checks the six states from tickets, live runs, chats and huddles, how long each has lasted, desk numbers, and telling Coding from Working by the last tool.
 - **`test:huddles`** checks huddles and team notes:
   - what it takes to start one, the daily limit, and who facilitates
   - what desks add, and the facilitator's summary and proposals
@@ -670,7 +728,7 @@ Everything project-specific lives under `/api/projects/:pid`.
 | GET    | /api/projects/:pid | |
 | PATCH  | /api/projects/:pid | `{ name?, key?, path?, access? }` |
 | DELETE | /api/projects/:pid | archives it |
-| GET    | /api/projects/:pid/state | |
+| GET    | /api/projects/:pid/state | includes `office`: what each desk is doing right now (activity, since, who with) |
 | POST   | /api/projects/:pid/instructions | `{ text, attachments?, includeNotes? }` |
 | POST   | /api/projects/:pid/items/:id/decision | `{ decision, note?, attachments?, includeNotes? }` |
 | POST   | /api/projects/:pid/items/:id/comments | `{ text, attachments?, includeNotes? }`; wakes the owner |

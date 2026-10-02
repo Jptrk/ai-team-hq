@@ -357,17 +357,10 @@ export function App() {
           </div>
         );
       } else if (view === 'office') {
-        const saying: Record<string, string> = {};
-        for (const t of state.threads) {
-          const last = t.last;
-          if (!last || last.from === 'you' || Date.now() - new Date(last.ts).getTime() > 15_000) continue;
-          const to = last.to.map((id) => (id === 'you' ? 'you' : agentById(state.agents, id)?.name)).filter(Boolean);
-          if (to.length) saying[last.from] = `@${to[0]}${to.length > 1 ? ` +${to.length - 1}` : ''}`;
-        }
         body = (
           <div className="page">
             {header()}
-            <Office agents={state.agents} onSelect={openAgent} saying={saying} />
+            <Office agents={state.agents} office={state.office ?? {}} ownerName={owner?.name ?? 'You'} onSelect={openAgent} />
           </div>
         );
       } else {

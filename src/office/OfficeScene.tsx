@@ -1,247 +1,331 @@
-import { useEffect, useMemo, useState } from 'react';
-import type { Agent } from '../../shared/types';
-import { AGENT_STATUS_COLOR } from '../util';
+import { useLayoutEffect, useMemo, useRef, type FocusEvent, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react';
+import { depthOf, grow, LAYER, personDepth, spriteBox, toScreen, type Box } from './geometry';
+import { hitBox, headOf, labelSpots, nameWidth, offShiftSpots, PILL_H, pinBoxes, TAG_H, TAG_W } from './overlay';
+import { PERSON_H, PERSON_W, personColours, personRuns } from './person';
+import { ACTIVITY_LABEL, pinOrder, returnTime, type OfficePlan, type Placed } from './placement';
+import { SPRITES } from './sprites';
+import type { OfficeLayout, Placement } from './types';
 
-/** Skin, hair and clothes are the same in both themes. */
-const PALETTE = { legs: '#33302a', skin: '#f0c9a2', hair: '#3a2b22', eyes: '#2b2b2b', crown: '#e0a83a' };
+/**
+ * The office floor: the design team's pixel sprites placed on the 2:1 grid (spec v3, ATHD-18),
+ * people on their slots, and a final pass for tags, names and labels so nothing hides them.
+ * Coordinates are screen pixels with the room's top corner at (0, 0); the viewBox frames it all.
+ *
+ * People are drawn in painter's order, which changes as they move, so the keyboard doesn't use those nodes:
+ * each person also gets a focus target in a last layer, in a fixed order (you, then desk number). React never
+ * moves a target when others change places, so focus stays put, and its focus ring draws above every pin.
+ */
 
-/** Isometric pixel office. Seats come from agent.seat; walking mode wanders the floor. */
-
-const TW = 64; // tile width
-const TH = 32; // tile height
-const COLS = 8;
-const ROWS = 6;
-const OX = 320;
-const OY = 96;
-const GYM_SPOTS = [
-  { col: 7.7, row: 5.3 },
-  { col: 6.8, row: 5.9 },
-  { col: 8.3, row: 6.1 },
-  { col: 5.9, row: 6.5 },
-  { col: 7.4, row: 6.8 },
-];
+export interface PersonPoint {
+  id: string;
+  /** In viewBox coordinates, for the hover card: centre x, the top of the name pill, and the feet. */
+  x: number;
+  y: number;
+  feet: number;
+}
 
 interface Props {
-  agents: Agent[];
-  walking: boolean;
-  saying?: Record<string, string>;
-  onSelect: (id: string) => void;
+  layout: OfficeLayout;
+  plan: OfficePlan;
+  ownerName: string;
+  /** How many wait on you; over 2 hours of waiting shows !!. */
+  waitingCount: number;
+  longWait: boolean;
+  /** Activate (click, Enter, Space). `pointerType` is what pressed it (none for the keyboard); touch and pen pin the card. */
+  onActivate: (id: string, pointerType: string | undefined) => void;
+  /** Show the card for this person, or start closing it. */
+  onHover: (id: string | null) => void;
+  /** Where everyone is now, so the card follows its person when they move. */
+  onPoints?: (points: Map<string, PersonPoint>) => void;
+  /** The open hover card's element id and who it describes (aria-describedby). */
+  described?: { id: string; agentId: string } | null;
+  /** Whole-number scale: pixel art never blurs (spec memory note: integer scaling only). */
+  scale: number;
+  /** The scene's frame in viewBox units, so the stage can pick a scale and place the card. */
+  onFrame?: (box: Box) => void;
 }
 
-type Pos = { col: number; row: number };
+/** The lamp sits on top of the founder's 40 px wall, above the door (Figma 109:2). */
+const LAMP_LIFT = 38;
 
-function toScreen(col: number, row: number) {
-  return { x: OX + (col - row) * (TW / 2), y: OY + (col + row) * (TH / 2) };
+type Drawable = { depth: number; layer: number; order: number; node: ReactNode };
+/** A keyboard focus target: who, what a screen reader hears, and the box its ring goes round. */
+type Target = { id: string; rank: number; label: string; box: Box };
+
+function use(p: Placement, key: string, className?: string): ReactNode {
+  const s = SPRITES[p.sprite];
+  if (!s) return null;
+  const b = spriteBox(p, s);
+  return <use key={key} href={`#spr-${p.sprite}`} x={b.x} y={b.y} width={b.w} height={b.h} className={className} />;
 }
 
-/** Seed seats are a 4x3 block; spread them two tiles apart so tags have room. */
-function deskOf(a: Agent): Pos {
-  return { col: 1 + a.seat.col * 2, row: 1 + a.seat.row * 2 };
+/** No duration here: a label that changed every minute would be re-read every minute. The card and the list have it. */
+function personLabel(p: Placed, ownerName: string): string {
+  if (p.agent.isHuman) return ownerName === p.agent.name ? `${p.agent.name} (you), in your room` : `${p.agent.name}, founder, in their room`;
+  return `${p.agent.name}, ${p.agent.role}: ${ACTIVITY_LABEL[p.activity.activity]}`;
 }
 
-function randomTile(): Pos {
-  return { col: Math.floor(Math.random() * COLS) + 0.5, row: Math.floor(Math.random() * ROWS) + 0.5 };
-}
+export function OfficeScene({ layout, plan, ownerName, waitingCount, longWait, onActivate, onHover, onPoints, described, scale, onFrame }: Props) {
+  const svg = useRef<SVGSVGElement>(null);
+  // Click reads this: on older Safari and Firefox a click is a plain MouseEvent with no pointerType.
+  const pressedWith = useRef<string | undefined>(undefined);
 
-export function OfficeScene({ agents, walking, onSelect, saying = {} }: Props) {
-  const [wander, setWander] = useState<Record<string, Pos>>({});
-  const idKey = agents.map((a) => a.id).join(',');
+  const frame = useMemo(() => {
+    const box: Box = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
+    const items: Drawable[] = [];
+    let order = 0;
+    const floor: ReactNode[] = [];
 
-  useEffect(() => {
-    if (!walking) {
-      setWander({});
-      return;
+    for (const [i, p] of layout.floor.entries()) {
+      const s = SPRITES[p.sprite];
+      if (!s) continue;
+      const b = spriteBox(p, s);
+      grow(box, b.x, b.y, b.w, b.h);
+      floor.push(use(p, `f${i}`));
     }
-    const shuffle = () => {
-      const next: Record<string, Pos> = {};
-      for (const a of agents) if (a.status !== 'off') next[a.id] = randomTile();
-      setWander(next);
+    for (const [i, p] of layout.walls.entries()) {
+      const s = SPRITES[p.sprite];
+      if (!s) continue;
+      const b = spriteBox(p, s);
+      grow(box, b.x, b.y, b.w, b.h);
+      items.push({ depth: depthOf(p), layer: LAYER.wall, order: order++, node: use(p, `w${i}`) });
+    }
+    for (const [i, p] of layout.furniture.entries()) {
+      const s = SPRITES[p.sprite];
+      if (!s) continue;
+      const b = spriteBox(p, s);
+      grow(box, b.x, b.y, b.w, b.h);
+      // Rugs lie flat: they go with the floor, under everyone standing on them.
+      if (p.sprite.startsWith('rug-')) floor.push(use(p, `r${i}`));
+      else items.push({ depth: depthOf(p), layer: LAYER.furniture, order: order++, node: use(p, `o${i}`) });
+    }
+    return { box, items, floor, order };
+  }, [layout]);
+
+  const scene = useMemo(() => {
+    const box = { ...frame.box };
+    const items = [...frame.items];
+    let order = frame.order;
+    const top: ReactNode[] = [];
+    const points = new Map<string, PersonPoint>();
+    const targets: Target[] = [];
+    const rankOf = (a: { isHuman?: boolean; deskNo?: number }) => (a.isHuman ? 0 : (a.deskNo ?? 999));
+
+    // The pointer works on what you see; the keyboard on the targets (see the note at the top).
+    const press = (e: PointerEvent) => {
+      pressedWith.current = e.pointerType;
     };
-    shuffle();
-    const handle = window.setInterval(shuffle, 2400);
-    return () => window.clearInterval(handle);
-    // agents identity changes every poll; keying on ids keeps the interval stable
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [walking, idKey]);
+    const activate = (id: string) => {
+      const how = pressedWith.current;
+      pressedWith.current = undefined;
+      // Focus its target, so a panel opened from here gives focus back to this person when it closes.
+      svg.current?.querySelector<SVGGElement>(`.o-target[data-agent="${CSS.escape(id)}"]`)?.focus({ preventScroll: true });
+      onActivate(id, how);
+    };
+    const enter = (id: string) => (e: PointerEvent) => e.pointerType === 'mouse' && onHover(id);
+    const leave = (e: PointerEvent) => e.pointerType === 'mouse' && onHover(null);
 
-  const positions = useMemo(() => {
-    const map: Record<string, Pos> = {};
-    let gym = 0;
-    for (const a of agents) {
-      if (wander[a.id]) map[a.id] = wander[a.id];
-      else if (!a.isHuman && a.status === 'off') map[a.id] = GYM_SPOTS[gym++ % GYM_SPOTS.length];
-      else map[a.id] = deskOf(a);
-    }
-    return map;
-  }, [agents, wander]);
-
-  const tiles = useMemo(() => {
-    const out: Pos[] = [];
-    for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) out.push({ col: c, row: r });
-    return out;
-  }, []);
-
-  // Draw order: floor, then desks and people sorted by depth so nearer things overlap farther ones.
-  const layered = [
-    ...agents.map((a) => {
-      const pos = deskOf(a);
-      return { kind: 'desk' as const, a, pos, depth: pos.col + pos.row };
-    }),
-    ...agents.map((a) => {
-      const pos = positions[a.id];
-      return { kind: 'person' as const, a, pos, depth: pos.col + pos.row + 0.4 };
-    }),
-  ].sort((l, r) => l.depth - r.depth);
-
-  const corner = (c: number, r: number) => toScreen(c, r);
-  const A = corner(0, 0);
-  const B = corner(COLS, 0);
-  const C = corner(COLS, ROWS);
-  const D = corner(0, ROWS);
-  const drop = 14;
-  const gym = toScreen(7.2, 6);
-
-  return (
-    <svg className="office-svg" viewBox="0 0 640 400" role="img" aria-label="Office map">
-      <defs>
-        <linearGradient id="floorA" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" className="o-floor-top" />
-          <stop offset="1" className="o-floor-bottom" />
-        </linearGradient>
-      </defs>
-
-      {/* gym mat, outside the front-right edge */}
-      <g>
-        <polygon
-          points={`${gym.x},${gym.y - 40} ${gym.x + 92},${gym.y + 6} ${gym.x},${gym.y + 52} ${gym.x - 92},${gym.y + 6}`}
-          className="o-gym"
-          strokeWidth="1.5"
-        />
-        <text x={gym.x} y={gym.y + 50} textAnchor="middle" className="office-sign">
-          GYM
-        </text>
-      </g>
-
-      {/* floor slab */}
-      <polygon points={`${D.x},${D.y} ${C.x},${C.y} ${C.x},${C.y + drop} ${D.x},${D.y + drop}`} className="o-slab-front" />
-      <polygon points={`${B.x},${B.y} ${C.x},${C.y} ${C.x},${C.y + drop} ${B.x},${B.y + drop}`} className="o-slab-side" />
-      <polygon points={`${A.x},${A.y} ${B.x},${B.y} ${C.x},${C.y} ${D.x},${D.y}`} fill="url(#floorA)" />
-
-      {/* tiles */}
-      {tiles.map(({ col, row }) => {
-        const p = toScreen(col, row);
-        const pts = `${p.x},${p.y} ${p.x + TW / 2},${p.y + TH / 2} ${p.x},${p.y + TH} ${p.x - TW / 2},${p.y + TH / 2}`;
-        return <polygon key={`${col}-${row}`} points={pts} className={(col + row) % 2 ? 'o-tile-b' : 'o-tile-a'} strokeWidth="0.6" />;
-      })}
-
-      {/* rug in the middle aisle */}
-      {(() => {
-        const p = toScreen(4, 3);
-        return <polygon points={`${p.x},${p.y - 2} ${p.x + 30},${p.y + 13} ${p.x},${p.y + 28} ${p.x - 30},${p.y + 13}`} className="o-rug" opacity="0.8" />;
-      })()}
-
-      {/* plants in corners */}
-      {[toScreen(0.4, 0.4), toScreen(COLS - 0.4, 0.4), toScreen(0.4, ROWS - 0.4)].map((p, i) => (
-        <g key={i} transform={`translate(${p.x} ${p.y + TH / 2})`}>
-          <rect x="-6" y="-8" width="12" height="10" className="o-plant-pot" />
-          <circle cx="0" cy="-14" r="9" className="o-plant-leaf" />
-          <circle cx="-6" cy="-10" r="6" className="o-plant-leaf-2" />
-          <circle cx="6" cy="-10" r="6" className="o-plant-leaf-2" />
-        </g>
-      ))}
-
-      {layered.map((l) => {
-        const p = toScreen(l.pos.col + 0.5, l.pos.row + 0.5);
-        if (l.kind === 'desk') {
-          return <Desk key={`desk-${l.a.id}`} x={p.x} y={p.y} accent={l.a.color} />;
-        }
-        return (
-          <Person
-            key={`p-${l.a.id}`}
-            agent={l.a}
-            x={p.x}
-            y={p.y - 4}
-            walking={walking && l.a.status !== 'off'}
-            saying={saying[l.a.id]}
-            onClick={() => onSelect(l.a.id)}
-          />
-        );
-      })}
-    </svg>
-  );
-}
-
-function Desk({ x, y, accent }: { x: number; y: number; accent: string }) {
-  const w = 24;
-  const d = 12;
-  const h = 11;
-  const top = `${x},${y - d} ${x + w},${y} ${x},${y + d} ${x - w},${y}`;
-  const left = `${x - w},${y} ${x},${y + d} ${x},${y + d + h} ${x - w},${y + h}`;
-  const right = `${x + w},${y} ${x},${y + d} ${x},${y + d + h} ${x + w},${y + h}`;
-  return (
-    <g transform="translate(0 10)">
-      <polygon points={left} className="o-desk-left" />
-      <polygon points={right} className="o-desk-right" />
-      <polygon points={top} className="o-desk-top" strokeWidth="0.8" />
-      <rect x={x - 8} y={y - 14} width="16" height="10" rx="1" className="o-monitor" />
-      <rect x={x - 6.5} y={y - 12.5} width="13" height="7" fill={accent} opacity="0.85" />
-      <rect x={x - 1} y={y - 4} width="2" height="4" className="o-monitor" />
-    </g>
-  );
-}
-
-function Person({ agent, x, y, walking, saying, onClick }: { agent: Agent; x: number; y: number; walking: boolean; saying?: string; onClick: () => void }) {
-  const status = AGENT_STATUS_COLOR[agent.status];
-  const tagW = Math.max(agent.name.length * 5.2, agent.role.length * 4.1) + 16;
-  return (
-    <g
-      className={`person${walking ? ' walking' : ''}`}
-      style={{ transform: `translate(${x}px, ${y}px)` }}
-      onClick={onClick}
-      role="button"
-      tabIndex={0}
-      onKeyDown={(e) => e.key === 'Enter' && onClick()}
-    >
-      <title>{agent.currentTask ?? agent.role}</title>
-      <ellipse cx="0" cy="2" rx="8" ry="3" className="o-shadow" />
-      <rect x="-5" y="-9" width="4" height="9" fill={PALETTE.legs} />
-      <rect x="1" y="-9" width="4" height="9" fill={PALETTE.legs} />
-      <rect x="-6.5" y="-22" width="13" height="14" rx="2" fill={agent.color} />
-      <rect x="-8.5" y="-21" width="3" height="9" rx="1" fill={agent.color} />
-      <rect x="5.5" y="-21" width="3" height="9" rx="1" fill={agent.color} />
-      <rect x="-5.5" y="-34" width="11" height="12" rx="2" fill={PALETTE.skin} />
-      <rect x="-5.5" y="-34" width="11" height="4" fill={PALETTE.hair} />
-      <rect x="-3" y="-28.5" width="2" height="2" fill={PALETTE.eyes} />
-      <rect x="1" y="-28.5" width="2" height="2" fill={PALETTE.eyes} />
-      {agent.isHuman && <polygon points="-5,-35 -2,-40 0,-36 2,-40 5,-35" fill={PALETTE.crown} />}
-      <circle cx="0" cy="-40" r="3" style={{ fill: status }} className="o-status-ring" strokeWidth="1" />
-      {saying && (
-        <g className="speech" transform="translate(10 -50)">
-          <rect x="0" y="-12" width={Math.max(30, saying.length * 5.4 + 12)} height="14" rx="4" className="o-speech" />
-          <polygon points="4,2 10,2 3,7" className="o-speech" />
-          <text x="6" y="-2" className="speech-text">
-            {saying}
+    // Owned desks whose owner is elsewhere keep a dimmed nameplate. Under the pins, so it never hides a name.
+    for (const { slot, agent } of plan.plates) {
+      const c = toScreen(slot.u, slot.v);
+      const w = nameWidth(agent.name);
+      top.push(
+        <g key={`plate-${agent.id}`} className="o-name o-plate" aria-hidden>
+          <rect x={c.x - w / 2} y={c.y - 24} width={w} height={PILL_H} rx={4} />
+          <text x={c.x} y={c.y - 24 + 10.5} textAnchor="middle">
+            {agent.name}
           </text>
-        </g>
-      )}
-      {agent.running && !saying && (
-        <g className="bubble" transform="translate(12 -44)">
-          <rect x="0" y="-10" width="22" height="12" rx="6" className="o-bubble" />
-          <circle cx="6" cy="-4" r="1.6" className="o-bubble-dot" />
-          <circle cx="11" cy="-4" r="1.6" className="o-bubble-dot" />
-          <circle cx="16" cy="-4" r="1.6" className="o-bubble-dot" />
-        </g>
-      )}
-      <g transform="translate(0 -64)">
-        <rect x={-tagW / 2} y="0" width={tagW} height="21" rx="3" className="o-tag" />
-        <text x="0" y="9" textAnchor="middle" className="tag-name">
-          {agent.name.toUpperCase()}
-        </text>
-        <text x="0" y="17" textAnchor="middle" className="tag-role">
-          {agent.role}
-        </text>
-        <polygon points="-3.5,21 3.5,21 0,25" className="o-tag-pointer" />
+        </g>,
+      );
+    }
+
+    // People, in painter's order with the room.
+    for (const p of plan.people) {
+      const id = p.agent.id;
+      const head = headOf(p.slot);
+      const x0 = head.x - PERSON_W / 2;
+      const runs = personRuns(personColours(id, p.agent.color));
+      // The hit area covers the person, the tag and the name above.
+      const hit = hitBox(p.slot);
+      points.set(id, { id, x: head.x, y: hit.y0, feet: hit.y1 });
+      targets.push({ id, rank: rankOf(p.agent), label: personLabel(p, ownerName), box: hit });
+      grow(box, x0 - 20, hit.y0, PERSON_W + 40, head.y + PERSON_H - hit.y0);
+      items.push({
+        depth: personDepth(p.slot.u, p.slot.v),
+        layer: LAYER.person,
+        order: order++,
+        node: (
+          <g key={`p-${id}`} className="o-person" data-agent={id} onPointerDown={press} onClick={() => activate(id)} onPointerEnter={enter(id)} onPointerLeave={leave}>
+            <polygon className="o-shadow" points={`${head.x},${head.y + PERSON_H - 1} ${head.x + 12},${head.y + PERSON_H + 4} ${head.x},${head.y + PERSON_H + 9} ${head.x - 12},${head.y + PERSON_H + 4}`} />
+            <g transform={`translate(${x0} ${head.y})`}>
+              {runs.map((r, i) => (
+                <rect key={i} x={r.x} y={r.y} width={r.w} height={2} fill={r.fill} />
+              ))}
+            </g>
+            <rect className="o-hit" x={hit.x0} y={hit.y0} width={hit.x1 - hit.x0} height={hit.y1 - hit.y0} rx={4} />
+          </g>
+        ),
+      });
+    }
+
+    // Final pass: tag, then the name pill above it, in pinOrder (front to back, people waiting on you last).
+    // The door goes in before them (below), so its count never sits on a name in the queue.
+    const pinStart = top.length;
+    for (const p of pinOrder(plan.people)) {
+      const { tag, pill } = pinBoxes(p.slot, p.agent.name, p.tag !== null);
+      top.push(
+        <g key={`pin-${p.agent.id}`} aria-hidden>
+          {p.tag && tag && <use href={`#spr-status-tag-${p.tag}`} x={tag.x0} y={tag.y0} width={TAG_W} height={TAG_H} />}
+          <g className="o-name">
+            <rect x={pill.x0} y={pill.y0} width={pill.x1 - pill.x0} height={PILL_H} rx={4} />
+            <text x={(pill.x0 + pill.x1) / 2} y={pill.y0 + 10.5} textAnchor="middle">
+              {p.agent.name}
+            </text>
+          </g>
+        </g>,
+      );
+    }
+
+    // Room labels, outside the floor and upright.
+    const labels = labelSpots(layout, ownerName);
+    for (const l of labels) {
+      grow(box, l.box.x0, l.box.y0, l.box.x1 - l.box.x0, l.box.y1 - l.box.y0);
+      top.push(
+        <text key={l.key} className="o-label" x={l.x} y={l.y} aria-hidden>
+          {l.text}
+        </text>,
+      );
+    }
+    const labelBoxes = labels.map((l) => l.box);
+
+    // The founder's door: the lamp is lit while someone waits, with a count; !! after two hours.
+    const door = toScreen(layout.door.u, layout.door.v);
+    const lamp = SPRITES['lamp-lit'];
+    if (lamp) {
+      const lx = Math.round(door.x - lamp.ax * 2);
+      const ly = Math.round(door.y - LAMP_LIFT - lamp.ay * 2);
+      const beyond = plan.waitingHidden.length;
+      const caption = waitingCount ? `In, ${waitingCount} waiting${beyond ? ` (${beyond} beyond the queue)` : ''}` : 'In, nobody waiting';
+      top.splice(
+        pinStart,
+        0,
+        <g key="door" className={`o-door${waitingCount ? ' lit' : ''}${longWait ? ' long' : ''}`} role="img" aria-label={caption}>
+          <title>{caption}</title>
+          {waitingCount > 0 && <circle className="o-halo" cx={door.x} cy={door.y - LAMP_LIFT} r={9} />}
+          <use href="#spr-lamp-lit" x={lx} y={ly} width={lamp.w} height={lamp.h} className="o-lamp" />
+          {waitingCount > 0 && (
+            <g className="o-badge">
+              <circle cx={door.x + 12} cy={door.y - LAMP_LIFT - 14} r={8} />
+              <text x={door.x + 12} y={door.y - LAMP_LIFT - 10.5} textAnchor="middle">
+                {longWait ? '!!' : waitingCount > 9 ? '9+' : String(waitingCount)}
+              </text>
+            </g>
+          )}
+        </g>,
+      );
+      grow(box, door.x - 12, door.y - LAMP_LIFT - 24, 32, 30);
+    }
+
+    // Off shift: outside the floor, in front of the play area. Chips flow down three to a column, then wrap
+    // into the next column; the name sits beside each chip, the return time under it.
+    const chip = SPRITES['off-shift-chip'];
+    if (plan.offShift.length && chip) {
+      const backs = plan.offShift.map(({ agent }) => returnTime(agent.currentTask));
+      const spots = offShiftSpots(layout, plan.offShift.map(({ agent }, i) => ({ name: agent.name, back: backs[i] })), chip, labelBoxes);
+      top.push(
+        <text key="off-label" className="o-off-label" x={spots[0].x} y={spots[0].y - 6} aria-hidden>
+          OFF SHIFT (outside)
+        </text>,
+      );
+      grow(box, spots[0].x, spots[0].y - 18, spots[0].w, 18);
+      plan.offShift.forEach(({ agent }, i) => {
+        const { x, y, w, name, back: backAt } = spots[i];
+        const back = backs[i];
+        const id = agent.id;
+        const hit: Box = { x0: x - 3, y0: y - 3, x1: x + w + 3, y1: y + chip.h + 3 };
+        points.set(id, { id, x: x + chip.w / 2, y, feet: y + chip.h });
+        targets.push({ id, rank: rankOf(agent), label: `${agent.name}, ${agent.role}: off shift${back ? `, back ${back}` : ''}`, box: hit });
+        grow(box, hit.x0, hit.y0, hit.x1 - hit.x0, hit.y1 - hit.y0);
+        top.push(
+          <g key={`off-${id}`} className="o-person o-off" data-agent={id} aria-hidden onPointerDown={press} onClick={() => activate(id)} onPointerEnter={enter(id)} onPointerLeave={leave}>
+            <use href="#spr-off-shift-chip" x={x} y={y} width={chip.w} height={chip.h} />
+            {/* Name beside the chip (Figma 109:2); the return time under it, so the strip stays narrow. */}
+            <text className="o-off-name" x={name.x} y={name.y}>
+              {agent.name}
+            </text>
+            {back && backAt && (
+              <text className="o-off-back" x={backAt.x} y={backAt.y}>
+                {back}
+              </text>
+            )}
+            <rect className="o-hit" x={hit.x0} y={hit.y0} width={hit.x1 - hit.x0} height={hit.y1 - hit.y0} rx={4} />
+          </g>,
+        );
+      });
+    }
+
+    items.sort((a, b) => a.depth - b.depth || a.layer - b.layer || a.order - b.order);
+    targets.sort((a, b) => a.rank - b.rank || (a.id < b.id ? -1 : 1));
+    return { box, items, top, points, targets };
+  }, [frame, plan, layout, ownerName, waitingCount, longWait, onActivate, onHover]);
+
+  const pad = 16;
+  const vb = { x: Math.floor(scene.box.x0 - pad), y: Math.floor(scene.box.y0 - pad), w: Math.ceil(scene.box.x1 - scene.box.x0 + pad * 2), h: Math.ceil(scene.box.y1 - scene.box.y0 + pad * 2) };
+  useLayoutEffect(() => {
+    onFrame?.({ x0: vb.x, y0: vb.y, x1: vb.x + vb.w, y1: vb.y + vb.h });
+  }, [vb.x, vb.y, vb.w, vb.h, onFrame]);
+  useLayoutEffect(() => {
+    onPoints?.(scene.points);
+  }, [scene.points, onPoints]);
+
+  const used = new Set<string>([...layout.floor, ...layout.walls, ...layout.furniture].map((p) => p.sprite));
+  for (const t of ['code', 'work', 'chat', 'idle', 'wait', 'off']) used.add(`status-tag-${t}`);
+  used.add('lamp-lit');
+  used.add('off-shift-chip');
+
+  const keyDown = (id: string) => (e: KeyboardEvent) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    e.preventDefault();
+    onActivate(id, undefined);
+  };
+  // The card opens for keyboard focus only: focus put back by script after a click (a panel closing) stays quiet.
+  const focus = (id: string) => (e: FocusEvent<SVGGElement>) => e.currentTarget.matches(':focus-visible') && onHover(id);
+
+  return (
+    <svg ref={svg} className="office-svg" viewBox={`${vb.x} ${vb.y} ${vb.w} ${vb.h}`} width={vb.w * scale} height={vb.h * scale} shapeRendering="crispEdges" aria-label="Office floor">
+      <defs>
+        {[...used].map((name) => {
+          const s = SPRITES[name];
+          return s ? <symbol key={name} id={`spr-${name}`} viewBox={s.viewBox} dangerouslySetInnerHTML={{ __html: s.body }} /> : null;
+        })}
+      </defs>
+      <g className="o-floor" aria-hidden>
+        {frame.floor}
       </g>
-    </g>
+      <g className="o-room" aria-hidden>
+        {scene.items.map((i) => i.node)}
+      </g>
+      <g className="o-top">{scene.top}</g>
+      <g className="o-targets">
+        {scene.targets.map((t) => (
+          <g
+            key={`t-${t.id}`}
+            className="o-target"
+            role="button"
+            tabIndex={0}
+            aria-label={t.label}
+            aria-describedby={described?.agentId === t.id ? described.id : undefined}
+            data-agent={t.id}
+            onKeyDown={keyDown(t.id)}
+            onFocus={focus(t.id)}
+            onBlur={() => onHover(null)}
+          >
+            {/* Two rings, dark outside and light inside, so focus shows on every floor tone and on the dark stage. */}
+            <rect className="o-ring o-ring-out" x={t.box.x0} y={t.box.y0} width={t.box.x1 - t.box.x0} height={t.box.y1 - t.box.y0} rx={4} />
+            <rect className="o-ring o-ring-in" x={t.box.x0} y={t.box.y0} width={t.box.x1 - t.box.x0} height={t.box.y1 - t.box.y0} rx={4} />
+          </g>
+        ))}
+      </g>
+    </svg>
   );
 }

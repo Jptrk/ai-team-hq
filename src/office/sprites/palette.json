@@ -1,0 +1,47 @@
+{
+  "_note": "Canonical palette for every Office sprite. Sprites may only use these colours. Each ramp is light-to-dark for 3-tone shading: light = top face, mid = front face, dark = side face, line = part separation, hl = top-front highlight.",
+  "outline": "#261f24",
+  "ramps": {
+    "wood":     { "hl": "#ecc697", "light": "#c99b6c", "mid": "#a8794f", "dark": "#7d5636", "line": "#5c3c25" },
+    "woodDark": { "hl": "#b07f55", "light": "#8a5f3d", "mid": "#6e4a2f", "dark": "#523622", "line": "#3b2618" },
+    "metal":    { "hl": "#f2f3f5", "light": "#c7cbd2", "mid": "#9fa4ae", "dark": "#6d727d", "line": "#4e525b" },
+    "monitor":  { "hl": "#6b7385", "light": "#4a5160", "mid": "#343946", "dark": "#24272f", "line": "#181a20" },
+    "chair":    { "hl": "#7e8697", "light": "#5d6475", "mid": "#4b5160", "dark": "#383d49", "line": "#272a33" },
+    "cabinet":  { "hl": "#9a88d0", "light": "#6c5aa3", "mid": "#554682", "dark": "#3d3263", "line": "#2a2245" },
+    "fabric":   { "hl": "#d39bb4", "light": "#b07a92", "mid": "#94607a", "dark": "#744a5f", "line": "#553546" },
+    "mug":      { "hl": "#ffffff", "light": "#f2eee6", "mid": "#e2ddd2", "dark": "#c4bdb0", "line": "#9e978a" },
+    "pillow":   { "hl": "#fff0c2", "light": "#f2d98c", "mid": "#e0c26e", "dark": "#bf9f4f", "line": "#977b37" },
+    "wall":     { "hl": "#f4f1ea", "light": "#e6e3d9", "mid": "#6b6e7b", "dark": "#4c4f5c", "line": "#2e303a" },
+    "plantPot": { "hl": "#e89a74", "light": "#cf7f5a", "mid": "#b36847", "dark": "#8a4c33", "line": "#5e3222" },
+    "leaf":     { "hl": "#9ed69a", "light": "#6bbd6b", "mid": "#4f9d55", "dark": "#387a42", "line": "#25552e" },
+    "rug":      { "hl": "#d79a8a", "light": "#c27b6b", "mid": "#a8604f", "dark": "#874a3c", "line": "#663629" }
+  },
+  "floor": {
+    "_note": "Floor tile tones per zone, a/b for the checkerboard. Each tile draws grout on its two BACK edges only, so neighbours supply the front edges and the grid has no doubled seams.",
+    "office":  ["#dec8a8", "#d6bf9e"],
+    "founder": ["#b48561", "#aa7c59"],
+    "lounge":  ["#b2c6b0", "#a9bda7"],
+    "meeting": ["#bbc3d1", "#b2bac8"],
+    "kitchen": ["#e6e1d6", "#dbd5c8"],
+    "grout": "#c4ad8c", "groutDark": "#8a6448"
+  },
+  "status": {
+    "_note": "Status thought clouds. fill/dark/light = 3-tone body; glyph = symbol colour (dark on amber, where white fails contrast).",
+    "code": { "fill": "#35c46a", "dark": "#23864a", "light": "#7ee3a3", "glyph": "#ffffff" },
+    "work": { "fill": "#4c8dff", "dark": "#2f5fc0", "light": "#9cc2ff", "glyph": "#ffffff" },
+    "chat": { "fill": "#ffb020", "dark": "#c07d0c", "light": "#ffd57a", "glyph": "#3a2a05" },
+    "idle": { "fill": "#9b8cff", "dark": "#6a5ccc", "light": "#cfc6ff", "glyph": "#ffffff" },
+    "wait": { "fill": "#ff5c39", "dark": "#c03a1f", "light": "#ffa48f", "glyph": "#ffffff" },
+    "off":  { "fill": "#6e7681", "dark": "#4b5260", "light": "#a9b0bb", "glyph": "#ffffff" }
+  },
+  "accents": {
+    "glow": "#9ee0f2", "glowDark": "#5fa9bd",
+    "felt": "#2e8055", "feltDark": "#226343",
+    "screen": "#f266bf", "marquee": "#ffd24d", "cyan": "#66f2e6",
+    "black": "#141416", "red": "#e84a3f", "blue": "#3f7fe0", "yellow": "#f2cc33", "white": "#f2f2ea",
+    "cue": "#cc9e61", "steam": "#dcdcdc",
+    "sky": "#a8d8f0", "skyDark": "#7fbfe0", "lampLit": "#ffd24d", "lampGlow": "#fff0a8",
+    "bookRed": "#c24a46", "bookBlue": "#4a72b8", "bookGreen": "#5a9a5a", "bookGold": "#d9b14a",
+    "rugBorder": "#e3c08a", "chip": "#252a34", "chipEdge": "#3a404c", "chipSkin": "#8d939e", "moon": "#c9cfd8"
+  }
+}

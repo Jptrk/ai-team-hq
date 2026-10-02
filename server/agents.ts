@@ -1,6 +1,7 @@
 import type { Agent, Attachment, Instruction, State, WorkItem } from '../shared/types';
 import { MAX_TEAM } from '../shared/types';
 import { titleFrom } from '../shared/plainText';
+import { assignDeskNumbers } from '../shared/desks';
 import { slug } from './paths';
 import { AGENT_COLORS, assignSeats } from './seed';
 import { now, today, uid, type Project } from './store';
@@ -159,6 +160,7 @@ export function addAgent(p: Project, input: NewAgent): Agent | string {
   agent.lead = input.lead || !s.agents.some((a) => a.lead && !a.isHuman) || undefined;
   s.agents.push(agent);
   assignSeats(s.agents);
+  assignDeskNumbers(s.agents);
   p.log(agent.id, `${agent.name} joined as ${agent.role}`);
   p.commit();
   return agent;

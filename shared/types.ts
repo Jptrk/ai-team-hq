@@ -1,3 +1,5 @@
+import type { AgentActivity } from './activity';
+
 export type AgentStatus = 'working' | 'waiting' | 'idle' | 'off';
 
 export interface Agent {
@@ -12,7 +14,10 @@ export interface Agent {
   /** Dev-team projects: the desk that checks finished tickets before you sign them off. One per project. */
   qa?: boolean;
   color: string;
+  /** Old 4×3 office grid position. Kept for older data; the office now uses deskNo. */
   seat: { col: number; row: number };
+  /** Desks only: which desk in the office, 1-based. Kept when others leave; a new desk takes the lowest free number. */
+  deskNo?: number;
   currentTask?: string;
   lastActive: string;
   skills: string[];
@@ -101,6 +106,8 @@ export interface WorkItem {
   qa?: QaState;
   /** Files in the project folder that desks changed for this ticket, relative to the folder. Newest last. */
   changedFiles?: string[];
+  /** When it went into Needs you, for the Office's waiting clock. Cleared when it leaves (see stampNeedsYou). */
+  needsYouAt?: string;
 }
 
 export interface QaState {
@@ -483,6 +490,8 @@ export interface Meta {
 /** The polled state leaves out messages; a thread's messages load when it opens. */
 export interface StateResponse extends Omit<State, 'messages' | 'huddles'> {
   huddles: HuddleSummary[];
+  /** What each desk is doing right now, for the Office view. Derived, never stored. */
+  office: Record<string, AgentActivity>;
   /** Huddles a project can start per day. */
   huddleLimit: number;
   meta: Meta;
