@@ -1,9 +1,13 @@
-import { query, type McpServerConfig, type McpServerStatus, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
+import { query, type McpServerConfig, type McpServerStatus, type Query, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
+import { maskArgs, maskPath, maskUrl, SECRET_NAME, secretForms, toolKey, type Masked } from '../shared/mcpSpec';
 import type { McpAuth, McpServerInfo, McpSource, McpToolInfo } from '../shared/types';
+import { claudeJsonPath } from './mcpCli';
 import { samePath } from './paths';
+
+export { toolKey };
 
 /**
  * Per-project MCP servers.
@@ -11,18 +15,21 @@ import { samePath } from './paths';
  * Discovery reads the same places Claude Code does for a folder, lowest priority first:
  *   user    ~/.claude.json  mcpServers
  *   repo    <folder>/.mcp.json
- *   folder  ~/.claude.json  projects[<folder>].mcpServers   (your private entries for that folder)
+ *   folder  ~/.claude.json  projects[<folder>].mcpServers   (your private entries for that folder,
+ *                                                         or for the git repo it sits in)
  * plus the claude.ai connectors on your account, which only show up by asking a live session.
  *
  * Configs (with their tokens) are read fresh every time and never written into HQ's data.
+ * ~/.claude.json moves with CLAUDE_CONFIG_DIR, as it does for Claude Code.
  */
 
-const CLAUDE_JSON = path.join(os.homedir(), '.claude.json');
 const PROBE_TIMEOUT_MS = 30_000;
 
 export interface FoundServer {
   info: McpServerInfo;
   config: McpServerConfig;
+  /** Which server this is, with no secret in it (see fingerprintOf). Saved when you turn it on. */
+  fingerprint: string;
 }
 
 type Raw = Record<string, unknown>;
@@ -60,34 +67,68 @@ function toConfig(raw: Raw): McpServerConfig | null {
   return null;
 }
 
-const SECRET_FLAG = /key|token|secret|auth|header|password|bearer/i;
-const SECRET_VALUE = /^(sk|ctx7sk|ghp|gho|ghs|github_pat|xox[abp]|AIza)[-_]|^[A-Za-z0-9_\-]{32,}$/;
+type Stdio = { command: string; args?: string[]; env?: Record<string, string> };
+type Web = { type: 'http' | 'sse'; url: string; headers?: Record<string, string> };
 
-/** Something safe to show on screen: the command or URL with anything secret-looking blanked out. */
-function describe(config: McpServerConfig): { transport: McpServerInfo['transport']; target: string; auth: McpAuth } {
+/** A server URL as HQ shows and remembers it: origin and path, token-looking parts blanked, no query. */
+function shownUrl(url: string): Masked<string> {
+  try {
+    const u = new URL(url);
+    const p = maskPath(u.pathname);
+    return { shown: `${u.origin}${p.shown}`, secrets: p.secrets };
+  } catch {
+    return maskUrl(url);
+  }
+}
+
+/** Something safe to show on screen: the command or URL with anything secret-looking blanked out. Exported for tests. */
+export function describe(config: McpServerConfig): { transport: McpServerInfo['transport']; target: string; auth: McpAuth } {
   if (config.type === 'http' || config.type === 'sse') {
-    let target = config.url;
-    try {
-      const u = new URL(config.url);
-      target = `${u.origin}${u.pathname}`;
-    } catch {
-      /* keep as written */
-    }
-    const hasToken = Object.keys(config.headers ?? {}).some((h) => /authorization|token|key/i.test(h));
-    return { transport: config.type, target, auth: hasToken ? 'token' : 'oauth' };
+    const url = shownUrl(config.url);
+    const inUrl = maskUrl(config.url).secrets.length > 0;
+    const hasToken = inUrl || Object.keys(config.headers ?? {}).some((h) => SECRET_NAME.test(h));
+    return { transport: config.type, target: url.shown, auth: hasToken ? 'token' : 'oauth' };
   }
   if (config.type === 'stdio' || config.type === undefined) {
-    const stdio = config as { command: string; args?: string[]; env?: Record<string, string> };
-    const args = stdio.args ?? [];
-    const shown = args.map((a, i) => (SECRET_VALUE.test(a) || (i > 0 && SECRET_FLAG.test(args[i - 1]) && !a.startsWith('-')) ? '•••' : a));
-    const secretArg = shown.includes('•••');
+    const stdio = config as Stdio;
+    const args = maskArgs(stdio.args ?? []);
     const hasEnv = Object.keys(stdio.env ?? {}).length > 0;
-    return { transport: 'stdio', target: [stdio.command, ...shown].join(' ').trim(), auth: secretArg || hasEnv ? 'token' : 'none' };
+    return { transport: 'stdio', target: [stdio.command, ...args.shown].join(' ').trim(), auth: args.secrets.length > 0 || hasEnv ? 'token' : 'none' };
   }
   return { transport: 'unknown', target: '', auth: 'none' };
 }
 
-function collect(into: Map<string, FoundServer>, servers: unknown, source: McpSource): void {
+/**
+ * Which server a config means, without any secret in it: a hash of its masked shape (command and
+ * masked arguments, or URL origin and masked path, plus header and variable names, never values).
+ * A new token keeps it; a new URL, command or argument changes it. Exported for tests.
+ */
+export function fingerprintOf(config: McpServerConfig): string {
+  const names = (o: Record<string, string> | undefined) => Object.keys(o ?? {}).map((k) => k.toLowerCase()).sort();
+  let shape: unknown;
+  if (config.type === 'http' || config.type === 'sse') {
+    const web = config as Web;
+    shape = { type: web.type, url: shownUrl(web.url).shown, headers: names(web.headers) };
+  } else if (config.type === 'stdio' || config.type === undefined) {
+    const stdio = config as Stdio;
+    shape = { type: 'stdio', command: stdio.command, args: maskArgs(stdio.args ?? []).shown, env: names(stdio.env) };
+  } else {
+    shape = { type: config.type };
+  }
+  return crypto.createHash('sha256').update(JSON.stringify(shape)).digest('hex').slice(0, 16);
+}
+
+/** Every value in a server's config that could be secret: header and variable values, and secrets in its arguments and URL. For scrubbing its errors. */
+export function configSecrets(config: McpServerConfig): string[] {
+  const c = config as Partial<Stdio & Web>;
+  const out: string[] = [];
+  for (const v of [...Object.values(c.headers ?? {}), ...Object.values(c.env ?? {})]) out.push(...secretForms(String(v)));
+  if (Array.isArray(c.args)) out.push(...maskArgs(c.args).secrets);
+  if (typeof c.url === 'string') out.push(...maskUrl(c.url).secrets);
+  return [...new Set(out.filter(Boolean))];
+}
+
+function collect(into: Map<string, FoundServer>, hidden: FoundServer[], servers: unknown, source: McpSource): void {
   if (!servers || typeof servers !== 'object') return;
   for (const [name, raw] of Object.entries(servers as Raw)) {
     if (!raw || typeof raw !== 'object') continue;
@@ -95,28 +136,53 @@ function collect(into: Map<string, FoundServer>, servers: unknown, source: McpSo
     if (!config) continue;
     const shape = describe(config);
     // Later sources win, the same order Claude Code uses: folder beats repo beats user.
-    into.set(name, { info: { name, source, ...shape }, config });
+    const before = into.get(name);
+    if (before && before.info.source !== source) hidden.push(before);
+    into.set(name, { info: { name, source, ...shape }, config, fingerprint: fingerprintOf(config) });
   }
+}
+
+/**
+ * The git repo a folder sits in: Claude Code keys its per-folder settings by the repo's top folder.
+ * A .git file (a git worktree) counts as a repo top too; worktrees are untested.
+ */
+export function gitRoot(folder: string): string | null {
+  for (let dir = path.resolve(folder); ; dir = path.dirname(dir)) {
+    if (fs.existsSync(path.join(dir, '.git'))) return dir;
+    if (path.dirname(dir) === dir) return null;
+  }
+}
+
+export interface Discovery {
+  /** What Claude Code uses in that folder, one per name. */
+  servers: FoundServer[];
+  /** Same-named definitions that a higher-priority one hides. */
+  hidden: FoundServer[];
+}
+
+/** Every file-configured server Claude Code would see when working in `folder`, plus the ones a same name hides. */
+export function discoverAll(folder: string | null): Discovery {
+  const found = new Map<string, FoundServer>();
+  const hidden: FoundServer[] = [];
+  const claudeJson = readJson(claudeJsonPath());
+  collect(found, hidden, claudeJson?.mcpServers, 'user');
+  if (folder) {
+    collect(found, hidden, readJson(path.join(folder, '.mcp.json'))?.mcpServers, 'repo');
+    const projects = (claudeJson?.projects ?? {}) as Record<string, Raw>;
+    const keys = Object.keys(projects);
+    const root = gitRoot(folder);
+    // The repo's entries first, then the folder's own, so the folder's win.
+    const forRoot = root && !samePath(root, folder) ? keys.filter((k) => samePath(k, root)) : [];
+    const forFolder = keys.filter((k) => samePath(k, folder));
+    for (const key of [...forRoot, ...forFolder]) collect(found, hidden, projects[key]?.mcpServers, 'folder');
+  }
+  const byName = (a: FoundServer, b: FoundServer) => a.info.name.localeCompare(b.info.name);
+  return { servers: [...found.values()].sort(byName), hidden: hidden.sort(byName) };
 }
 
 /** Every file-configured server Claude Code would see when working in `folder`. */
 export function discoverServers(folder: string | null): FoundServer[] {
-  const found = new Map<string, FoundServer>();
-  const claudeJson = readJson(CLAUDE_JSON);
-  collect(found, claudeJson?.mcpServers, 'user');
-  if (folder) {
-    collect(found, readJson(path.join(folder, '.mcp.json'))?.mcpServers, 'repo');
-    const projects = (claudeJson?.projects ?? {}) as Record<string, Raw>;
-    for (const [key, entry] of Object.entries(projects)) {
-      if (samePath(key, folder)) collect(found, entry?.mcpServers, 'folder');
-    }
-  }
-  return [...found.values()].sort((a, b) => a.info.name.localeCompare(b.info.name));
-}
-
-/** How a server name appears inside tool names: mcp__<key>__<tool>. */
-export function toolKey(serverName: string): string {
-  return serverName.replace(/[^A-Za-z0-9_-]/g, '_');
+  return discoverAll(folder).servers;
 }
 
 const WRITE_WORDS = /^(create|update|delete|remove|add|merge|push|post|send|edit|transition|set|write|close|approve|request|assign|upload|move|rename|submit|publish|comment|reply|react|star|fork|dismiss|rerun|cancel|trigger|run|execute|click|fill|type|press|drag|navigate|new|use|generate|export|import|sync|link|unlink|lock|unlock|archive|restore|invite|share)/i;
@@ -213,11 +279,16 @@ export function inputSaysDelete(input: unknown): boolean {
   return walk(input, '', 0);
 }
 
+export interface McpSession {
+  q: Query;
+  close(): Promise<void>;
+}
+
 /**
- * Connect to servers and report their status and tools, without sending any prompt.
- * No model call is made and no tool is called: every tool request is refused.
+ * A Claude Code session that only connects to these servers: it sends no prompt, has no tools of
+ * its own, and refuses every tool request. Checks and sign-ins run in one.
  */
-export async function probeServers(cwd: string, servers: Record<string, McpServerConfig>, includeClaudeAi: boolean): Promise<McpServerStatus[]> {
+export function openSession(cwd: string, servers: Record<string, McpServerConfig>, includeClaudeAi: boolean): McpSession {
   fs.mkdirSync(cwd, { recursive: true });
   const abort = new AbortController();
   let release: () => void = () => undefined;
@@ -249,12 +320,40 @@ export async function probeServers(cwd: string, servers: Record<string, McpServe
       /* aborted */
     }
   })();
+  let closed = false;
+  return {
+    q,
+    async close() {
+      if (closed) return;
+      closed = true;
+      release();
+      abort.abort();
+      try {
+        q.close();
+      } catch {
+        /* already closed */
+      }
+      await drain;
+    },
+  };
+}
 
+/**
+ * Connect to servers and report their status and tools, without sending any prompt.
+ * No model call is made and no tool is called: every tool request is refused.
+ */
+export async function probeServers(
+  cwd: string,
+  servers: Record<string, McpServerConfig>,
+  includeClaudeAi: boolean,
+  timeoutMs = PROBE_TIMEOUT_MS,
+): Promise<McpServerStatus[]> {
+  const { q, close } = openSession(cwd, servers, includeClaudeAi);
   try {
     // claude.ai connectors register a few seconds after start, so wait until the list stops
     // growing and nothing is pending, with a floor when connectors are expected.
     const start = Date.now();
-    const deadline = start + PROBE_TIMEOUT_MS;
+    const deadline = start + timeoutMs;
     const floor = includeClaudeAi ? 6_000 : 0;
     let statuses = await q.mcpServerStatus();
     let stableFor = 0;
@@ -268,14 +367,7 @@ export async function probeServers(cwd: string, servers: Record<string, McpServe
     }
     return statuses;
   } finally {
-    release();
-    abort.abort();
-    try {
-      q.close();
-    } catch {
-      /* already closed */
-    }
-    await drain;
+    await close();
   }
 }
 

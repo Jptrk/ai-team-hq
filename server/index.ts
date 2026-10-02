@@ -6,15 +6,14 @@ import { router } from './routes';
 import { isLive, meta } from './runner';
 import { startSim } from './sim';
 import { sweepAttachments } from './attachments';
+import { backfillFingerprints } from './connections';
+import { requestGuard } from './http';
+import { cancelAllLogins } from './mcpAuth';
 import { allProjects, flushAll, initStore, listMeta } from './store';
 
 const app = express();
-// Browsers say where a request came from. A page on another site may not change anything here.
-// Requests without the header (curl, tests) pass.
-app.use('/api', (req, res, next) => {
-  if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS' || req.get('sec-fetch-site') !== 'cross-site') return next();
-  res.status(403).json({ error: 'Cross-site requests are not allowed' });
-});
+// Only this PC's own names, and changes only from HQ's own page (see server/http.ts).
+app.use(requestGuard);
 app.use(express.json({ limit: '64kb' }));
 app.use('/api', router);
 
@@ -47,11 +46,18 @@ for (const p of allProjects()) {
   const removed = sweepAttachments(p.id, p.state);
   if (removed) console.log(`[hq] ${p.meta.key}: removed ${removed} unused image${removed === 1 ? '' : 's'}`);
 }
+// Connections saved before HQ kept fingerprints: pin each to the server it means now.
+try {
+  backfillFingerprints();
+} catch (e) {
+  console.error('[hq] connections:', e instanceof Error ? e.name : 'error');
+}
 if (!live && process.env.SIMULATE !== '0') startSim();
 
 // node --watch sends SIGTERM on restart; write any debounced changes first.
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
+    cancelAllLogins();
     flushAll();
     process.exit(0);
   });

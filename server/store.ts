@@ -206,6 +206,8 @@ export function migrateState(s: State, template?: TeamTemplate): State {
   s.activity ??= [];
   s.seq ??= 0;
   s.connections ??= [];
+  // Early builds saved the masked command or URL; only a fingerprint is kept now.
+  for (const c of s.connections) delete (c as { target?: string }).target;
   s.checks ??= {};
   s.threads ??= [];
   s.messages ??= [];

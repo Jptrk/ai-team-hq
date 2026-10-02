@@ -1,5 +1,5 @@
 /**
- * UI helpers: markdown previews, hash routes, board filter, top-bar search, report links, editor markdown.
+ * UI helpers: markdown previews, hash routes, board filter, top-bar search, report links, editor markdown, add connection.
  * Run: npm run test:ui. Pure functions and a headless editor, no browser, no network.
  */
 import assert from 'node:assert/strict';
@@ -20,6 +20,10 @@ import { cleanMarkdown, escapeTypedText, looksLikeDiffOrTerminal, looksLikeMarkd
 import { attachmentUrl, isAttachmentUrl, isReportUrl, reportFileName, resolveReportHref } from './markdown/reportLinks';
 import { parseRoute, projectPath } from './route';
 import { latestDecision, readableInk } from './util';
+import { MCP_PRESETS, presetArgs, presetDefaults } from '../shared/mcpPresets';
+import { buildSpec, safeAuthUrl } from '../shared/mcpSpec';
+import type { ConnectionRow } from '../shared/types';
+import { alreadySetUp, blankRow, CUSTOM, hostOf, initialForm, presetCards, signInButtons, splitArgs, timeLeft, toRequest } from './components/connections/addForm';
 
 let passed = 0;
 function test(name: string, fn: () => void) {
@@ -441,6 +445,80 @@ test('board: approved tickets stay In progress until the desk finishes them', ()
 test('descriptions are editable only in To do', () => {
   assert.equal(canEditDescription('todo'), true);
   for (const s of ['in-progress', 'needs-you', 'approved', 'held', 'sent-back', 'done'] as const) assert.equal(canEditDescription(s), false, s);
+});
+
+// ---------- add connection ----------
+
+test('add connection: each preset form becomes a request the server accepts', () => {
+  for (const p of MCP_PRESETS) {
+    const f = initialForm(p.id, true);
+    assert.equal(f.pick, p.id);
+    assert.equal(f.scope, 'project');
+    const built = buildSpec(toRequest(f));
+    assert.ok(!('error' in built), p.id);
+    if ('error' in built) continue;
+    assert.equal(built.config.type, 'stdio');
+    assert.deepEqual(built.config.type === 'stdio' && built.config.args, presetArgs(p, presetDefaults(p)));
+  }
+  // No folder: only "all my projects".
+  assert.equal(initialForm('playwright', false).scope, 'all');
+  assert.equal(initialForm('nope', true).pick, CUSTOM);
+});
+test('add connection: custom forms keep secrets out of the preview', () => {
+  const f = { ...initialForm(CUSTOM, true), name: 'gh', transport: 'http' as const, url: ' https://api.example.com/mcp ', headers: [{ name: ' Authorization ', value: 'Bearer abc123', secret: true }, { name: '', value: '' }] };
+  const req = toRequest(f);
+  assert.equal(req.url, 'https://api.example.com/mcp');
+  assert.deepEqual(req.headers, [{ name: 'Authorization', value: 'Bearer abc123', secret: true }]);
+  const built = buildSpec(req);
+  assert.ok(!('error' in built) && !built.preview.includes('abc123'));
+  const cmd = toRequest({ ...initialForm(CUSTOM, true), name: 'x', transport: 'stdio', command: 'npx', argsText: '-y\n\n  some pkg  \r\n--flag', trust: true });
+  assert.deepEqual(cmd.args, ['-y', 'some pkg', '--flag']);
+  assert.equal(cmd.trustCommand, true);
+  assert.deepEqual(splitArgs(''), []);
+});
+test('add connection: presets already set up say where', () => {
+  const row = { name: 'chrome-devtools', source: 'user', present: true } as ConnectionRow;
+  assert.equal(alreadySetUp([row], 'chrome-devtools'), 'Already set up (all projects)');
+  assert.equal(alreadySetUp([{ ...row, present: false }], 'chrome-devtools'), null);
+  assert.equal(presetCards([row]).find((c) => c.id === 'chrome-devtools')?.already, 'Already set up (all projects)');
+  assert.equal(presetCards([row]).find((c) => c.id === 'playwright')?.already, null);
+});
+test('add connection: new rows start Secret, and a row named like a secret is masked even unticked', () => {
+  assert.deepEqual(blankRow(), { name: '', value: '', secret: true });
+  const f = {
+    ...initialForm(CUSTOM, true),
+    name: 'api',
+    transport: 'http' as const,
+    url: 'https://api.example.com/mcp',
+    headers: [{ name: 'X-Mode', value: 'fast' }, { name: 'Authorization', value: 'Token abc123secret' }],
+  };
+  const built = buildSpec(toRequest(f));
+  assert.ok(!('error' in built));
+  if ('error' in built) return;
+  assert.ok(!built.preview.includes('abc123secret'), built.preview);
+  assert.ok(built.preview.includes('header: X-Mode: fast'));
+  assert.ok(built.secrets.includes('abc123secret'));
+});
+test('sign-in buttons: one way at a time, and the terminal command only for plain names', () => {
+  const row = (extra: Partial<ConnectionRow>): ConnectionRow =>
+    ({ name: 'sentry', source: 'folder', transport: 'http', target: 'https://mcp.sentry.dev/mcp', auth: 'oauth', present: true, connection: { name: 'sentry', source: 'folder', enabled: false, desks: [], mode: 'ask' }, check: { state: 'needs-login', checkedAt: '', tools: [] }, ...extra }) as ConnectionRow;
+  assert.deepEqual(signInButtons(row({})), { login: true, logout: false, tryAgain: false, command: false });
+  const failed = { state: 'failed' as const, error: 'x', expiresAt: '' };
+  assert.deepEqual(signInButtons(row({ login: failed })), { login: false, logout: false, tryAgain: true, command: false });
+  assert.deepEqual(signInButtons(row({ login: { ...failed, unsupported: true } })), { login: false, logout: false, tryAgain: false, command: true });
+  assert.equal(signInButtons(row({ name: 'x;calc', login: { ...failed, unsupported: true } })).command, false);
+  assert.equal(signInButtons(row({ name: 'my server', login: { ...failed, unsupported: true } })).command, false);
+  assert.equal(signInButtons(row({ login: { state: 'waiting', expiresAt: '' } })).login, false);
+  assert.equal(signInButtons(row({ check: { state: 'connected', checkedAt: '', tools: [] } })).logout, true);
+  assert.equal(signInButtons(row({ target: 'http://127.0.0.1:3845/mcp', check: { state: 'connected', checkedAt: '', tools: [] } })).logout, false);
+});
+test('sign-in: only web links, with the host shown and time left', () => {
+  assert.equal(safeAuthUrl('javascript:alert(1)'), null);
+  assert.equal(safeAuthUrl('file:///C:/Windows'), null);
+  assert.equal(hostOf('https://auth.example.com:8443/x'), 'auth.example.com:8443');
+  assert.equal(hostOf('nope'), '');
+  assert.equal(timeLeft(new Date(Date.UTC(2026, 0, 1, 0, 5, 30)).toISOString(), Date.UTC(2026, 0, 1, 0, 0, 0)), '5:30');
+  assert.equal(timeLeft(new Date(0).toISOString(), 1000), '0:00');
 });
 
 console.log(`ui: ${passed} tests passed`);

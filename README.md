@@ -21,6 +21,10 @@ npm run dev
 
 Open http://localhost:5174. The API runs on http://127.0.0.1:4747.
 
+The API answers only to this PC's own names (`localhost`, `127.0.0.1`, `[::1]`), which blocks
+DNS-rebinding pages. Changes are accepted only from HQ's own page or from tools like curl. Set
+`HQ_ALLOWED_HOSTS=name1,name2` to allow other host names.
+
 Production build, served from one port:
 
 ```bash
@@ -274,12 +278,89 @@ settings. That's the same order Claude Code uses.
   no bot accounts. On your own PRs, GitHub won't let the author approve or request changes, so
   agents can only leave comments there.
 - Tokens are never stored in HQ. Only your choices are saved: which servers, which desks, and
-  which mode. Each run reads the config fresh from Claude Code's own files.
+  which mode, plus each server's fingerprint and last check. Each run reads the config fresh
+  from Claude Code's own files.
 - A run loads only HQ's tools plus the servers turned on for that desk (`strictMcpConfig`).
   Other claude.ai connectors stay out, which also keeps prompts smaller.
 
-To log in to a server that needs it, open Claude Code in the project folder and run `/mcp`.
-For a claude.ai connector, connect it in claude.ai under Settings, Connectors. Then check again.
+- **A changed setup stops a connection.** HQ remembers which server you turned on by a
+  fingerprint: a hash of its masked command or URL plus its header and variable names, never the
+  command, URL or any value. A new token keeps it. If that server's setup changes in Claude Code,
+  or a same-named one takes its place, desks stop getting it. The row then says so, with a
+  **Use the new setup** button, which drops the old server's tool list and checks the new one.
+  When HQ adds or removes a server, every project settles at once: a connection whose server
+  changed or is gone is turned off (Auto back to Ask), so it can't come back on its own.
+  Connections saved before fingerprints get one when HQ starts.
+
+### Adding, logging in and removing
+
+The Connections page can set servers up for you. It runs Claude Code's own `claude mcp`
+commands, using the CLI that ships with the Agent SDK (the same one desks run), so servers land
+exactly where Claude Code keeps them. There is no terminal inside HQ.
+
+- **Add connection** opens a form in three steps:
+  1. Pick what to connect.
+     - Presets: **Playwright** and **Chrome DevTools**. Both give desks a real browser: open pages,
+       click, fill forms, take screenshots. The command comes from HQ, and the options only pick
+       flags: no window (headless), a fresh browser each time, and for Playwright, Chrome or Edge.
+     - **Custom**: any other server, either a URL (HTTP or SSE) with optional headers, or a program
+       to run on this PC with arguments and environment variables.
+  2. Fill in the details and pick where to save it:
+     - **This project only**: Claude Code's settings for the project's folder (`local` scope).
+       If the folder sits inside a git repo, Claude Code keys these by the repo's top folder.
+       Git worktrees (a `.git` file instead of a folder) count as a repo top, but are untested.
+     - **All my projects**: your global Claude Code settings (`user` scope). Every project and
+       every Claude Code session on this PC sees it.
+     Either way it stays on this PC, never in git.
+  3. Review exactly what gets saved, with secrets masked, and which file it goes in. Adding
+     only works with the reviewed details: if they changed, HQ asks you to review again.
+- **New servers start off.** After adding, HQ checks just that server (connects, lists tools,
+  calls none), then you turn it on and pick desks and a mode as usual. If the new one replaces
+  a same-named server that was turned on anywhere, HQ turns that one off.
+- **Local commands run on your PC** each time a desk or a check uses them. Custom ones need
+  **I trust this command**. Shells (`cmd`, PowerShell, bash, `wsl`...) are refused, as are
+  arguments with `"` or `%`, and variables like `PATH` or `NODE_OPTIONS`. A preset's first check
+  downloads its package from npm through `npx`.
+- **Secrets**: new headers and variables start as **Secret**: typed in a password box, masked
+  in the preview, and blanked out of anything Claude Code prints. A row named like a secret
+  (`Authorization`, `API_TOKEN`, `X-Api-Key`, `DB_PASSWORD`, `Cookie`...) counts as one even
+  unticked. Claude Code saves it in its own settings file, as it does for `claude mcp add`. HQ
+  never stores or logs it, and blanks a server's own values out of its error messages.
+  - Tokens in arguments (`--token=...`, `-e GITHUB_TOKEN=...`, `--api-key X`, `-p X`), in URLs
+    (`postgresql://user:password@...`, a key in the path or `?api_key=`) are masked too, and get
+    a warning.
+  - `claude mcp add-json` takes the whole config on its command line, so while Claude Code saves
+    it, other programs on this PC can briefly see every value, secrets too. Arguments stay
+    visible to them every time the server runs, so put tokens in a header or variable, not an
+    argument. To keep a token out entirely, enter `${MY_TOKEN}` as the value (not ticked Secret)
+    and set `MY_TOKEN` in your environment: Claude Code fills it in when the server starts. A
+    value ticked Secret can't contain `${`.
+- **Log in**: web servers that need a browser sign-in get a **Log in** button. HQ asks Claude
+  Code for the sign-in page and shows **Open sign-in page (host)**. You sign in yourself in
+  your browser, as you. Claude Code saves the token where desks and Claude Code find it, and the
+  row turns connected on its own. You have 5 minutes, and one sign-in runs at a time. Cancel stops it.
+  - `claude mcp login` needs a real terminal, so HQ uses the Agent SDK's session sign-in instead.
+    That call isn't in the SDK's published types. If an SDK update removes it, or it gives no
+    sign-in page, the row shows `claude mcp login <name>` to copy, and **Open terminal and log
+    in**, which runs the `claude.exe` HQ uses, not whatever `claude` is first on PATH. Both only
+    show for plain names (letters, numbers, - and _); for others, log in with `/mcp` in Claude Code.
+  - Adding or removing a server for all projects is refused while any project is signing in to
+    that name, and cancels those sign-ins after.
+  - For a claude.ai connector, connect it in claude.ai under Settings, Connectors. Then check again.
+- **Log out** clears a web server's saved sign-in (`claude mcp logout`).
+- **Remove** (click twice within 5 seconds; Escape or moving away starts over) runs
+  `claude mcp remove` for the place the server lives, which also clears its saved sign-in. A
+  server saved for all projects is removed from every project. If a same-named one shows through
+  after, it starts off. A row whose config is already gone gets **Forget** instead, and can be
+  turned off but not on. Desks already running keep the server until they finish.
+- **Open terminal** opens Windows Terminal in the project folder, for anything the form doesn't
+  cover. It's your own terminal window, not one inside HQ.
+- **Check** on a row checks just that server. A first `npx` run can take up to 90 seconds.
+- Set `HQ_CLAUDE_BIN` to use a different `claude` executable. It must be the program itself
+  (`claude.exe` on Windows), not a `.cmd` shim like the one npm puts on PATH: HQ runs it without
+  a shell, and Windows won't start a `.cmd` that way. `CLAUDE_CONFIG_DIR` moves Claude
+  Code's settings, and HQ follows it. The Open terminal button is hidden then, because a new
+  terminal would not have it.
 
 ## QA (dev-team projects)
 
@@ -533,6 +614,7 @@ npm run test:ui
 npm run test:attachments
 npm run test:huddles
 npm run test:qa
+npm run test:mcp
 ```
 
 - **`test:guard`** checks what an agent may read and write in its workspace and the linked folder. It also checks which MCP tools run freely, need approval, or are refused.
@@ -547,6 +629,16 @@ npm run test:qa
   - a restart mid-huddle, and the guard and prompt that keep huddle turns read-only
   - saving the team notes after they changed mid-edit, and the daily limit setting
 - **`test:qa`** checks QA on dev-team projects: where a finished ticket goes, pass and fail verdicts, too many fails, rounds and stale verdicts, signing off, moving tickets by hand (through the API routes, in-process), changes after QA, changing or removing the QA desk, the QA desk default, changed files recorded only for writes that went through, the read-only, no-web fence around a QA check, and the quoting of desk-written text in its prompt.
+- **`test:mcp`** checks adding, removing and signing in to MCP servers:
+  - the rules for names, URLs, local commands and presets
+  - masked previews and what the page shows, fingerprints, and secrets scrubbed from what the CLI
+    prints and from error text; no token in HQ's data after turning on a server that holds some
+  - which requests HQ answers, as rules and as the real middleware
+  - changed setups across two projects, a check racing a change, and the old tool list dropped
+  - the sign-in steps with a stand-in session (cancel at each step, failures, deadlines)
+  - the Windows Terminal arguments, and the CLI runner ending on a timeout or a stuck child
+
+  It runs the real `claude mcp` CLI against a scratch Claude config: `CLAUDE_CONFIG_DIR`, `HOME` and `USERPROFILE` all point into a throwaway folder, and the test checks that the MCP servers and saved sign-ins in your real Claude config are unchanged at the end. The dummy servers live on 127.0.0.1:9, so nothing is contacted.
 - **`test:attachments`** checks image uploads: type sniffing, file names, picking ids, the startup sweep, and the image blocks sent to desks. It also checks desk images: screenshot capture from connected tools (held in memory, saved only when attached) and attaching image files by path, links included.
 
 To try the UI against a copy of your data, run the API from another folder and point Vite at it.
@@ -593,7 +685,14 @@ Everything project-specific lives under `/api/projects/:pid`.
 | PATCH  | /api/projects/:pid/agents/:id | `{ name?, role?, skills?, lead?, qa? }`; `qa` only on dev-team projects; tickets in QA follow the change |
 | DELETE | /api/projects/:pid/agents/:id | |
 | GET    | /api/projects/:pid/connections | |
-| POST   | /api/projects/:pid/connections/check | no prompt, no tool calls |
+| POST   | /api/projects/:pid/connections/check | `{ names? }`: all servers plus claude.ai connectors, or just these. No prompt, no tool calls |
+| POST   | /api/projects/:pid/connections/preview | add request: what would be saved, masked, and where. Changes nothing |
+| POST   | /api/projects/:pid/connections | add request plus `confirm` (the preview string): saves it with `claude mcp add-json`; starts off |
+| DELETE | /api/projects/:pid/connections/:name | `?source=folder\|user\|repo`: `claude mcp remove` for that place; also clears its sign-in |
+| POST   | /api/projects/:pid/connections/:name/login | 202: starts a browser sign-in; the row shows the page to open |
+| DELETE | /api/projects/:pid/connections/:name/login | cancel the sign-in |
+| POST   | /api/projects/:pid/connections/:name/logout | `claude mcp logout` |
+| POST   | /api/projects/:pid/terminal | `{ login? }`: Windows Terminal in the project folder, optionally running `claude mcp login <login>` |
 | PUT    | /api/projects/:pid/connections/:name | `{ enabled?, desks?, mode? }`; mode is `ask`, `read` or `auto` |
 | GET    | /api/projects/:pid/threads/:tid | thread + messages; marks read |
 | POST   | /api/projects/:pid/threads | `{ text, title?, itemId?, attachments? }` |

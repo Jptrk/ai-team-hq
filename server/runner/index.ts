@@ -6,6 +6,7 @@ import { refreshStatuses, settleInstructions } from '../agents';
 import { clearWaiting, findThread, markRead, needsWake, note, pauseForFailure, unreadFor } from '../chat';
 import { rewindCursor } from '../cursor';
 import { unansweredImages } from '../comments';
+import { claudeConfigDir } from '../mcpCli';
 import { clearSignoff, qaDeskOf, queuedQaRun, rerouteQa } from '../qa';
 import { now, uid, type Project } from '../store';
 import { claudeRunner, MODEL, runCost } from './claude';
@@ -22,7 +23,7 @@ import type { RunHooks, RunInput } from './types';
  */
 
 const hasKey = Boolean(process.env.ANTHROPIC_API_KEY);
-const hasLogin = fs.existsSync(path.join(os.homedir(), '.claude', '.credentials.json'));
+const hasLogin = fs.existsSync(path.join(claudeConfigDir(), '.credentials.json'));
 const explicit = process.env.HQ_RUNNER;
 let warned = false;
 

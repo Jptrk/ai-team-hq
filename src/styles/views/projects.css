@@ -282,9 +282,147 @@
   .connections > .link-btn {
     margin-top: 10px;
   }
+  .connections .page-head {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .conn-head-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+  .conn-extra {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 8px 0 0 22px;
+  }
+  .conn-extra .conn-note,
+  .conn-remove-note {
+    margin: 0;
+  }
+  .conn-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
+  .conn-actions .grow {
+    flex: 1;
+  }
+  .conn-login {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 12px;
+    border: 1px solid var(--warning-border);
+    border-radius: var(--radius-md);
+    background: var(--warning-subtle);
+  }
+  .conn-login .conn-note {
+    margin: 0;
+    color: var(--text);
+  }
+  .conn-login.failed {
+    border-color: var(--danger-border);
+    background: var(--danger-subtle);
+  }
+  .conn-login.failed .conn-note {
+    color: var(--danger-text);
+  }
+  .conn-cmd {
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    background: var(--code-bg);
+    font-size: var(--fs-sm);
+  }
+
+  /* ---------- add connection ---------- */
+  .add-conn .choice.off {
+    opacity: 0.6;
+    cursor: default;
+  }
+  .conn-already {
+    color: var(--warning-text);
+    font-weight: 600;
+  }
+  .add-conn-options {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .add-conn-flag {
+    align-items: flex-start;
+    color: var(--text);
+  }
+  .add-conn-flag input {
+    margin-top: 3px;
+  }
+  .add-conn-hint {
+    display: block;
+    color: var(--text-subtle);
+    font-size: var(--fs-xs);
+  }
+  .add-conn-choice {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .add-conn .conn-modes {
+    align-self: flex-start;
+  }
+  .add-conn-where {
+    font-size: var(--fs-sm);
+    overflow-wrap: anywhere;
+  }
+  .conn-review {
+    margin: 0;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--code-bg);
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .add-conn .banner {
+    margin: 0;
+  }
+  .kv-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .kv-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) auto auto;
+    align-items: center;
+    gap: 6px;
+  }
+  .kv-add {
+    display: inline-flex;
+    align-self: flex-start;
+    align-items: center;
+    gap: 4px;
+  }
   @media (max-width: 719px) {
-    .conn-config {
+    .conn-config,
+    .conn-extra {
       margin-left: 0;
+    }
+    .kv-row {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    }
+    .kv-row .check {
+      justify-self: start;
+    }
+    .kv-row .icon-btn {
+      justify-self: end;
     }
   }
 }

@@ -353,11 +353,13 @@ extra += readCases.length;
   extra += liveCases.length;
 
   // Turning a connection off puts Auto back on Ask, so turning it on again never skips the confirm.
-  const conn: ProjectConnection = { name: 'hq-guard-test-auto', source: 'user', enabled: true, desks: ['leo'], mode: 'auto' };
+  // A claude.ai connector found by a check, so it is set up (one that is gone can't be turned back on).
+  const conn: ProjectConnection = { name: 'hq-guard-test-auto', source: 'claude-ai', enabled: true, desks: ['leo'], mode: 'auto' };
+  const info = { name: conn.name, source: 'claude-ai', transport: 'claude-ai', target: 'claude.ai connector', auth: 'oauth' };
   const logged: string[] = [];
   const p = {
     meta: { path: null },
-    state: { connections: [conn], checks: {}, agents: [{ id: 'leo', isHuman: false }] },
+    state: { connections: [conn], checks: { [conn.name]: { state: 'connected', checkedAt: '2026-01-01T00:00:00.000Z', tools: [], info } }, agents: [{ id: 'leo', isHuman: false }] },
     log: (_id: string, text: string) => logged.push(text),
     commit: () => undefined,
   } as unknown as Project;

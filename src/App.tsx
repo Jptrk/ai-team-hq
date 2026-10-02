@@ -244,7 +244,7 @@ export function App() {
     );
   } else if (route.kind === 'connections' && current) {
     body = state ? (
-      <ConnectionsPanel key={current.id} pid={current.id} agents={state.agents} ownerName={owner?.name ?? 'you'} hasFolder={Boolean(current.path && current.pathOk)} />
+      <ConnectionsPanel key={current.id} pid={current.id} agents={state.agents} ownerName={owner?.name ?? 'you'} hasFolder={Boolean(current.path && current.pathOk)} notify={notify} />
     ) : (
       <p className="muted page">Loading...</p>
     );
