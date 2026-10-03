@@ -1,4 +1,4 @@
-import { Building2, FolderOpen, Inbox, MessagesSquare, NotebookPen, Plug, Plus, Presentation, Settings, SquareKanban, Users } from 'lucide-react';
+import { Building2, FolderOpen, Inbox, MessagesSquare, NotebookPen, Plug, Plus, Presentation, Settings, Sparkles, SquareKanban, Users } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { ProjectSummary } from '../../shared/types';
 import { ProjectSwitcher } from '../components/ProjectSwitcher';
@@ -90,6 +90,7 @@ export function Sidebar({ projects, current, route, counts, mode, onNavigate, on
           </ul>
           <div className="sidebar-spacer" />
           <ul className="nav-list">
+            <NavLink href={`/p/${current.id}/skills`} label="Skills" Icon={Sparkles} active={route.kind === 'skills'} rail={rail} onFollow={onFollow} />
             <NavLink href={`/p/${current.id}/connections`} label="Connections" Icon={Plug} active={route.kind === 'connections'} rail={rail} onFollow={onFollow} />
             <NavLink href={`/p/${current.id}/settings`} label="Project settings" Icon={Settings} active={route.kind === 'settings'} rail={rail} onFollow={onFollow} />
           </ul>

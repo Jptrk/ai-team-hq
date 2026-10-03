@@ -249,6 +249,7 @@ export function seed(template: TeamTemplate, opts: SeedOptions): State {
     huddleSeq: 0,
     teamNotes: '',
     notesEveryRun: false,
+    skillDesks: {},
     // Dev-team projects start with their QA desk already picked (Ivy), so a restart after you stop QA never picks one again.
     ...(hasQa(template) ? { qaPicked: true } : {}),
     activity: demo

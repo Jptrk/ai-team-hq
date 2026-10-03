@@ -9,6 +9,7 @@ import { sweepAttachments } from './attachments';
 import { backfillFingerprints } from './connections';
 import { requestGuard } from './http';
 import { cancelAllLogins } from './mcpAuth';
+import { initSkills } from './skills';
 import { allProjects, flushAll, initStore, listMeta } from './store';
 
 const app = express();
@@ -46,6 +47,8 @@ for (const p of allProjects()) {
   const removed = sweepAttachments(p.id, p.state);
   if (removed) console.log(`[hq] ${p.meta.key}: removed ${removed} unused image${removed === 1 ? '' : 's'}`);
 }
+// Skills: repos fetched for a pick that never happened don't survive a restart.
+initSkills();
 // Connections saved before HQ kept fingerprints: pin each to the server it means now.
 try {
   backfillFingerprints();

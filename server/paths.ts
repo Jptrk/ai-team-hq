@@ -31,6 +31,9 @@ export function slug(text: string): string {
 
 export const KEY_PATTERN = /^[A-Z][A-Z0-9]{1,9}$/;
 
+/** A skill's id, which is also its folder name under data/skills/lib. Here so the store can check ids without loading skills.ts. */
+export const SKILL_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
 /** Jira-style key from a name: initials for multi-word names, first letters otherwise. */
 export function suggestKey(name: string, taken: string[]): string {
   const words = name

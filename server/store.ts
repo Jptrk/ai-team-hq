@@ -5,7 +5,7 @@ import type { Activity, ProjectAccess, ProjectMeta, State, TeamTemplate } from '
 import { defaultQaDesk, hasQa } from '../shared/types';
 import { assignDeskNumbers } from '../shared/desks';
 import { rewindCursor } from './cursor';
-import { slug } from './paths';
+import { SKILL_ID, slug } from './paths';
 import { seed } from './seed';
 
 /**
@@ -203,6 +203,23 @@ function migrateLegacy(r: Registry): void {
   console.log(`[hq] migrated the single-project data into project "${meta.name}" (${meta.key})`);
 }
 
+/**
+ * Which desks have each skill, as saved: only skill ids, and only this team's desks (not the founder), each
+ * once. Anything else (a hand edit, a desk removed while HQ was off, a list that isn't one) drops out. Skills
+ * no longer in the library drop out once it loads (initSkills in skills.ts, which this module can't import).
+ */
+function cleanSkillDesks(raw: unknown, agents: State['agents']): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  const desks = new Set(agents.filter((a) => !a.isHuman).map((a) => a.id));
+  for (const [id, list] of Object.entries(raw as Record<string, unknown>)) {
+    if (!SKILL_ID.test(id)) continue;
+    const kept = [...new Set((Array.isArray(list) ? list : []).filter((d): d is string => typeof d === 'string' && desks.has(d)))];
+    if (kept.length) out[id] = kept;
+  }
+  return out;
+}
+
 /** Fill in fields added over time, and close out anything a restart killed. Exported for tests. */
 export function migrateState(s: State, template?: TeamTemplate): State {
   s.runs ??= [];
@@ -221,6 +238,7 @@ export function migrateState(s: State, template?: TeamTemplate): State {
   s.huddleSeq ??= s.huddles.reduce((n, h) => Math.max(n, h.number ?? 0), 0);
   s.teamNotes ??= '';
   s.notesEveryRun ??= false;
+  s.skillDesks = cleanSkillDesks(s.skillDesks, s.agents);
   // The Office's waiting clock. Before the restart notes below add history, so they don't count as the start.
   stampNeedsYou(s.items, now(), true);
   // A huddle mid-round when the server stopped: it stops too, and Resume picks it up.

@@ -16,9 +16,13 @@ import type {
   Meta,
   PathCheck,
   ProjectAccess,
+  ProjectSkillsResponse,
   ProjectSummary,
   ReportInfo,
   Run,
+  SkillMeta,
+  SkillPick,
+  SkillPreview,
   StateResponse,
   TeamTemplate,
   ThreadResponse,
@@ -113,6 +117,19 @@ export const api = {
   openTerminal: (pid: string, login?: string) => request<{ ok: true }>(`${pp(pid)}/terminal`, json('POST', login ? { login } : {})),
   updateConnection: (pid: string, name: string, body: { enabled?: boolean; desks?: string[]; mode?: ConnectionMode }) =>
     request<ConnectionsResponse>(`${pp(pid)}/connections/${encodeURIComponent(name)}`, json('PUT', body)),
+
+  /** Skills: one library for every project. */
+  skills: () => request<SkillMeta[]>('/api/skills'),
+  /** Fetches the link into a staging folder and lists its skills. Installs nothing. `token` (24 hex) lets Cancel stop the fetch before it answers. */
+  previewSkills: (url: string, token?: string) => request<SkillPreview>('/api/skills/preview', json('POST', { url, ...(token ? { token } : {}) })),
+  /** Stops a fetch that is still running, or throws a fetched repo away. */
+  cancelSkillPreview: (token: string) => request<{ ok: true }>(`/api/skills/preview/${encodeURIComponent(token)}`, json('DELETE')),
+  installSkills: (token: string, picks: SkillPick[]) => request<SkillMeta[]>('/api/skills/install', json('POST', { token, picks })),
+  updateSkill: (id: string, body: { scriptsAllowed: boolean }) => request<SkillMeta[]>(`/api/skills/${encodeURIComponent(id)}`, json('PATCH', body)),
+  removeSkill: (id: string) => request<SkillMeta[]>(`/api/skills/${encodeURIComponent(id)}`, json('DELETE')),
+  /** The library, and which desks have each skill in this project. */
+  projectSkills: (pid: string) => request<ProjectSkillsResponse>(`${pp(pid)}/skills`),
+  setSkillDesks: (pid: string, id: string, desks: string[]) => request<ProjectSkillsResponse>(`${pp(pid)}/skills/${encodeURIComponent(id)}`, json('PUT', { desks })),
 
   huddle: (pid: string, hid: string) => request<Huddle>(`${pp(pid)}/huddles/${encodeURIComponent(hid)}`),
   startHuddle: (pid: string, body: HuddleBody) => request<Huddle>(`${pp(pid)}/huddles`, json('POST', body)),

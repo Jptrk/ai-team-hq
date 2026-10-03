@@ -348,6 +348,81 @@ export interface State {
   notesEveryRun: boolean;
   /** Dev-team projects: the QA desk was picked once by role. After that your choice sticks, none included. */
   qaPicked?: boolean;
+  /** Skills from HQ's library turned on in this project: skill id -> desk ids. */
+  skillDesks: Record<string, string[]>;
+}
+
+/** Where an installed skill came from: a folder in a GitHub repo. */
+export interface SkillSource {
+  /** owner/repo */
+  repo: string;
+  /** Branch or tag from the link, if it named one. */
+  ref?: string;
+  /** The skill's folder inside the repo, with / between parts. Empty for the repo's root. */
+  path: string;
+  /** The commit it was installed from. */
+  commit?: string;
+}
+
+/** One skill in HQ's library. Installed once for every project; turned on per desk in each one. */
+export interface SkillMeta {
+  /** Folder-safe slug from the SKILL.md name. Its files live in data/skills/lib/<id>/. */
+  id: string;
+  name: string;
+  description: string;
+  source: SkillSource;
+  installedAt: string;
+  files: number;
+  bytes: number;
+  /** The scripts a desk could run, relative to its folder with / between parts: Python and Node under scripts/ or named in its SKILL.md, never tests. */
+  scripts: string[];
+  /** You allowed desks to run its scripts on this PC. */
+  scriptsAllowed: boolean;
+}
+
+/** A skill found in a repo, before you install it. */
+export interface SkillCandidate {
+  /** Its folder inside the repo, with / between parts. Empty for the repo's root. */
+  path: string;
+  name: string;
+  description: string;
+  /** The id it installs as. */
+  id: string;
+  files: number;
+  bytes: number;
+  /** The scripts a desk could run: Python and Node under scripts/ or named in SKILL.md, never tests. */
+  scripts: string[];
+  /** The same folder of the same repo is installed already (reinstalling updates it), or another skill holds the name. */
+  alreadyInstalled: boolean;
+  /** The id of the install it would replace: same repo and folder. */
+  replaces?: string;
+  /** The same SKILL.md and files sit at this other path in the repo, the copy worth installing. */
+  duplicateOf?: string;
+  /** Why it can't be installed, e.g. too big. */
+  problem?: string;
+}
+
+/** What a GitHub link holds, fetched into a staging folder until you install or cancel. */
+export interface SkillPreview {
+  token: string;
+  repo: string;
+  ref?: string;
+  commit?: string;
+  skills: SkillCandidate[];
+  /** HQ stopped looking (50 skills, or 20 folders deep), so the repo may hold more. */
+  truncated?: boolean;
+}
+
+/** One skill you picked to install, and whether its scripts may run. */
+export interface SkillPick {
+  path: string;
+  allowScripts: boolean;
+}
+
+/** The Skills page of one project: the library, and which desks have each skill here. */
+export interface ProjectSkillsResponse {
+  library: SkillMeta[];
+  desks: Record<string, string[]>;
 }
 
 export type HuddleKind = 'retro' | 'brainstorm' | 'planning';

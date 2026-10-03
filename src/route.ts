@@ -13,6 +13,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
  *   #/p/<pid>/notes               team notes
  *   #/p/<pid>/settings            project settings
  *   #/p/<pid>/connections         MCP connections
+ *   #/p/<pid>/skills              skills: the library, and which desks have each one here
  *   ...?ticket=GA-12 | ?agent=leo ticket or person modal
  */
 
@@ -30,7 +31,8 @@ export type Route =
   | { kind: 'new' }
   | ({ kind: 'project'; pid: string; view: ViewId; threadId?: string; huddleId?: string } & PanelRef)
   | { kind: 'settings'; pid: string }
-  | { kind: 'connections'; pid: string };
+  | { kind: 'connections'; pid: string }
+  | { kind: 'skills'; pid: string };
 
 export function parseRoute(hash: string): Route {
   const raw = hash.replace(/^#/, '');
@@ -54,6 +56,7 @@ export function parseRoute(hash: string): Route {
     const sub = parts[2];
     if (sub === 'settings') return { kind: 'settings', pid };
     if (sub === 'connections') return { kind: 'connections', pid };
+    if (sub === 'skills') return { kind: 'skills', pid };
     const view: ViewId = VIEWS.includes(sub as ViewId) ? (sub as ViewId) : 'needs-you';
     const threadId = view === 'chat' && parts[3] ? parts[3] : undefined;
     const ticket = query.get('ticket') || undefined;

@@ -3,6 +3,7 @@ import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { MASK, TOKEN_PREFIXES, type BuiltSpec, type CliScope } from '../shared/mcpSpec';
+import { findProgram } from './proc';
 
 /**
  * Runs Claude Code's own `claude mcp ...` commands, so servers are saved exactly where and how
@@ -20,8 +21,17 @@ export function claudeJsonPath(): string {
   return path.join(process.env.CLAUDE_CONFIG_DIR || os.homedir(), '.claude.json');
 }
 
+/**
+ * The claude program, always as a full path: runCli starts it in a project folder, and Windows would run a
+ * claude.exe planted there before one on PATH. HQ_CLAUDE_BIN may be a full path or a name looked up in PATH.
+ */
 export function claudeBin(): string {
-  if (process.env.HQ_CLAUDE_BIN) return process.env.HQ_CLAUDE_BIN;
+  const own = process.env.HQ_CLAUDE_BIN?.trim();
+  if (own) {
+    const found = findProgram(own);
+    if (!found) throw new Error('HQ_CLAUDE_BIN must be a full path, or a program on PATH.');
+    return found;
+  }
   const require = createRequire(import.meta.url);
   const pkg = `@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}`;
   const dir = path.dirname(require.resolve(`${pkg}/package.json`));

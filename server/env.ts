@@ -10,3 +10,8 @@ try {
 } catch {
   // no .env, that's fine
 }
+
+// Windows starts a program named without a folder (`git`, `python`) from the child's working folder before
+// PATH, so a git.exe in a fetched repo or a python.exe in a desk's workspace would run instead. This turns
+// that off for every program HQ and its children start. HQ also starts git and Python by full path (proc.ts).
+process.env.NoDefaultCurrentDirectoryInExePath = '1';

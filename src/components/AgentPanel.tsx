@@ -1,8 +1,9 @@
 import { X } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { HUDDLE_KIND_LABEL } from '../../shared/huddle';
-import type { Agent, Run, StateResponse, WorkItem } from '../../shared/types';
+import type { Agent, Run, SkillMeta, StateResponse, WorkItem } from '../../shared/types';
 import { hasQa } from '../../shared/types';
+import { api } from '../api';
 import { Avatar } from '../ui/Avatar';
 import { Lozenge, StatusLozenge } from '../ui/Lozenge';
 import { TypeIcon } from '../ui/TypeIcon';
@@ -56,6 +57,24 @@ export function AgentPanel({ agent, state, onClose, onOpenTicket, onOpenThread, 
   const recent = state.activity.filter((a) => a.agentId === agent.id).slice(0, 8);
   const runs = state.runs.filter((r) => r.agentId === agent.id).slice(0, 6);
   const connections = (state.connections ?? []).filter((c) => c.enabled && c.desks.includes(agent.id));
+  // Which skills this desk has here comes with the poll; their names come from the library, read again whenever that list or the desk changes.
+  const skillIds = Object.entries(state.skillDesks ?? {})
+    .filter(([, desks]) => desks.includes(agent.id))
+    .map(([id]) => id)
+    .sort();
+  const skillKey = skillIds.join(',');
+  const [library, setLibrary] = useState<SkillMeta[] | null>(null);
+  useEffect(() => {
+    if (agent.isHuman) return;
+    let live = true;
+    api
+      .skills()
+      .then((l) => live && setLibrary(l))
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [agent.isHuman, agent.id, skillKey]);
 
   const act = async (fn: () => Promise<void>) => {
     setBusy(true);
@@ -138,6 +157,28 @@ export function AgentPanel({ agent, state, onClose, onOpenTicket, onOpenThread, 
               </p>
             ) : (
               <p className="muted small">None. Turn them on under Connections.</p>
+            )}
+          </section>
+        )}
+
+        {!agent.isHuman && (
+          <section className="ticket-section">
+            <h3 className="section-label">Skills</h3>
+            {skillIds.length ? (
+              <p className="chips">
+                {skillIds.map((id) => {
+                  const skill = library?.find((s) => s.id === id);
+                  const scripts = skill && skill.scripts.length > 0 ? (skill.scriptsAllowed ? 'Its scripts may run on this PC' : 'Its scripts are not allowed') : 'Text only';
+                  return (
+                    <span key={id} className="chip mono skill-chip" title={skill ? scripts : undefined}>
+                      {skill?.name ?? id}
+                      {skill?.scriptsAllowed ? ' · scripts' : ''}
+                    </span>
+                  );
+                })}
+              </p>
+            ) : (
+              <p className="muted small">None. Turn them on under Skills.</p>
             )}
           </section>
         )}

@@ -41,6 +41,7 @@ import { resumeHuddleRun, startHuddle, stopHuddleRun } from './huddles';
 import { checkFolder, folderExists, KEY_PATTERN, suggestKey } from './paths';
 import { backToWork, closesOnApprove, moveByHand, qaDeskOf, rerouteAllQa, setQaDesk } from './qa';
 import { resolveReport } from './runner/claude';
+import { cancelPreview, installSkills, listLibrary, previewSkills, projectSkills, removeSkill, setScriptsAllowed, setSkillDesks, SkillError } from './skills';
 import { officeState } from './office';
 import { cancelRun, deliver, isLive, kickoff, meta } from './runner';
 import {
@@ -166,6 +167,68 @@ router.post('/projects', (req, res) => {
     template,
   });
   res.status(201).json(summary(p));
+});
+
+// ---------- skills: one library for every project ----------
+
+/** A SkillError carries its own status and a safe sentence. Anything else stays generic. */
+function skillFailed(res: Response, e: unknown, fallback: string) {
+  if (e instanceof SkillError) return res.status(e.status).json({ error: e.message });
+  console.error('[hq] skills:', e instanceof Error ? e.message : 'error');
+  return res.status(500).json({ error: fallback });
+}
+
+router.get('/skills', (_req, res) => {
+  res.json(listLibrary());
+});
+
+/**
+ * Fetch a GitHub link into a staging folder and list the skills in it. Installs nothing. 409 while another fetch
+ * or install runs. The page may send its own token, so Cancel can stop the fetch before this answers.
+ */
+router.post('/skills/preview', jsonOnly, async (req, res) => {
+  const body = (req.body ?? {}) as { url?: unknown; token?: unknown };
+  try {
+    res.json(await previewSkills(body.url, body.token));
+  } catch (e) {
+    skillFailed(res, e, 'Could not fetch that link');
+  }
+});
+
+/** Stop a fetch that is still running, or throw away a fetched repo without installing. */
+router.delete('/skills/preview/:token', jsonOnly, (req, res) => {
+  cancelPreview(String(req.params.token));
+  res.json({ ok: true });
+});
+
+/** Install the picked skills from a fetched repo. */
+router.post('/skills/install', jsonOnly, async (req, res) => {
+  const body = (req.body ?? {}) as { token?: unknown; picks?: unknown };
+  try {
+    res.status(201).json(await installSkills(body.token, body.picks));
+  } catch (e) {
+    skillFailed(res, e, 'Could not install those skills');
+  }
+});
+
+/** Allow or stop a skill's scripts, everywhere. */
+router.patch('/skills/:id', jsonOnly, (req, res) => {
+  const on = (req.body as { scriptsAllowed?: unknown } | undefined)?.scriptsAllowed;
+  if (typeof on !== 'boolean') return res.status(400).json({ error: 'scriptsAllowed must be true or false' });
+  try {
+    res.json(setScriptsAllowed(String(req.params.id), on));
+  } catch (e) {
+    skillFailed(res, e, 'Could not change that skill');
+  }
+});
+
+/** Delete a skill from HQ, and from every project's desks. */
+router.delete('/skills/:id', jsonOnly, (req, res) => {
+  try {
+    res.json(removeSkill(String(req.params.id)));
+  } catch (e) {
+    skillFailed(res, e, 'Could not remove that skill');
+  }
 });
 
 // ---------- one project ----------
@@ -776,6 +839,26 @@ project.put('/connections/:name', jsonOnly, (req, res) => {
   const result = updateConnection(p, String(req.params.name), patch);
   if (typeof result === 'string') return res.status(404).json({ error: result });
   res.json(listConnections(p));
+});
+
+// ---------- skills in this project ----------
+
+/** The library, and which desks have each skill in this project. */
+project.get('/skills', (_req, res) => {
+  res.json(projectSkills(P(res)));
+});
+
+/** Turn a skill on for these desks here. An empty list turns it off in this project. */
+project.put('/skills/:id', jsonOnly, (req, res) => {
+  const p = P(res);
+  const desks = (req.body as { desks?: unknown } | undefined)?.desks;
+  if (!Array.isArray(desks) || desks.length > 50 || !desks.every((d) => typeof d === 'string')) return res.status(400).json({ error: 'desks must be a list of desk ids' });
+  try {
+    setSkillDesks(p, String(req.params.id), desks as string[]);
+    res.json(projectSkills(p));
+  } catch (e) {
+    skillFailed(res, e, 'Could not change that skill');
+  }
 });
 
 // ---------- attachments (images you paste) ----------

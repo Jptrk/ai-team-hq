@@ -12,6 +12,7 @@ import { Office } from './components/Office';
 import { ProjectAvatar } from './components/ProjectAvatar';
 import { ProjectForm } from './components/ProjectForm';
 import { ProjectsPage } from './components/ProjectsPage';
+import { SkillsPanel } from './components/SkillsPanel';
 import { Team } from './components/Team';
 import { TeamNotes } from './components/TeamNotes';
 import { TicketView } from './components/TicketView';
@@ -41,7 +42,7 @@ const VIEW_TITLE: Record<ViewId, string> = { 'needs-you': 'Needs you', chat: 'Ch
 
 export function App() {
   const [route, navigate] = useHashRoute();
-  const pid = route.kind === 'project' || route.kind === 'settings' || route.kind === 'connections' ? route.pid : null;
+  const pid = route.kind === 'project' || route.kind === 'settings' || route.kind === 'connections' || route.kind === 'skills' ? route.pid : null;
   const { meta, projects, state, error, after, loadProjects, setPollPaused } = useHqData(pid);
   const { theme, pref, setPref, toggle } = useTheme();
   const { flags, notify, dismiss } = useFlags();
@@ -181,9 +182,11 @@ export function App() {
           ? 'Project settings'
           : route.kind === 'connections'
             ? 'Connections'
-            : route.kind === 'project'
-              ? VIEW_TITLE[view]
-              : '';
+            : route.kind === 'skills'
+              ? 'Skills'
+              : route.kind === 'project'
+                ? VIEW_TITLE[view]
+                : '';
   useEffect(() => {
     document.title = [panelTicket, pageName, current?.name, 'AI Team HQ'].filter(Boolean).join(' · ');
   }, [panelTicket, pageName, current?.name]);
@@ -245,6 +248,12 @@ export function App() {
   } else if (route.kind === 'connections' && current) {
     body = state ? (
       <ConnectionsPanel key={current.id} pid={current.id} agents={state.agents} ownerName={owner?.name ?? 'you'} hasFolder={Boolean(current.path && current.pathOk)} notify={notify} />
+    ) : (
+      <p className="muted page">Loading...</p>
+    );
+  } else if (route.kind === 'skills' && current) {
+    body = state ? (
+      <SkillsPanel key={current.id} pid={current.id} agents={state.agents} ownerName={owner?.name ?? 'you'} notify={notify} />
     ) : (
       <p className="muted page">Loading...</p>
     );

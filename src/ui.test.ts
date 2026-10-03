@@ -1,5 +1,5 @@
 /**
- * UI helpers: markdown previews, hash routes, board filter, top-bar search, report links, editor markdown, add connection.
+ * UI helpers: markdown previews, hash routes, board filter, top-bar search, report links, editor markdown, add connection, skills links.
  * Run: npm run test:ui. Pure functions and a headless editor, no browser, no network.
  */
 import assert from 'node:assert/strict';
@@ -24,6 +24,7 @@ import { MCP_PRESETS, presetArgs, presetDefaults } from '../shared/mcpPresets';
 import { buildSpec, safeAuthUrl } from '../shared/mcpSpec';
 import type { ConnectionRow } from '../shared/types';
 import { alreadySetUp, blankRow, CUSTOM, hostOf, initialForm, presetCards, signInButtons, splitArgs, timeLeft, toRequest } from './components/connections/addForm';
+import { folderUrl, newFetchToken, pickedAtFirst, plural, repoUrl, sizeLabel, sourceLabel } from './components/skills/skillInfo';
 
 let passed = 0;
 function test(name: string, fn: () => void) {
@@ -138,6 +139,7 @@ test('parseRoute: thread, ticket and agent', () => {
 test('parseRoute: settings and connections', () => {
   assert.deepEqual(parseRoute('#/p/x/settings'), { kind: 'settings', pid: 'x' });
   assert.deepEqual(parseRoute('#/p/x/connections'), { kind: 'connections', pid: 'x' });
+  assert.deepEqual(parseRoute('#/p/x/skills'), { kind: 'skills', pid: 'x' });
 });
 test('parseRoute: bad percent-encoding does not throw', () => {
   const r = parseRoute('#/p/%E0%A4%A/board');
@@ -519,6 +521,39 @@ test('sign-in: only web links, with the host shown and time left', () => {
   assert.equal(hostOf('nope'), '');
   assert.equal(timeLeft(new Date(Date.UTC(2026, 0, 1, 0, 5, 30)).toISOString(), Date.UTC(2026, 0, 1, 0, 0, 0)), '5:30');
   assert.equal(timeLeft(new Date(0).toISOString(), 1000), '0:00');
+});
+
+// ---------- skills ----------
+test('skills: sizes, counts and GitHub links, only for plain owner/repo names', () => {
+  assert.equal(plural(1, 'script'), '1 script');
+  assert.equal(plural(3, 'file'), '3 files');
+  assert.equal(sizeLabel(900), '900 B');
+  assert.equal(sizeLabel(48 * 1024), '48 KB');
+  assert.equal(sizeLabel(2.5 * 1024 * 1024), '2.5 MB');
+  assert.equal(repoUrl('o/r'), 'https://github.com/o/r');
+  assert.equal(repoUrl('o/r/../x'), null);
+  assert.equal(repoUrl('javascript:alert(1)//x/y'), null);
+  const source = { repo: 'o/r', path: '.claude/skills/my skill', commit: 'abc123' };
+  assert.equal(folderUrl(source), 'https://github.com/o/r/tree/abc123/.claude/skills/my%20skill');
+  assert.equal(folderUrl({ repo: 'o/r', path: 'x', ref: 'main' }), 'https://github.com/o/r/tree/main/x');
+  assert.equal(folderUrl({ repo: 'o/r', path: 'x' }), 'https://github.com/o/r/tree/HEAD/x');
+  assert.equal(folderUrl({ repo: 'o/r', path: '' }), 'https://github.com/o/r');
+  assert.equal(folderUrl({ repo: 'bad repo', path: '' }), null);
+  assert.equal(sourceLabel(source), 'o/r/.claude/skills/my skill');
+  assert.equal(sourceLabel({ repo: 'o/r', path: '' }), 'o/r');
+});
+
+test('skills: the install dialog ticks new skills and reinstalls, never copies, taken names or ones too big', () => {
+  const base = { alreadyInstalled: false };
+  assert.equal(pickedAtFirst(base), true);
+  assert.equal(pickedAtFirst({ alreadyInstalled: true, replaces: 'x' }), true, 'a reinstall');
+  assert.equal(pickedAtFirst({ alreadyInstalled: true }), false, 'the name is taken');
+  assert.equal(pickedAtFirst({ ...base, duplicateOf: '.claude/skills/x' }), false, 'a copy');
+  assert.equal(pickedAtFirst({ ...base, duplicateOf: '' }), false, "a copy of the repo's own root skill");
+  assert.equal(pickedAtFirst({ ...base, problem: 'Too big' }), false);
+  const a = newFetchToken();
+  assert.match(a, /^[0-9a-f]{24}$/);
+  assert.notEqual(newFetchToken(), a);
 });
 
 console.log(`ui: ${passed} tests passed`);

@@ -1,0 +1,160 @@
+@layer views {
+  /* ---------- skills page ---------- */
+  .skills .page-head {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .skills-intro {
+    margin: 0 0 16px;
+    max-width: 70ch;
+  }
+  .skills-empty svg {
+    color: var(--text-subtle);
+  }
+  .skill {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-width: 0;
+    padding: 12px 16px;
+  }
+  .skill + .skill {
+    border-top: 1px solid var(--border);
+  }
+  .skill-body {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+  .skill-name {
+    font-weight: 650;
+    overflow-wrap: anywhere;
+  }
+  .skill:not(.on) .skill-body .skill-name {
+    color: var(--text-subtle);
+  }
+  .skill-desc {
+    margin: 0;
+    font-size: var(--fs-md);
+    color: var(--text);
+    overflow-wrap: anywhere;
+  }
+  .skill-sub {
+    margin: 0;
+    font-size: var(--fs-sm);
+    color: var(--text-subtle);
+    overflow-wrap: anywhere;
+  }
+  .skill-sub a {
+    color: var(--accent-text);
+  }
+
+  /* Scripts: the list, the switch, and the warning under it. */
+  .skill-scripts {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 16px;
+    min-width: 0;
+  }
+  .skill-script-list {
+    min-width: 0;
+  }
+  .skill-script-list summary {
+    font-size: var(--fs-sm);
+    font-weight: 600;
+    color: var(--text-subtle);
+    cursor: pointer;
+  }
+  .skill-script-list summary:hover {
+    color: var(--text);
+  }
+  .skill-script-list ul {
+    margin: 6px 0 0;
+    padding-left: 18px;
+    font-size: var(--fs-xs);
+    color: var(--text-subtle);
+    overflow-wrap: anywhere;
+  }
+  .skill-allow {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: var(--fs-sm);
+    font-weight: 600;
+    color: var(--text);
+    cursor: pointer;
+  }
+  .skill-warn {
+    flex-basis: 100%;
+  }
+
+  /* ---------- install dialog ---------- */
+  .install-skill .banner {
+    margin: 0;
+  }
+  .skill-picks {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .skill-pick {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--surface-raised);
+  }
+  .skill-pick.on {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent);
+  }
+  .skill-pick-head {
+    align-items: flex-start;
+    color: var(--text);
+    font-size: var(--fs-md);
+  }
+  .skill-pick-head input {
+    margin-top: 3px;
+  }
+  /* Copies of a skill found elsewhere in the repo: folded away, unticked. */
+  .skill-dupes summary {
+    font-size: var(--fs-sm);
+    font-weight: 600;
+    color: var(--text-subtle);
+    cursor: pointer;
+  }
+  .skill-dupes summary:hover {
+    color: var(--text);
+  }
+  .skill-dupes .skill-picks {
+    margin-top: 8px;
+  }
+  /* A long id must wrap on a phone, not push the dialog wider. */
+  .skill-pick .lozenge {
+    align-self: flex-start;
+    height: auto;
+    min-height: 20px;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  /* A desk's skills in its panel: a long name wraps inside its chip. */
+  .skill-chip {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+
+  @media (max-width: 719px) {
+    .skill {
+      padding: 12px;
+    }
+  }
+}

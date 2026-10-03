@@ -176,6 +176,12 @@ export function removeAgent(p: Project, id: string): string | null {
 
   s.agents = s.agents.filter((a) => a.id !== id);
   for (const c of s.connections) c.desks = c.desks.filter((d) => d !== id);
+  // Skills on this desk: a skill nobody has any more drops out of the project.
+  for (const [skill, desks] of Object.entries(s.skillDesks ?? {})) {
+    const left = desks.filter((d) => d !== id);
+    if (left.length) s.skillDesks[skill] = left;
+    else delete s.skillDesks[skill];
+  }
   for (const t of s.threads) t.waiting = t.waiting.filter((w) => w !== id);
   if (agent.lead) {
     const next = s.agents.find((a) => !a.isHuman);

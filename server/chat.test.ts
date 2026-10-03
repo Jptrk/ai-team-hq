@@ -45,6 +45,7 @@ function fresh(): State {
     huddleSeq: 0,
     teamNotes: '',
     notesEveryRun: false,
+    skillDesks: {},
     company: { name: 'Test', ownerId: 'you', timezone: 'UTC' },
     agents: [
       desk('you', 'Patrick', { isHuman: true }),

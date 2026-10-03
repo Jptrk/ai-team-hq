@@ -19,6 +19,7 @@
     "test:mcp": "tsx server/mcp.test.ts",
     "test:activity": "tsx server/activity.test.ts",
     "test:office": "tsx src/office.test.ts",
+    "test:skills": "tsx server/skills.test.ts",
     "office:sync": "node scripts/office-sync.mjs"
   },
   "dependencies": {
