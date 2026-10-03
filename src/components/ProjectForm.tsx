@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { PathCheck, ProjectAccess, ProjectSummary, TeamTemplate } from '../../shared/types';
+import { hasQa, signoffOn, type PathCheck, type ProjectAccess, type ProjectSummary, type TeamTemplate } from '../../shared/types';
 import { api } from '../api';
 import { AVATAR_FALLBACK, cleanPath, suggestKey } from '../util';
 import { ProjectAvatar } from './ProjectAvatar';
@@ -26,6 +26,7 @@ export function ProjectForm({ mode, project, projects, onCancel, onSaved, onArch
   const [key, setKey] = useState(project?.key ?? '');
   const [template, setTemplate] = useState<TeamTemplate>(project?.template ?? 'dev');
   const [access, setAccess] = useState<ProjectAccess>(project?.access ?? 'read');
+  const [signoff, setSignoff] = useState(project ? signoffOn(project) : true);
   const [nameTouched, setNameTouched] = useState(Boolean(editing));
   const [keyTouched, setKeyTouched] = useState(Boolean(editing));
   const [check, setCheck] = useState<PathCheck | null>(null);
@@ -80,7 +81,7 @@ export function ProjectForm({ mode, project, projects, onCancel, onSaved, onArch
     if (!canSave) return;
     setBusy(true);
     setError(null);
-    const body = { name: name.trim(), key: keyValue, path: cleanPath(folder), access: hasFolder ? access : ('read' as ProjectAccess) };
+    const body = { name: name.trim(), key: keyValue, path: cleanPath(folder), access: hasFolder ? access : ('read' as ProjectAccess), signoff };
     try {
       const saved = editing ? await api.updateProject(project.id, body) : await api.createProject({ ...body, template });
       onSaved(saved);
@@ -196,6 +197,18 @@ export function ProjectForm({ mode, project, projects, onCancel, onSaved, onArch
               <span className="choice-sub">Edit files directly. Never .git, node_modules, .env or keys. No shell, no commits.</span>
             </label>
           </div>
+        </fieldset>
+
+        <fieldset className="field">
+          <legend className="label">Sign-off</legend>
+          <label className="check signoff-check">
+            <input type="checkbox" checked={signoff} onChange={(e) => setSignoff(e.target.checked)} /> Finished tickets wait for your sign-off before Done
+          </label>
+          <p className="field-hint">
+            {signoff
+              ? 'They show in Needs you: Mark done, or Send back with the changes you want.'
+              : `Finished tickets go straight to Done${hasQa(template) ? ' once QA passes them' : ''}.${editing ? ' Tickets already waiting for sign-off stay until you mark them done.' : ''}`}
+          </p>
         </fieldset>
 
         {error && <p className="banner danger">{error}</p>}

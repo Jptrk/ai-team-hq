@@ -1,6 +1,6 @@
 import { Check, ChevronDown, Link as LinkIcon, MessagesSquare, Pencil, Play, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import { canEditDescription, hasQa, MAX_DESCRIPTION, type Decision, type ItemStatus, type StateResponse, type WorkItem } from '../../shared/types';
+import { canEditDescription, hasQa, MAX_DESCRIPTION, signoffOn, type Decision, type ItemStatus, type StateResponse, type WorkItem } from '../../shared/types';
 import { TextEditor } from '../editor/TextEditor';
 import { usePopover } from '../hooks/usePopover';
 import { needsPlainEditor } from '../lib/markdownPaste';
@@ -12,7 +12,7 @@ import { Avatar } from '../ui/Avatar';
 import { Segmented } from '../ui/Segmented';
 import { StatusLozenge } from '../ui/Lozenge';
 import { TypeIcon, TYPE_LABEL } from '../ui/TypeIcon';
-import { agentById, doneSummary, ITEM_STATUS_LABEL, latestDecision, signoffVerdict, ticketKey, timeAgo } from '../util';
+import { agentById, awaitsSignoff, doneSummary, ITEM_STATUS_LABEL, latestDecision, signoffVerdict, ticketKey, timeAgo, waitingTitle } from '../util';
 import { DecisionBar } from './DecisionBar';
 import { ProjectAvatar } from './ProjectAvatar';
 import { ReportList } from './ReportList';
@@ -39,14 +39,13 @@ interface Props {
 }
 
 const MOVE_TO: ItemStatus[] = ['todo', 'in-progress', 'needs-you', 'held', 'done'];
-// Dev-team projects can also send a ticket to QA by hand.
-const MOVE_TO_QA: ItemStatus[] = ['todo', 'in-progress', 'qa', 'needs-you', 'held', 'done'];
-// Menu order. The current status always shows, checked, even one you do not move to by hand (sign-off, approved, sent back).
+// Menu order. The current status always shows, checked, even one you do not move to by hand (approved, sent back).
 const MENU_ORDER: ItemStatus[] = ['todo', 'in-progress', 'sent-back', 'approved', 'qa', 'signoff', 'needs-you', 'held', 'done'];
 
-function StatusMenu({ item, onMove, qa }: { item: WorkItem; onMove: Props['onMove']; qa: boolean }) {
+/** qa: dev-team projects can send a ticket to QA by hand. signoff: projects with sign-off can put it in sign-off. */
+function StatusMenu({ item, onMove, qa, signoff }: { item: WorkItem; onMove: Props['onMove']; qa: boolean; signoff: boolean }) {
   const pop = usePopover<HTMLDivElement>();
-  const moves = qa ? MOVE_TO_QA : MOVE_TO;
+  const moves: ItemStatus[] = [...MOVE_TO, ...(qa ? (['qa'] as const) : []), ...(signoff ? (['signoff'] as const) : [])];
   const rows = MENU_ORDER.filter((s) => moves.includes(s) || s === item.status);
   return (
     <div className="popover-anchor" ref={pop.ref}>
@@ -200,15 +199,17 @@ export function TicketView({ item, state, live, onClose, onDecide, onComment, on
   const from = agentById(agents, item.from);
   const thread = item.threadId ? state.threads.find((t) => t.id === item.threadId) : undefined;
   const decidable = item.status === 'needs-you' || item.status === 'held' || item.status === 'signoff';
-  const qaProject = hasQa(state.project.template) || item.status === 'qa' || item.status === 'signoff';
+  const qaProject = hasQa(state.project.template) || item.status === 'qa';
+  const signoff = signoffOn(state.project);
   // In QA, the QA desk is the one to put on it; otherwise the owner.
   const qaDesk = agents.find((a) => a.qa && !a.isHuman);
   const worker = item.status === 'qa' ? qaDesk : assignee;
   const runnable = live && worker && !worker.isHuman && !worker.running && ['todo', 'in-progress', 'sent-back', 'approved', 'qa'].includes(item.status);
   const checker = item.qa?.by ? agentById(agents, item.qa.by) : undefined;
-  // Waiting for your sign-off: QA's pass from this round, or, when QA did not check it, what the owner said it finished.
+  // Waiting for your sign-off (held there too): QA's pass from this round, or, when QA did not check it, what the owner said it finished.
+  const signoffWait = awaitsSignoff(item);
   const verdict = signoffVerdict(item);
-  const finished = item.status === 'signoff' && !verdict ? doneSummary(item) : undefined;
+  const finished = signoffWait && !verdict ? doneSummary(item) : undefined;
   const [copied, setCopied] = useState(false);
   const [tab, setTab] = useState<'comments' | 'history'>('comments');
   const pid = state.project.id;
@@ -268,7 +269,7 @@ export function TicketView({ item, state, live, onClose, onDecide, onComment, on
         </h2>
 
         <div className="ticket-actions">
-          <StatusMenu item={item} onMove={onMove} qa={qaProject} />
+          <StatusMenu item={item} onMove={onMove} qa={qaProject} signoff={signoff} />
           {worker?.running && <span className="running-note">{worker.name} is {item.status === 'qa' ? 'checking it' : 'working on it'}</span>}
           {runnable && (
             <button type="button" className="btn btn-outline btn-sm" onClick={() => void onRun(item.id)}>
@@ -291,17 +292,7 @@ export function TicketView({ item, state, live, onClose, onDecide, onComment, on
           <div className="ticket-main">
             {decidable && (
               <section className="callout" aria-label="Your decision">
-                <h3 className="callout-title">
-                  {item.status === 'signoff'
-                    ? verdict
-                      ? `Passed QA${checker ? ` (${checker.name})` : ''}. Sign it off`
-                      : 'Finished. Check it and sign it off'
-                    : item.status === 'held'
-                      ? 'On hold. Decide when ready'
-                      : item.qa?.escalated
-                        ? 'Failed QA too often. Your call'
-                        : 'Needs your decision'}
-                </h3>
+                <h3 className="callout-title">{waitingTitle(item, checker?.name)}</h3>
                 {verdict?.text && (
                   <div className="callout-ask">
                     <Markdown source={verdict.text} variant="compact" breaks />
@@ -313,7 +304,7 @@ export function TicketView({ item, state, live, onClose, onDecide, onComment, on
                     <p>{finished}</p>
                   </div>
                 )}
-                {item.status !== 'signoff' && ask && (
+                {!signoffWait && ask && (
                   <div className="callout-ask">
                     {ask.title && <p className="comment-title">{ask.title}</p>}
                     <Markdown source={ask.text} variant="compact" breaks />
@@ -399,12 +390,14 @@ export function TicketView({ item, state, live, onClose, onDecide, onComment, on
                       <>Checking: {person(checker.id, checker.name)}</>
                     ) : item.qa?.result ? (
                       `${item.qa.result === 'pass' ? 'Passed' : 'Failed'}${checker ? ` (${checker.name})` : ''}${item.qa.fails ? `, failed ${item.qa.fails} time${item.qa.fails === 1 ? '' : 's'}` : ''}`
-                    ) : item.status === 'signoff' ? (
+                    ) : signoffWait ? (
                       'Not checked by QA this time. You sign it off'
                     ) : qaDesk ? (
                       `Not checked yet. ${qaDesk.name} checks it when it is finished`
-                    ) : (
+                    ) : signoff ? (
                       'No QA desk. You sign it off'
+                    ) : (
+                      'No QA desk'
                     )}
                   </dd>
                 </>

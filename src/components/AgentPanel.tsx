@@ -2,7 +2,7 @@ import { X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { HUDDLE_KIND_LABEL } from '../../shared/huddle';
 import type { Agent, Run, SkillMeta, StateResponse, WorkItem } from '../../shared/types';
-import { hasQa } from '../../shared/types';
+import { hasQa, signoffOn } from '../../shared/types';
 import { api } from '../api';
 import { Avatar } from '../ui/Avatar';
 import { Lozenge, StatusLozenge } from '../ui/Lozenge';
@@ -52,6 +52,7 @@ export function AgentPanel({ agent, state, onClose, onOpenTicket, onOpenThread, 
   const key = state.project.key;
   const mine = state.items.filter((i) => i.assignee === agent.id);
   const qaProject = hasQa(state.project.template);
+  const signoff = signoffOn(state.project);
   // The QA desk's own queue: other desks' tickets it is checking.
   const checking = agent.qa ? state.items.filter((i) => i.status === 'qa' && i.assignee !== agent.id) : [];
   const recent = state.activity.filter((a) => a.agentId === agent.id).slice(0, 8);
@@ -272,7 +273,15 @@ export function AgentPanel({ agent, state, onClose, onOpenTicket, onOpenThread, 
                 type="button"
                 className="btn btn-outline btn-sm"
                 disabled={busy}
-                title={agent.qa ? 'Finished tickets then come straight to you to sign off' : 'This desk checks finished tickets before you sign them off'}
+                title={
+                  signoff
+                    ? agent.qa
+                      ? 'Finished tickets then come straight to you to sign off'
+                      : 'This desk checks finished tickets before you sign them off'
+                    : agent.qa
+                      ? 'Finished tickets then go straight to Done'
+                      : 'This desk checks finished tickets before they are done'
+                }
                 onClick={() => void act(() => onSetQa(agent.id, !agent.qa))}
               >
                 {agent.qa ? 'Stop QA' : 'Make QA desk'}

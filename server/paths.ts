@@ -5,6 +5,18 @@ import type { PathCheck, ProjectMeta } from '../shared/types';
 /** The HQ app's own folder. Agents may never write into it outside their workspace. */
 export const HQ_ROOT = path.resolve(process.cwd());
 
+/**
+ * The environment for a Claude Code process HQ starts (desk runs, connection checks, `claude mcp` commands).
+ * Desk workspaces live inside HQ's own folder, and Claude Code runs `git status` where it starts. That reads
+ * HQ's server/ files, and on Windows `node --watch` takes a read as a change: the dev server restarted and
+ * killed the run that had just started. So git never looks above a workspace into HQ's repo, and Claude Code's
+ * git context is off (desks have no git anyway, and it kept changing the cached prompt). Exported for tests.
+ */
+export function claudeEnv(extra: Record<string, string> = {}, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const ceilings = [base.GIT_CEILING_DIRECTORIES, HQ_ROOT].filter((d): d is string => Boolean(d));
+  return { ...base, GIT_CEILING_DIRECTORIES: ceilings.join(path.delimiter), CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS: '1', ...extra };
+}
+
 /** Strip the quotes Windows "Copy as path" adds, plus stray whitespace. */
 export function cleanPath(raw: string): string {
   return raw.trim().replace(/^["']+|["']+$/g, '').trim();

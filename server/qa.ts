@@ -3,9 +3,12 @@ import { addComment } from './comments';
 import { now } from './store';
 
 /**
- * QA on dev-team projects, as pure state. A finished ticket goes to the project's QA desk, which passes
- * or fails it. A pass waits for your sign-off; a fail goes back to the owner, until it has failed too
- * often and comes to you. The runner wakes the desks; this only moves the ticket.
+ * QA on dev-team projects, and your sign-off on every project, as pure state. A finished ticket goes to
+ * the project's QA desk, which passes or fails it. A pass waits for your sign-off; a fail goes back to
+ * the owner, until it has failed too often and comes to you. Without QA, a finished ticket waits for
+ * your sign-off straight away. With sign-off off, finished (and passed) work is done; a fix of work QA
+ * failed still waits for a check, or for you when nobody can check it.
+ * The runner wakes the desks; this only moves the ticket.
  */
 
 /** Fixes the owner gets after a QA fail before the ticket comes to you instead. */
@@ -39,6 +42,7 @@ const roundOf = (item: WorkItem) => item.qa?.round ?? 0;
 /**
  * Put a ticket in QA: the QA desk checks it, or, with no QA desk free for it, it waits for your sign-off.
  * Each trip is a new round with no verdict yet, so an older check never speaks for this one.
+ * Sent here by hand, re-routed or changed after QA, it comes to you even with sign-off off: it was waiting for a check.
  */
 export function sendToQa(s: State, item: WorkItem): 'qa' | 'signoff' {
   const { result: _result, by: _by, ...prev } = item.qa ?? { fails: 0 };
@@ -64,14 +68,35 @@ export function sendToQa(s: State, item: WorkItem): 'qa' | 'signoff' {
   return 'qa';
 }
 
-/** A desk finished its ticket. With QA on, it goes to QA (or straight to your sign-off); otherwise it is done. */
-export function finishWork(s: State, item: WorkItem, summary: string, qaOn: boolean): 'done' | 'qa' | 'signoff' {
+/** Where finished work goes on a project. */
+export interface FinishFlags {
+  /** Dev-team projects: the QA desk checks it first. */
+  qa: boolean;
+  /** The project's sign-off setting: finished work waits for you before Done. */
+  signoff: boolean;
+}
+
+/** Finished work on a project without QA: it waits for your sign-off. No verdict, so the sign-off shows the owner's summary. */
+function awaitSignoff(item: WorkItem): 'signoff' {
+  const { result: _result, by: _by, ...prev } = item.qa ?? { fails: 0 };
+  item.status = 'signoff';
+  item.qa = { ...prev, ready: true, escalated: false };
+  item.history.push({ ts: now(), text: 'Ready for your sign-off' });
+  return 'signoff';
+}
+
+/**
+ * A desk finished its ticket. With QA, it goes to the QA desk; with sign-off, to you (straight away when
+ * nobody can check it); with neither, it is done. Sign-off off and no QA desk free for it: done unchecked,
+ * unless QA failed it last time: then the fix comes to you, since HQ never closes failed work unchecked.
+ */
+export function finishWork(s: State, item: WorkItem, summary: string, on: FinishFlags): 'done' | 'qa' | 'signoff' {
   item.history.push({ ts: now(), text: `Done: ${summary.trim().slice(0, 800) || 'Finished without a summary.'}` });
-  if (!qaOn) {
-    item.status = 'done';
-    return 'done';
-  }
-  return sendToQa(s, item);
+  // Dev-team projects: the QA desk checks it, or it comes to you with why nobody could. A fix after a QA fail too.
+  if (item.qa?.result === 'fail' || (on.qa && (on.signoff || checkerFor(s, item)))) return sendToQa(s, item);
+  if (on.signoff) return awaitSignoff(item);
+  item.status = 'done';
+  return 'done';
 }
 
 export interface QaVerdict {
@@ -80,8 +105,8 @@ export interface QaVerdict {
   issues?: string[];
 }
 
-/** Where a verdict sent the ticket: your sign-off, back to the owner, or to you after too many fails. */
-export type QaOutcome = 'signoff' | 'rework' | 'escalated';
+/** Where a verdict sent the ticket: your sign-off (or Done, with sign-off off), back to the owner, or to you after too many fails. */
+export type QaOutcome = 'signoff' | 'done' | 'rework' | 'escalated';
 
 const issuesOf = (v: QaVerdict) => (v.issues ?? []).map((t) => t.trim()).filter(Boolean).slice(0, MAX_ISSUES);
 
@@ -95,8 +120,8 @@ export function verdictProblem(item: WorkItem, v: QaVerdict, round?: number): st
   return null;
 }
 
-/** Record the QA desk's verdict on a ticket in QA. The outcome, or why it was refused. */
-export function recordQaResult(s: State, item: WorkItem, by: string, v: QaVerdict, attachments: Attachment[] = [], round?: number): QaOutcome | string {
+/** Record the QA desk's verdict on a ticket in QA. `signoff`: the project's sign-off setting. The outcome, or why it was refused. */
+export function recordQaResult(s: State, item: WorkItem, by: string, v: QaVerdict, attachments: Attachment[] = [], round?: number, signoff = true): QaOutcome | string {
   const problem = verdictProblem(item, v, round);
   if (problem) return problem;
   const summary = v.summary.trim();
@@ -107,9 +132,16 @@ export function recordQaResult(s: State, item: WorkItem, by: string, v: QaVerdic
   const images = attachments.length ? { attachments } : {};
 
   if (v.result === 'pass') {
+    addComment(item, { from: by, kind: 'qa', title: 'Passed QA', text: body, ...images });
+    // Sign-off off: a pass is the last step.
+    if (!signoff) {
+      item.status = 'done';
+      item.qa = { ...prev, by, result: 'pass', ready: false, escalated: false };
+      item.history.push({ ts: now(), text: `Passed QA (${name}). Done` });
+      return 'done';
+    }
     item.status = 'signoff';
     item.qa = { ...prev, by, result: 'pass', ready: true, escalated: false };
-    addComment(item, { from: by, kind: 'qa', title: 'Passed QA', text: body, ...images });
     item.history.push({ ts: now(), text: `Passed QA (${name}). Ready for your sign-off` });
     return 'signoff';
   }
@@ -136,9 +168,16 @@ export function recordQaResult(s: State, item: WorkItem, by: string, v: QaVerdic
   return 'rework';
 }
 
-/** You sent it back or gave an instruction: it is work again, and QA starts counting fails afresh. */
+/**
+ * You sent it back or gave an instruction: it is work again, and QA starts counting fails afresh.
+ * Finished work (waiting for your sign-off, held there, or QA gave up on it) becomes a rework of it, so
+ * the desk fixes it and reports it done again instead of raising it. Call it before the status changes.
+ */
 export function backToWork(item: WorkItem): void {
-  if (item.qa) item.qa = { ...item.qa, fails: 0, ready: false, escalated: false };
+  if (!item.qa) return;
+  const rework = closesOnApprove(item);
+  const { reworkOf: _reworkOf, ...prev } = item.qa;
+  item.qa = { ...prev, fails: 0, ready: false, escalated: false, ...(rework ? { reworkOf: 'signoff' as const } : {}) };
 }
 
 /**
@@ -149,15 +188,15 @@ export function clearSignoff(item: WorkItem): void {
   if (item.qa && (item.qa.ready || item.qa.escalated)) item.qa = { ...item.qa, ready: false, escalated: false };
 }
 
-/** The work is finished and checked (or QA gave up): Approve closes the ticket instead of starting a run. */
+/** The work is finished and waits for your sign-off (or QA gave up): Approve closes the ticket instead of starting a run. */
 export function closesOnApprove(item: WorkItem): boolean {
   return Boolean(item.qa?.ready) && (item.status === 'signoff' || item.status === 'needs-you' || item.status === 'held');
 }
 
 /**
  * You moved a ticket by hand (status menu or drag). Into QA it goes to the QA desk; into sign-off,
- * Approve closes it; on hold it keeps its place; anywhere else it is not waiting on a sign-off.
- * 'qa' when it needs a check now, 'done' when it just became done, else null.
+ * Approve closes it, with no QA verdict since nobody checked it this way; on hold it keeps its place;
+ * anywhere else it is not waiting on a sign-off. 'qa' when it needs a check now, 'done' when it just became done, else null.
  */
 export function moveByHand(s: State, item: WorkItem, next: ItemStatus): 'qa' | 'done' | null {
   if (next === item.status) return null;
@@ -167,8 +206,11 @@ export function moveByHand(s: State, item: WorkItem, next: ItemStatus): 'qa' | '
   }
   item.status = next;
   item.history.push({ ts: now(), text: `Moved to ${next} by you` });
-  if (next === 'signoff') item.qa = { ...(item.qa ?? { fails: 0 }), ready: true };
-  else if (next !== 'held') clearSignoff(item);
+  if (next === 'signoff') {
+    // As awaitSignoff: an older verdict, and who gave it, must not show as this sign-off's.
+    const { result: _result, by: _by, ...prev } = item.qa ?? { fails: 0 };
+    item.qa = { ...prev, ready: true, escalated: false };
+  } else if (next !== 'held') clearSignoff(item);
   return next === 'done' ? 'done' : null;
 }
 

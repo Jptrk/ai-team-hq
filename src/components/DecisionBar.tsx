@@ -50,7 +50,7 @@ export function DecisionBar({ item, ownerName, onDecide, compact }: Props) {
   };
 
   const held = item.status === 'held';
-  // Finished and checked (or QA gave up on it): Approve closes the ticket.
+  // Finished and waiting for your sign-off (or QA gave up on it): Approve closes the ticket.
   const closes = Boolean(item.qa?.ready) && (item.status === 'signoff' || item.status === 'needs-you' || held);
   const approveLabel = !closes ? 'Approve' : item.qa?.escalated ? 'Accept as is' : 'Mark done';
   const size = compact ? ' btn-sm' : '';
@@ -84,7 +84,13 @@ export function DecisionBar({ item, ownerName, onDecide, compact }: Props) {
             minHeight={56}
             value={note}
             label={mode === 'instruct' ? `Instruction for ${ownerName}` : `Note for ${ownerName}`}
-            placeholder={mode === 'instruct' ? `Tell ${ownerName} what to change...` : `Why is it going back to ${ownerName}? (optional)`}
+            placeholder={
+              mode === 'instruct'
+                ? `Tell ${ownerName} what to change...`
+                : item.status === 'signoff'
+                  ? `What should ${ownerName} change?`
+                  : `Why is it going back to ${ownerName}? (optional)`
+            }
             onChange={setNote}
             onSubmit={() => {
               if (canSend) void run(mode, note.trim(), att.take());

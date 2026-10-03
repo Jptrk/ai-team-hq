@@ -336,6 +336,8 @@ export interface ProjectInput {
   path: string | null;
   access: ProjectAccess;
   template: TeamTemplate;
+  /** Finished tickets wait for your sign-off. Left out means on. */
+  signoff?: boolean;
 }
 
 function makeMeta(input: ProjectInput, r: Registry, forcedId?: string): ProjectMeta {
@@ -351,6 +353,7 @@ function makeMeta(input: ProjectInput, r: Registry, forcedId?: string): ProjectM
     template: input.template,
     color: PROJECT_COLORS[r.projects.length % PROJECT_COLORS.length],
     createdAt: now(),
+    signoff: input.signoff ?? true,
   };
 }
 
@@ -367,7 +370,7 @@ export function createProject(input: ProjectInput): Project {
   return getProject(meta.id)!;
 }
 
-export function updateProject(id: string, patch: Partial<Pick<ProjectMeta, 'name' | 'key' | 'path' | 'access'>>): ProjectMeta {
+export function updateProject(id: string, patch: Partial<Pick<ProjectMeta, 'name' | 'key' | 'path' | 'access' | 'signoff'>>): ProjectMeta {
   const meta = reg().projects.find((p) => p.id === id);
   if (!meta) throw new Error('project not found');
   Object.assign(meta, patch);

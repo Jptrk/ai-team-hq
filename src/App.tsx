@@ -24,7 +24,7 @@ import { useMediaQuery } from './hooks/useMediaQuery';
 import { useProjectActions } from './hooks/useProjectActions';
 import { useTheme } from './hooks/useTheme';
 import { roughTokens } from '../shared/huddle';
-import { hasQa } from '../shared/types';
+import { hasQa, signoffOn } from '../shared/types';
 import { ConfirmInline } from './ui/ConfirmInline';
 import { ProjectIdContext, TeamNotesContext, type TeamNotesInfo } from './lib/projectContext';
 import { KEYS, storage } from './lib/storage';
@@ -320,7 +320,8 @@ export function App() {
               onMove={actions.move}
               onDragActive={setPollPaused}
               flash={(t) => notify(t)}
-              showQa={hasQa(state.project.template)}
+              qa={hasQa(state.project.template)}
+              signoff={signoffOn(state.project)}
             />
           </div>
         );

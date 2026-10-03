@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
-import { BOARD_COLUMNS, type Agent, type ItemStatus, type WorkItem } from '../../shared/types';
+import { boardColumns, type Agent, type ItemStatus, type WorkItem } from '../../shared/types';
 import { agentById, ticketKey } from '../util';
 import { BoardCard } from './board/BoardCard';
 import { BoardToolbar } from './board/BoardToolbar';
@@ -15,15 +15,14 @@ interface Props {
   /** Pauses the state poll while a card is dragged. */
   onDragActive: (on: boolean) => void;
   flash: (text: string) => void;
-  /** Show the QA column: dev-team projects, or any project with tickets in it. */
-  showQa: boolean;
+  /** Show the QA column: dev-team projects. It also shows while tickets are in it. */
+  qa: boolean;
+  /** Show the Sign-off column: projects with sign-off on. It also shows while tickets are in it. */
+  signoff: boolean;
 }
 
-export function Board({ items, agents, projectKey, selectedId, onOpen, onMove, onDragActive, flash, showQa }: Props) {
-  const columns = useMemo(
-    () => (showQa || items.some((i) => i.status === 'qa' || i.status === 'signoff') ? BOARD_COLUMNS : BOARD_COLUMNS.filter((c) => !c.statuses.includes('qa'))),
-    [showQa, items],
-  );
+export function Board({ items, agents, projectKey, selectedId, onOpen, onMove, onDragActive, flash, qa, signoff }: Props) {
+  const columns = useMemo(() => boardColumns(items, { qa, signoff }), [qa, signoff, items]);
   const colOf = (status: ItemStatus) => columns.findIndex((c) => c.statuses.includes(status));
   const [filter, setFilter] = useState<BoardFilter>(EMPTY_FILTER);
   const [pending, setPending] = useState<Record<string, ItemStatus>>({});

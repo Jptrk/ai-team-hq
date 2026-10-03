@@ -43,7 +43,7 @@ theme toggle and your menu. A left sidebar holds the project switcher and the vi
 | ---- | ---------- |
 | Needs you | An inbox of decisions, tickets ready for sign-off, holds and paused chat threads, with Approve (or Mark done) / Hold / Send back / Instruct on each row |
 | Chat | Thread list and the open thread side by side (one pane under 900px) |
-| Board | To do, In progress, Needs you and Done, plus QA on dev-team projects. Drag-and-drop, filters by text, assignee and "Needs me" |
+| Board | To do, In progress, Sign-off, Needs you and Done, plus QA on dev-team projects (see [Sign-off and QA](#sign-off-and-qa)). Drag-and-drop, filters by text, assignee and "Needs me" |
 | Team | A card per desk; "Add teammate" is the dashed card |
 | Office | The pixel office: where every desk is and what it's doing right now (see [Office](#office)) |
 
@@ -257,6 +257,8 @@ Creating a project:
 - **Access**: Read only (default) or Read & write. Read only means agents read the code and put
   plans and diffs in reports. Read & write lets them edit files, but never `.git`, `node_modules`,
   `.env*` or key files. There is no shell either way: no builds, tests, git, or commits.
+- **Sign-off** (on by default): finished tickets wait for you before Done. See
+  [Sign-off and QA](#sign-off-and-qa).
 
 Teams are editable on the Team tab: add a teammate with routing keywords, open one to make them
 lead or remove them. A removed desk's open tickets go to the lead. The founder (you) is the same
@@ -265,7 +267,7 @@ person in every project; renaming yourself in one renames you everywhere.
 Routing an instruction: `@Name` sends it straight to that desk. Otherwise the desk whose keywords
 match best gets it, and the lead catches anything nobody matches.
 
-Project settings (from the picker) edit name, key, folder, and access, or remove the project.
+Project settings (from the picker) edit name, key, folder, access and sign-off, or remove the project.
 Removing moves its board and agent workspaces to `data/archive/`. The linked folder is never
 touched.
 
@@ -541,16 +543,53 @@ for those paths, denies them to Vite's file serving, doesn't watch them, and loo
 
 Which desks have a skill is saved per project, in its `db.json` (`skillDesks`).
 
-## QA (dev-team projects)
+## Sign-off and QA
 
-On a project made from the **Dev team** template, finished work is checked before it's Done:
+Finished work waits for you before it's Done. A desk that finishes a ticket does not close it: you
+check it and sign it off, or send it back with what to change.
+
+### Sign-off (every project)
+
+1. **The owner finishes.** When a desk calls `report_done` (or a ticket run ends without it), the
+   ticket moves to the **Sign-off** column instead of Done, with the desk's summary of what it did.
+   The run's notes tell the desk this, so its summary says what changed and how to check it.
+   A handed-off ticket tells the desk that handed it over right away that it is finished and waiting
+   for your sign-off (or for QA), so that desk can carry on without waiting for you.
+2. **You check it.** It shows in **Needs you** under "Ready for sign-off", and the ticket opens on
+   "Finished. Check it and sign it off" with that summary.
+3. **Mark done** closes it. A handed-off ticket then tells the desk that handed it over that it is
+   signed off (just that: it already heard what was finished).
+4. **Request changes with Send back**: write what to change (images too). The owner is woken with
+   your note and told to fix what it asks and call `report_done` again, not to raise it as a new
+   decision; that brings it back to Sign-off. **Instruct** works the same way. **Hold** keeps it
+   waiting: it shows under "On hold" with the finished work (QA's pass or the owner's summary), and
+   Mark done still closes it later.
+5. **Comments** on a ticket in sign-off get an answer from the owner as usual. A comment run never
+   closes the ticket and never reports it done again.
+
+- **The setting.** Project settings (and Create project) have **Finished tickets wait for your
+  sign-off before Done**. It is on for every project, including ones made before it existed. Turn
+  it off and finished tickets go straight to Done, as before. Tickets already waiting for sign-off
+  stay until you mark them done.
+- **Approved work too.** After you approve a decision, the desk carries it out and its finished
+  work comes to your sign-off like any other ticket.
+- **The Sign-off column** shows when the setting is on, or while tickets sit in it. Drag a card into
+  it, or pick "sign-off" in a ticket's status menu, to have it wait for you: Mark done closes it with
+  no run. It shows no QA verdict, since nobody checked it that way. A ticket that leaves sign-off any
+  other way than your Hold (a new ask from its desk, a move, the desk back on it) needs your Approve
+  again, and an approved run still waiting to start when the ticket moves on is skipped.
+
+### QA (dev-team projects)
+
+On a project made from the **Dev team** template, finished work is checked before your sign-off:
 
 1. **The owner finishes.** When a desk calls `report_done`, the ticket moves to the **QA** column
-   instead of Done.
+   instead.
 2. **The QA desk checks it.** The project's QA desk (Ivy by default) is woken. It reads the ticket,
    the files the owner changed and the owner's reports, then records a verdict with `qa_result`.
-3. **Pass:** the ticket waits in QA as **sign-off** and shows in **Needs you** under "Ready for
-   sign-off". **Mark done** closes it. Send back, Instruct and Hold work as usual.
+3. **Pass:** the ticket moves to **Sign-off**, with QA's verdict, and shows in **Needs you** under
+   "Ready for sign-off". **Mark done** closes it. Send back, Instruct and Hold work as usual. With
+   sign-off off, a pass closes the ticket instead.
 4. **Fail:** the ticket goes back to the owner, tagged "QA failed", with the issues as a comment.
    The owner is woken to fix them and finishes again, which sends it back to QA.
 5. **Too many fails:** after 2 fixes (`HQ_QA_MAX_FIXES`), the next fail comes to you in Needs you
@@ -572,16 +611,18 @@ On a project made from the **Dev team** template, finished work is checked befor
   summary instead of an old verdict.
 - **Pick the QA desk** in the desk's panel (click its card in the Team tab): **Make QA desk** or
   **Stop QA**. With no QA desk, or when the QA desk is off shift or did the work itself, a finished
-  ticket goes straight to your sign-off.
+  ticket goes straight to your sign-off, which says why nobody checked it. With sign-off off, it goes
+  straight to Done, unless QA failed it last time: a fix of failed work comes to you instead, so it
+  never closes unchecked.
 - **Changing the QA desk.** Make another desk the QA desk, Stop QA, or remove the QA desk, and the
-  tickets waiting in QA go to the new QA desk, or to your sign-off. Your pick sticks across restarts,
-  none included; a reset starts the team again with Ivy as the QA desk.
+  tickets waiting in QA go to the new QA desk, or to your sign-off. They come to you even with
+  sign-off off: they were waiting for a check, so HQ never closes them unchecked. The same goes for
+  a ticket you move into QA by hand, or one changed after QA, with no QA desk free. Your pick sticks
+  across restarts, none included; a reset starts the team again with Ivy as the QA desk.
 - **By hand.** Drag a card into QA, or pick "in QA" in a ticket's status menu, to have it checked.
-  "Put Ivy on it" on a ticket in QA runs the check again. A ticket you move to sign-off through the
-  API closes on **Mark done**, like one QA passed. A ticket that leaves sign-off any other way than
-  your Hold (a new ask from its desk, a move, the desk back on it) needs your Approve again.
+  "Put Ivy on it" on a ticket in QA runs the check again.
 - **Cost.** Each check is one desk run, with the same caps as a ticket run.
-- Business and blank projects have no QA column and work as before.
+- Business and blank projects have no QA column: finished work goes to your sign-off (or Done).
 
 | Env | Default | What |
 | --- | ------- | ---- |
@@ -595,8 +636,9 @@ a desk wakes it for a live run, which spends usage.
 - **Desks message each other** with two HQ tools:
   - `send_message(to, text)` reaches up to 3 teammates, or "founder" to answer you.
   - `hand_off(to, title, brief)` gives a teammate a ticket of their own. The sender is told
-    automatically when that ticket is done: when its desk finishes it, when you sign it off, or
-    when you mark it done yourself.
+    automatically when its desk finishes it, even while it still waits for QA or your sign-off, so
+    the sender can carry on. It hears once more when the ticket is done: you sign it off, QA passes
+    it (with sign-off off), or you mark it done yourself.
 - **Threads.** A ticket gets one thread, created the first time someone discusses it.
   Threads you start from the Chat tab stand alone.
 - **You can post in any thread.** `@Name` pulls a desk in. With no mention, your message goes
@@ -804,7 +846,7 @@ npm run test:skills
 
 - **`test:guard`** checks what an agent may read and write in its workspace and the linked folder. It also checks which MCP tools run freely, need approval, or are refused.
 - **`test:chat`** checks the chat core: recipients, the loop limit, resume and settle.
-- **`test:ui`** checks the UI helpers: routes, board filter, search ranking, report link resolution, markdown previews, image sizing, and avatar text contrast.
+- **`test:ui`** checks the UI helpers: routes, board columns and filter, search ranking, report link resolution, markdown previews, image sizing, and avatar text contrast.
 - **`test:office`** checks the office floor:
   - the approved v3 layout exactly, and growth from 1 to 12 desks
   - the design team's route checks: every seat reachable, nothing inside a wall or a table, doorways only through gaps
@@ -820,7 +862,7 @@ npm run test:skills
     resume mid-turn, a removed facilitator, and a summary that landed before the stop)
   - a restart mid-huddle, and the guard and prompt that keep huddle turns read-only
   - saving the team notes after they changed mid-edit, and the daily limit setting
-- **`test:qa`** checks QA on dev-team projects: where a finished ticket goes, pass and fail verdicts, too many fails, rounds and stale verdicts, signing off, moving tickets by hand (through the API routes, in-process), changes after QA, changing or removing the QA desk, the QA desk default, changed files recorded only for writes that went through, the read-only, no-web fence around a QA check, and the quoting of desk-written text in its prompt.
+- **`test:qa`** checks sign-off and QA: where a finished ticket goes with QA and the sign-off setting on or off, the sign-off setting on projects, pass and fail verdicts, too many fails, rounds and stale verdicts, signing off, moving tickets by hand (through the API routes, in-process), changes after QA, changing or removing the QA desk, the QA desk default, changed files recorded only for writes that went through, the read-only, no-web fence around a QA check, and the quoting of desk-written text in its prompt.
 - **`test:mcp`** checks adding, removing and signing in to MCP servers:
   - the rules for names, URLs, local commands and presets
   - masked previews and what the page shows, fingerprints, and secrets scrubbed from what the CLI
@@ -874,9 +916,9 @@ Everything project-specific lives under `/api/projects/:pid`.
 | GET    | /api/meta | |
 | GET    | /api/fs/check | `?path=<folder>&except=<pid>` |
 | GET    | /api/projects | |
-| POST   | /api/projects | `{ name, key?, path?, access?, template? }` |
+| POST   | /api/projects | `{ name, key?, path?, access?, template?, signoff? }`; `signoff` defaults to true |
 | GET    | /api/projects/:pid | |
-| PATCH  | /api/projects/:pid | `{ name?, key?, path?, access? }` |
+| PATCH  | /api/projects/:pid | `{ name?, key?, path?, access?, signoff? }`; `signoff` is true or false: finished tickets wait for your sign-off before Done (missing on older projects means on) |
 | DELETE | /api/projects/:pid | archives it |
 | GET    | /api/projects/:pid/state | includes `office`: what each desk is doing right now (activity, since, who with) |
 | POST   | /api/projects/:pid/instructions | `{ text, attachments?, includeNotes? }` |

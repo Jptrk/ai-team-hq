@@ -4,7 +4,7 @@ import type { Agent, Decision, HuddleSummary, Thread, WorkItem } from '../../sha
 import { plainText } from '../markdown/plainText';
 import { Avatar } from '../ui/Avatar';
 import { TypeIcon } from '../ui/TypeIcon';
-import { agentById, doneSummary, latestDecision, signoffVerdict, ticketKey } from '../util';
+import { agentById, ticketKey, waitingSummary } from '../util';
 import { DecisionBar } from './DecisionBar';
 import { ProposalRow, type ProposalDecision } from './huddles/Proposals';
 
@@ -28,13 +28,8 @@ interface Props {
 function Row({ item, agents, projectKey, onOpen, onDecide, onOpenAgent }: { item: WorkItem } & Pick<Props, 'agents' | 'projectKey' | 'onOpen' | 'onDecide' | 'onOpenAgent'>) {
   const owner = agentById(agents, item.assignee);
   const key = ticketKey(item, projectKey);
-  // Sign-off rows show QA's pass from this round, or what the owner said it finished; decisions show the ask.
-  const ask = item.status === 'signoff' ? signoffVerdict(item) : latestDecision(item);
-  const summary = ask
-    ? `${ask.title ? `${ask.title}. ` : ''}${ask.text}`
-    : item.status === 'signoff'
-      ? `Finished. Check it and sign it off. ${doneSummary(item) ?? item.summary}`
-      : item.summary;
+  // Sign-off rows (held ones too) show QA's pass from this round, or what the owner said it finished; decisions show the ask.
+  const summary = waitingSummary(item);
   const images = (item.attachments?.length ?? 0) + (item.comments ?? []).reduce((n, c) => n + (c.attachments?.length ?? 0), 0);
   return (
     <li className="inbox-row">

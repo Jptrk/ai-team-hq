@@ -317,7 +317,9 @@ export interface SettleInput {
   /** The desk commented on its ticket during this run. */
   commented?: boolean;
   /** Dev-team projects: a finished ticket goes to QA instead of Done. */
-  qa?: boolean;
+  qa: boolean;
+  /** The project's sign-off setting: a finished ticket waits for your sign-off instead of Done. */
+  signoff: boolean;
 }
 
 /**
@@ -350,16 +352,50 @@ export function settleAfterRun(s: State, input: SettleInput, log: (agentId: stri
     if (item.status === 'todo') item.status = 'in-progress';
     return [];
   }
-  const where = finishWork(s, item, input.summary, input.qa ?? false);
+  const where = finishWork(s, item, input.summary, { qa: input.qa, signoff: input.signoff });
   log(input.agentId, where === 'done' ? `Finished "${item.title}"` : `Finished "${item.title}", ${where === 'qa' ? 'sent to QA' : 'ready for your sign-off'}`);
   return [];
 }
 
-/** A handed-off ticket is done: tell the desk that handed it over, in the ticket's thread. Desks to wake, or null. */
-export function noticeHandoff(s: State, item: WorkItem, from: string, text: string): { threadId: string; deliver: string[] } | null {
+/** A notice posted to the desk that handed a ticket over: the thread, and the desks to wake. */
+export interface HandoffNotice {
+  threadId: string;
+  deliver: string[];
+}
+
+function postHandoff(s: State, item: WorkItem, from: string, text: string): HandoffNotice | null {
   const back = item.handoffFrom ? s.agents.find((a) => a.id === item.handoffFrom && !a.isHuman) : undefined;
   const thread = item.threadId ? findThread(s, item.threadId) : undefined;
   // Nobody to tell, or the ticket came back to the desk that handed it over.
   if (!back || back.id === from || !thread || thread.status === 'closed') return null;
   return { threadId: thread.id, deliver: postAgentMessage(s, thread, from, [back.id], text).deliver };
+}
+
+/**
+ * A handed-off ticket is done: tell the desk that handed it over, in the ticket's thread. Desks to wake, or null.
+ * `told`: what it hears instead when it was already told the ticket is finished (noticeFinished), so the
+ * notice at Done says it was signed off rather than reporting it done a second time.
+ */
+export function noticeHandoff(s: State, item: WorkItem, from: string, text: string, told = text): HandoffNotice | null {
+  const posted = postHandoff(s, item, from, item.handoffTold ? told : text);
+  // Reopened and finished again later, it is told again.
+  if (posted) delete item.handoffTold;
+  return posted;
+}
+
+/**
+ * A handed-off ticket's desk finished it (report_done, or a ticket run that ended without it). Done: the desk
+ * that handed it over hears it is done. Into QA or your sign-off: it hears now that it is finished and waiting,
+ * so it can carry on instead of waiting for your sign-off; once per ticket, and at Done only that it was signed off.
+ */
+export function noticeFinished(s: State, item: WorkItem, from: string, ref: string, where: 'done' | 'qa' | 'signoff', summary: string): HandoffNotice | null {
+  const said = summary.trim().slice(0, 800) || 'Finished.';
+  if (where === 'done') return noticeHandoff(s, item, from, `Done with ${ref}: ${said}`);
+  if (item.handoffTold) return null;
+  const owner = s.agents.find((a) => a.isHuman)?.name ?? 'the founder';
+  const checker = where === 'qa' ? s.agents.find((a) => a.id === item.qa?.by)?.name : undefined;
+  const waits = where === 'qa' ? `It is with QA${checker ? ` (${checker})` : ''} before it is done` : `It waits for ${owner}'s sign-off before it is done`;
+  const posted = postHandoff(s, item, from, `Finished ${ref}: ${said}\n${waits}. You can carry on; you hear again when it is done.`);
+  if (posted) item.handoffTold = true;
+  return posted;
 }

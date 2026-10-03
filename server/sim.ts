@@ -1,9 +1,9 @@
 import type { WorkItem } from '../shared/types';
-import { hasQa } from '../shared/types';
+import { hasQa, signoffOn } from '../shared/types';
 import { leadOf, refreshStatuses, settleInstructions } from './agents';
 import { clearWaiting, markRead, messagesOf, postAgentMessage, threadForItem } from './chat';
 import { addComment } from './comments';
-import { finishWork, qaDeskOf, recordQaResult } from './qa';
+import { finishWork, qaDeskOf, recordQaResult, type QaVerdict } from './qa';
 import { allProjects, now, today, uid, type Project } from './store';
 
 /**
@@ -147,11 +147,14 @@ function tickQa(p: Project): void {
     const by = item.qa?.by ?? qaDeskOf(s)?.id;
     if (!by) continue;
     const pass = Math.random() < 0.7;
-    const outcome = recordQaResult(s, item, by, pass ? { result: 'pass', summary: pick(QA_PASSES) ?? 'Looks right.' } : { result: 'fail', summary: 'Most of it is right, but one thing from the ticket is missing.', issues: [pick(QA_ISSUES) ?? 'Something is missing.'] });
+    const verdict: QaVerdict = pass
+      ? { result: 'pass', summary: pick(QA_PASSES) ?? 'Looks right.' }
+      : { result: 'fail', summary: 'Most of it is right, but one thing from the ticket is missing.', issues: [pick(QA_ISSUES) ?? 'Something is missing.'] };
+    const outcome = recordQaResult(s, item, by, verdict, [], undefined, signoffOn(p.meta));
     if (typeof outcome === 'string') continue;
     const desk = s.agents.find((a) => a.id === by);
     if (desk) desk.lastActive = now();
-    p.log(by, outcome === 'signoff' ? `Passed QA on ${p.ticket(item)} "${item.title}"` : `Failed QA on ${p.ticket(item)} "${item.title}"`);
+    p.log(by, outcome === 'signoff' || outcome === 'done' ? `Passed QA on ${p.ticket(item)} "${item.title}"` : `Failed QA on ${p.ticket(item)} "${item.title}"`);
   }
 }
 
@@ -171,7 +174,7 @@ function tickComments(p: Project): void {
 
 function tickProject(p: Project): void {
   const s = p.state;
-  const qaOn = hasQa(p.meta.template);
+  const finish = { qa: hasQa(p.meta.template), signoff: signoffOn(p.meta) };
   tickComments(p);
   tickQa(p);
 
@@ -203,7 +206,7 @@ function tickProject(p: Project): void {
 
   // Approved work gets carried out and finishes, the way a live desk reports it done.
   for (const done of s.items.filter((i) => i.status === 'approved' && Math.random() < 0.4)) {
-    const where = finishWork(s, done, 'carried out what you approved', qaOn);
+    const where = finishWork(s, done, 'carried out what you approved', finish);
     p.log(done.assignee, where === 'done' ? `Finished "${done.title}"` : `Finished "${done.title}", ${where === 'qa' ? 'sent to QA' : 'ready for your sign-off'}`);
   }
 
@@ -230,8 +233,9 @@ function tickProject(p: Project): void {
     const agent = s.agents.find((a) => a.id === item.assignee);
     const roll = Math.random();
     if (roll < 0.25) {
-      // The sim's own routine busywork skips QA, so your sign-off list only holds real tickets.
-      const where = finishWork(s, item, 'Finished the work on the ticket', qaOn && item.client !== 'Routine');
+      // The sim's own routine busywork skips QA and sign-off, so your sign-off list only holds real tickets.
+      const routine = item.client === 'Routine';
+      const where = finishWork(s, item, 'Finished the work on the ticket', routine ? { qa: false, signoff: false } : finish);
       p.log(item.assignee, where === 'done' ? `Finished "${item.title}"` : `Finished "${item.title}", ${where === 'qa' ? 'sent to QA' : 'ready for your sign-off'}`);
       if (agent) {
         agent.currentTask = 'Wrapping up and looking for the next task';

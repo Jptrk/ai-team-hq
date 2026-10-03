@@ -145,6 +145,12 @@
     background: var(--surface-raised);
     box-shadow: var(--shadow-raised);
   }
+  /* A project setting reads like the other fields, not like a small aside. */
+  .signoff-check {
+    align-self: flex-start;
+    font-size: var(--fs-md);
+    color: var(--text);
+  }
 
   /* ---------- connections ---------- */
   .conn-intro {

@@ -3,6 +3,7 @@ import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { MASK, TOKEN_PREFIXES, type BuiltSpec, type CliScope } from '../shared/mcpSpec';
+import { claudeEnv } from './paths';
 import { findProgram } from './proc';
 
 /**
@@ -108,7 +109,7 @@ export function runCli(args: string[], opts: { cwd: string; secrets?: string[]; 
           shell: false,
           windowsHide: true,
           stdio: ['ignore', 'pipe', 'pipe'],
-          env: { ...process.env, DISABLE_AUTOUPDATER: '1' },
+          env: claudeEnv({ DISABLE_AUTOUPDATER: '1' }),
         });
       } catch {
         resolve({ code: null, out: '', err: 'Could not start Claude Code.', timedOut: false });

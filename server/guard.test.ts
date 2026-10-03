@@ -9,7 +9,7 @@ import path from 'node:path';
 import { attachmentsDir } from './attachments';
 import type { Agent, ItemStatus, ProjectConnection, RunReason } from '../shared/types';
 import { updateConnection, type AllowedServer } from './connections';
-import { HQ_ROOT } from './paths';
+import { claudeEnv, HQ_ROOT } from './paths';
 import { z } from 'zod';
 import {
   coldBudget,
@@ -611,6 +611,19 @@ const result = (id: string, isError: boolean) => ({ type: 'user', message: { con
   const ok = same === base && differs.every((k) => k !== base) && new Set(differs).size === differs.length && SDK_VERSION !== 'unknown';
   if (!ok) failed++;
   console.log(`${ok ? 'ok  ' : 'FAIL'} session: the key sees hq tools, connection tools and the SDK (${SDK_VERSION})`);
+  extra += 1;
+}
+
+// ---------- the environment Claude Code starts with ----------
+// Git must not look above a desk's workspace into HQ's own repo: its `git status` reads server/ files,
+// which made `node --watch` restart HQ and kill the run that had just started.
+{
+  const env = claudeEnv({ EXTRA: '1' }, { PATH: 'x', GIT_CEILING_DIRECTORIES: 'D:\\slow-share' });
+  const ceilings = (env.GIT_CEILING_DIRECTORIES ?? '').split(path.delimiter);
+  const ok =
+    ceilings.includes(HQ_ROOT) && ceilings.includes('D:\\slow-share') && env.CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS === '1' && env.EXTRA === '1' && env.PATH === 'x';
+  if (!ok) failed++;
+  console.log(`${ok ? 'ok  ' : 'FAIL'} env: git stops at HQ's folder and Claude Code's git context is off`);
   extra += 1;
 }
 

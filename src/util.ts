@@ -25,15 +25,42 @@ export function latestQa(item: WorkItem): Comment | undefined {
   return [...(item.comments ?? [])].reverse().find((c) => c.kind === 'qa');
 }
 
-/** QA's pass on a ticket waiting for your sign-off, only when QA checked it this round. An earlier round's verdict never shows. */
+/** Finished work waiting for your sign-off, in Sign-off or held there. A held ticket QA gave up on is a decision instead. */
+export function awaitsSignoff(item: WorkItem): boolean {
+  return item.status === 'signoff' || (item.status === 'held' && Boolean(item.qa?.ready) && !item.qa?.escalated);
+}
+
+/** QA's pass on a ticket waiting for your sign-off (held too), only when QA checked it this round. An earlier round's verdict never shows. */
 export function signoffVerdict(item: WorkItem): Comment | undefined {
-  return item.status === 'signoff' && item.qa?.result === 'pass' ? latestQa(item) : undefined;
+  return awaitsSignoff(item) && item.qa?.result === 'pass' ? latestQa(item) : undefined;
 }
 
 /** What the owner said when it last finished the ticket, from its history. */
 export function doneSummary(item: WorkItem): string | undefined {
   const done = [...item.history].reverse().find((h) => h.text.startsWith('Done: '));
   return done?.text.slice(6);
+}
+
+/** The headline over a ticket that waits on you: a sign-off (QA passed it or not, held or not), a hold, QA giving up, or a decision. */
+export function waitingTitle(item: WorkItem, checker?: string): string {
+  if (awaitsSignoff(item)) {
+    if (item.status === 'held') return 'On hold: finished, waiting for your sign-off';
+    return signoffVerdict(item) ? `Passed QA${checker ? ` (${checker})` : ''}. Sign it off` : 'Finished. Check it and sign it off';
+  }
+  if (item.status === 'held') return 'On hold. Decide when ready';
+  return item.qa?.escalated ? 'Failed QA too often. Your call' : 'Needs your decision';
+}
+
+/**
+ * One line on a ticket in Needs you. A sign-off (held too) shows QA's pass from this round, or what the owner
+ * said it finished; a decision shows the desk's ask; anything else its description.
+ */
+export function waitingSummary(item: WorkItem): string {
+  const signoff = awaitsSignoff(item);
+  const ask = signoff ? signoffVerdict(item) : latestDecision(item);
+  if (ask) return `${ask.title ? `${ask.title}. ` : ''}${ask.text}`;
+  if (signoff) return `${item.status === 'held' ? 'Finished, waiting for your sign-off.' : 'Finished. Check it and sign it off.'} ${doneSummary(item) ?? item.summary}`;
+  return item.summary;
 }
 
 /** GA-12 style ticket reference. */

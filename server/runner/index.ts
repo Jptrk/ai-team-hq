@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { Agent, Attachment, Meta, Run, RunReason, RunnerName } from '../../shared/types';
+import type { Agent, Attachment, ItemStatus, Meta, Run, RunReason, RunnerName } from '../../shared/types';
 import { refreshStatuses, settleInstructions } from '../agents';
 import { clearWaiting, findThread, markRead, needsWake, note, pauseForFailure, unreadFor } from '../chat';
 import { rewindCursor } from '../cursor';
@@ -176,6 +176,20 @@ async function execute(p: Project, run: Run, agent: Agent, input: Omit<RunInput,
   return { reply, cancelled: stopped };
 }
 
+/**
+ * Why a queued ticket run no longer fits its ticket when its turn comes, or null to run it: decisions made
+ * while it waited make it moot. Exported for tests.
+ */
+export function mootRun(reason: RunReason, status: ItemStatus): string | null {
+  // A QA check runs only while the ticket is still in QA.
+  if (reason === 'qa') return status === 'qa' ? null : `ticket is ${status}, not in QA`;
+  // A comment still gets an answer on any ticket.
+  if (reason === 'comment') return null;
+  // Your approval is carried out only while the ticket is still approved, not once it moved on (to sign-off, done, back to work).
+  if (reason === 'approved') return status === 'approved' ? null : `ticket is ${status}, not approved any more`;
+  return ['done', 'approved', 'held', 'qa', 'signoff'].includes(status) ? `ticket is ${status}` : null;
+}
+
 export interface KickoffOptions {
   /** Put the team notes in this run's prompt. */
   includeNotes?: boolean;
@@ -226,12 +240,8 @@ export function kickoff(p: Project, itemId: string, reason: RunReason, note?: st
       return;
     }
     if (!liveAgent) return skip(p, liveRun, 'Desk was removed before the run started', true);
-    // A QA check runs only while the ticket is still in QA.
-    if (reason === 'qa' && liveItem.status !== 'qa') return skip(p, liveRun, `ticket is ${liveItem.status}, not in QA`);
-    // Decisions made while queued make the run moot. A comment still gets an answer on any ticket.
-    if (reason !== 'approved' && reason !== 'comment' && reason !== 'qa' && ['done', 'approved', 'held', 'qa', 'signoff'].includes(liveItem.status)) {
-      return skip(p, liveRun, `ticket is ${liveItem.status}`);
-    }
+    const moot = mootRun(reason, liveItem.status);
+    if (moot) return skip(p, liveRun, moot);
 
     // The owner is back on it: it is not waiting on your sign-off any more, so Approve starts a run again. A comment answer changes nothing.
     if (reason !== 'qa' && reason !== 'comment') clearSignoff(liveItem);

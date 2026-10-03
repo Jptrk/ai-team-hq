@@ -49,7 +49,7 @@ export type ItemStatus =
   | 'sent-back'
   /** Dev-team projects: the QA desk is checking the finished work. */
   | 'qa'
-  /** Dev-team projects: passed QA (or there is no QA desk). Waits for you to mark it done. */
+  /** Finished (and on dev-team projects, passed QA or nobody could check it). Waits for you to mark it done. */
   | 'signoff'
   | 'done';
 
@@ -97,12 +97,14 @@ export interface WorkItem {
   history: { ts: string; text: string }[];
   /** The chat thread where this ticket is discussed. */
   threadId?: string;
-  /** Desk that handed this ticket over; it hears back when the ticket is done. */
+  /** Desk that handed this ticket over; it hears back when the ticket is finished, and again when it is done. */
   handoffFrom?: string;
+  /** That desk was told the ticket is finished and waits for QA or your sign-off, so at Done it only hears it was signed off. */
+  handoffTold?: boolean;
   /** Images on the description. */
   attachments?: Attachment[];
   comments?: Comment[];
-  /** Dev-team projects: where the ticket is in QA. */
+  /** Where the ticket is in QA (dev-team projects) and your sign-off. */
   qa?: QaState;
   /** Files in the project folder that desks changed for this ticket, relative to the folder. Newest last. */
   changedFiles?: string[];
@@ -119,10 +121,15 @@ export interface QaState {
   round?: number;
   /** This round's verdict. Cleared each time the ticket goes back into QA. */
   result?: 'pass' | 'fail';
-  /** The work is finished and checked, or QA gave up on it: your Approve closes the ticket instead of starting a run. */
+  /** The work is finished (and checked, where QA could), or QA gave up on it: your Approve closes the ticket instead of starting a run. */
   ready?: boolean;
   /** QA failed it too often, so it came to you. */
   escalated?: boolean;
+  /**
+   * Your last Send back or Instruct reached finished work (waiting for your sign-off, or QA gave up on it):
+   * the desk fixes it and reports it done again, instead of raising it as a decision.
+   */
+  reworkOf?: 'signoff';
 }
 
 export type InstructionStatus = 'queued' | 'assigned' | 'done';
@@ -523,6 +530,13 @@ export interface ProjectMeta {
   template: TeamTemplate;
   color: string;
   createdAt: string;
+  /** Finished tickets wait for your sign-off before Done. Missing means on, so older projects have it. Read it with signoffOn. */
+  signoff?: boolean;
+}
+
+/** Finished tickets wait for your sign-off before Done, unless you turned it off for the project. */
+export function signoffOn(meta: Pick<ProjectMeta, 'signoff'>): boolean {
+  return meta.signoff !== false;
 }
 
 export interface ProjectSummary extends ProjectMeta {
@@ -579,11 +593,21 @@ export const BOARD_COLUMNS: { statuses: ItemStatus[]; label: string }[] = [
   { statuses: ['todo'], label: 'To do' },
   // Approved means the desk is now carrying it out: it stays in progress, tagged Approved, until the desk reports it finished.
   { statuses: ['in-progress', 'sent-back', 'approved'], label: 'In progress' },
-  // Dev-team projects: the QA desk checks it, then it waits for your sign-off.
-  { statuses: ['qa', 'signoff'], label: 'QA' },
+  // Dev-team projects: the QA desk checks it.
+  { statuses: ['qa'], label: 'QA' },
+  // Finished work waiting for you to mark it done, when the project has sign-off on.
+  { statuses: ['signoff'], label: 'Sign-off' },
   { statuses: ['needs-you', 'held'], label: 'Needs you' },
   { statuses: ['done'], label: 'Done' },
 ];
+
+/** The board's columns for one project: QA with QA on, Sign-off with sign-off on, and either while tickets sit in it. */
+export function boardColumns(items: Pick<WorkItem, 'status'>[], on: { qa: boolean; signoff: boolean }): typeof BOARD_COLUMNS {
+  const holds = (status: ItemStatus) => items.some((i) => i.status === status);
+  const qa = on.qa || holds('qa');
+  const signoff = on.signoff || holds('signoff');
+  return BOARD_COLUMNS.filter((c) => (qa || !c.statuses.includes('qa')) && (signoff || !c.statuses.includes('signoff')));
+}
 
 /** QA runs on dev-team projects: finished tickets go to the QA desk, then to you, before Done. */
 export function hasQa(template: TeamTemplate): boolean {

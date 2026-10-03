@@ -50,6 +50,8 @@ export interface ProjectBody {
   path?: string;
   access?: ProjectAccess;
   template?: TeamTemplate;
+  /** Finished tickets wait for your sign-off before Done. */
+  signoff?: boolean;
 }
 
 export interface HuddleBody {

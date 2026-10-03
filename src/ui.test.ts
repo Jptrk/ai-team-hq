@@ -1,5 +1,5 @@
 /**
- * UI helpers: markdown previews, hash routes, board filter, top-bar search, report links, editor markdown, add connection, skills links.
+ * UI helpers: markdown previews, hash routes, board columns and filter, top-bar search, report links, what waits on you, editor markdown, add connection, skills links.
  * Run: npm run test:ui. Pure functions and a headless editor, no browser, no network.
  */
 import assert from 'node:assert/strict';
@@ -10,7 +10,7 @@ import { Markdown } from '@tiptap/markdown';
 import StarterKit from '@tiptap/starter-kit';
 import { titleFrom } from '../shared/plainText';
 import { parseReportUrl, reportTitleFrom } from '../shared/reportUrl';
-import { BOARD_COLUMNS, canEditDescription, type Agent, type WorkItem } from '../shared/types';
+import { BOARD_COLUMNS, boardColumns, canEditDescription, type Agent, type Comment, type WorkItem } from '../shared/types';
 import { EMPTY_FILTER, filterItems, isFiltered } from './components/board/filter';
 import { searchItems } from './lib/search';
 import { plainText } from './markdown/plainText';
@@ -19,7 +19,7 @@ import { fitWithin, imageFiles } from './lib/images';
 import { cleanMarkdown, escapeTypedText, looksLikeDiffOrTerminal, looksLikeMarkdown, needsPlainEditor } from './lib/markdownPaste';
 import { attachmentUrl, isAttachmentUrl, isReportUrl, reportFileName, resolveReportHref } from './markdown/reportLinks';
 import { parseRoute, projectPath } from './route';
-import { latestDecision, readableInk } from './util';
+import { awaitsSignoff, latestDecision, readableInk, signoffVerdict, waitingSummary, waitingTitle } from './util';
 import { MCP_PRESETS, presetArgs, presetDefaults } from '../shared/mcpPresets';
 import { buildSpec, safeAuthUrl } from '../shared/mcpSpec';
 import type { ConnectionRow, SkillMeta } from '../shared/types';
@@ -323,6 +323,40 @@ test('latestDecision finds the newest decision comment', () => {
   assert.equal(latestDecision(item(41)), undefined);
 });
 
+test('waiting on you: a held sign-off shows the finished work and a sign-off title, not the original ask', () => {
+  const asked: Comment = { id: 'c1', from: 'leo', ts: '1', text: 'Blue or green?', kind: 'decision', title: 'Pick a color' };
+  const passed: Comment = { id: 'c2', from: 'ivy', ts: '2', text: 'Checked the handler.', kind: 'qa', title: 'Passed QA' };
+  const history = [{ ts: '2026-10-01T00:00:00Z', text: 'Done: Wrote the landing copy' }];
+  // Held in sign-off, nobody checked it: what the owner finished.
+  const held = item(50, { status: 'held', summary: 'The ask', comments: [asked], history, qa: { fails: 0, ready: true, escalated: false } });
+  assert.equal(awaitsSignoff(held), true);
+  assert.equal(waitingTitle(held), 'On hold: finished, waiting for your sign-off');
+  assert.equal(waitingSummary(held), 'Finished, waiting for your sign-off. Wrote the landing copy');
+  // Held after QA passed it: QA's verdict.
+  const checked = item(51, { status: 'held', comments: [asked, passed], history, qa: { fails: 0, by: 'ivy', result: 'pass', ready: true } });
+  assert.equal(signoffVerdict(checked)?.title, 'Passed QA');
+  assert.equal(waitingTitle(checked, 'Ivy'), 'On hold: finished, waiting for your sign-off');
+  assert.equal(waitingSummary(checked), 'Passed QA. Checked the handler.');
+  // In Sign-off, as before.
+  const signoff = item(52, { status: 'signoff', comments: [passed], history, qa: { fails: 0, by: 'ivy', result: 'pass', ready: true } });
+  assert.equal(waitingTitle(signoff, 'Ivy'), 'Passed QA (Ivy). Sign it off');
+  const unchecked = item(53, { status: 'signoff', comments: [passed], history, qa: { fails: 0, ready: true } });
+  assert.equal(signoffVerdict(unchecked), undefined, "an older round's pass never shows");
+  assert.equal(waitingTitle(unchecked), 'Finished. Check it and sign it off');
+  assert.equal(waitingSummary(unchecked), 'Finished. Check it and sign it off. Wrote the landing copy');
+  // A held decision, or a held ticket QA gave up on: the desk's ask.
+  const decision = item(54, { status: 'held', summary: 'The ask', comments: [asked] });
+  assert.equal(awaitsSignoff(decision), false);
+  assert.equal(waitingTitle(decision), 'On hold. Decide when ready');
+  assert.equal(waitingSummary(decision), 'Pick a color. Blue or green?');
+  const gaveUp = item(55, { status: 'held', comments: [asked], qa: { fails: 3, ready: true, escalated: true } });
+  assert.equal(awaitsSignoff(gaveUp), false);
+  assert.equal(waitingSummary(gaveUp), 'Pick a color. Blue or green?');
+  assert.equal(waitingTitle(item(56, { status: 'needs-you', qa: { fails: 3, ready: true, escalated: true } })), 'Failed QA too often. Your call');
+  assert.equal(waitingTitle(item(57, { status: 'needs-you' })), 'Needs your decision');
+  assert.equal(waitingSummary(item(58, { status: 'needs-you', summary: 'Plain' })), 'Plain');
+});
+
 // ---------- editor ----------
 test('looksLikeMarkdown: markdown pastes format, plain text stays plain', () => {
   for (const md of ['# Title', '## Plan\nDo it', '- one\n- two', '1. first\n2. second', '> quoted', '```ts\nx\n```', '| a | b |\n|---|---|\n| 1 | 2 |', '---', '- [ ] task', 'This is **bold** text', 'an _italic_ word', 'use `npm test`', 'see [docs](https://x.y/z)', '~~old~~ new']) {
@@ -442,7 +476,22 @@ test('board: approved tickets stay In progress until the desk finishes them', ()
   assert.equal(columnOf('sent-back'), 'In progress');
   assert.deepEqual(BOARD_COLUMNS.find((c) => c.label === 'Done')?.statuses, ['done']);
   const all = BOARD_COLUMNS.flatMap((c) => c.statuses);
-  for (const s of ['todo', 'in-progress', 'needs-you', 'approved', 'held', 'sent-back', 'done'] as const) assert.equal(all.filter((x) => x === s).length, 1, `${s} is in exactly one column`);
+  for (const s of ['todo', 'in-progress', 'needs-you', 'approved', 'held', 'sent-back', 'qa', 'signoff', 'done'] as const) assert.equal(all.filter((x) => x === s).length, 1, `${s} is in exactly one column`);
+});
+test('board columns: QA with QA on, Sign-off with sign-off on, and either while tickets sit in it', () => {
+  const labels = (list: WorkItem[], on: { qa: boolean; signoff: boolean }) => boardColumns(list, on).map((c) => c.label);
+  assert.deepEqual(labels([], { qa: true, signoff: true }), ['To do', 'In progress', 'QA', 'Sign-off', 'Needs you', 'Done']);
+  assert.deepEqual(labels([], { qa: false, signoff: true }), ['To do', 'In progress', 'Sign-off', 'Needs you', 'Done']);
+  assert.deepEqual(labels([], { qa: true, signoff: false }), ['To do', 'In progress', 'QA', 'Needs you', 'Done']);
+  assert.deepEqual(labels([], { qa: false, signoff: false }), ['To do', 'In progress', 'Needs you', 'Done']);
+  // Turned off with tickets still waiting: the column stays until they leave it.
+  assert.deepEqual(labels([item(1, { status: 'signoff' })], { qa: false, signoff: false }), ['To do', 'In progress', 'Sign-off', 'Needs you', 'Done']);
+  assert.deepEqual(labels([item(1, { status: 'qa' })], { qa: false, signoff: false }), ['To do', 'In progress', 'QA', 'Needs you', 'Done']);
+  assert.deepEqual(boardColumns([], { qa: true, signoff: true }).find((c) => c.label === 'Sign-off')?.statuses, ['signoff'], 'a drop there moves it to sign-off');
+});
+test('board filter: tickets waiting for your sign-off count as Needs me', () => {
+  const list = [item(1, { status: 'signoff' }), item(2, { status: 'qa' }), item(3, { status: 'in-progress' })];
+  assert.deepEqual(filterItems(list, { ...EMPTY_FILTER, needsMe: true }, 'GA').map((i) => i.id), ['w1']);
 });
 test('descriptions are editable only in To do', () => {
   assert.equal(canEditDescription('todo'), true);

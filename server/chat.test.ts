@@ -218,19 +218,21 @@ const ticket = (s: State, owner: string): WorkItem => {
   return item;
 };
 const noLog = () => undefined;
+/** A project without QA or sign-off: a finished ticket is done. */
+const NO_CHECKS = { qa: false, signoff: false };
 
 test("settle: a message run never touches the owner's ticket", () => {
   const s = fresh();
   const item = ticket(s, 'leo');
   const t = createThread(s, { title: 'T', createdBy: 'leo', itemId: item.id });
-  settleAfterRun(s, { mode: 'message', agentId: 'sam', itemId: item.id, threadId: t.id, raised: false, finished: false, sentToThread: true, awaiting: [], askedBy: ['leo'], summary: 'all done' }, noLog, L);
+  settleAfterRun(s, { mode: 'message', agentId: 'sam', itemId: item.id, threadId: t.id, raised: false, finished: false, sentToThread: true, awaiting: [], askedBy: ['leo'], summary: 'all done', ...NO_CHECKS }, noLog, L);
   assert.equal(item.status, 'in-progress');
 });
 
 test('settle: leftover text in a message run becomes the reply and wakes the asker', () => {
   const s = fresh();
   const t = createThread(s, { title: 'T', createdBy: 'leo' });
-  const wake = settleAfterRun(s, { mode: 'message', agentId: 'sam', threadId: t.id, raised: false, finished: false, sentToThread: false, awaiting: [], askedBy: ['leo', 'you'], summary: 'Endpoint is /orders.' }, noLog, L);
+  const wake = settleAfterRun(s, { mode: 'message', agentId: 'sam', threadId: t.id, raised: false, finished: false, sentToThread: false, awaiting: [], askedBy: ['leo', 'you'], summary: 'Endpoint is /orders.', ...NO_CHECKS }, noLog, L);
   assert.deepEqual(wake, ['leo']);
   const last = messagesOf(s, t.id).at(-1)!;
   assert.equal(last.from, 'sam');
@@ -240,17 +242,17 @@ test('settle: leftover text in a message run becomes the reply and wakes the ask
 test('settle: a ticket run that asked a teammate stays in progress; otherwise it finishes', () => {
   const s = fresh();
   const item = ticket(s, 'leo');
-  settleAfterRun(s, { mode: 'ticket', agentId: 'leo', itemId: item.id, raised: false, finished: false, sentToThread: false, awaiting: ['sam'], askedBy: [], summary: 'asked Sam' }, noLog, L);
+  settleAfterRun(s, { mode: 'ticket', agentId: 'leo', itemId: item.id, raised: false, finished: false, sentToThread: false, awaiting: ['sam'], askedBy: [], summary: 'asked Sam', ...NO_CHECKS }, noLog, L);
   assert.equal(item.status, 'in-progress');
   assert.match(item.history.at(-1)!.text, /Waiting on Sam/);
-  settleAfterRun(s, { mode: 'ticket', agentId: 'leo', itemId: item.id, raised: false, finished: false, sentToThread: false, awaiting: [], askedBy: [], summary: 'fixed it' }, noLog, L);
+  settleAfterRun(s, { mode: 'ticket', agentId: 'leo', itemId: item.id, raised: false, finished: false, sentToThread: false, awaiting: [], askedBy: [], summary: 'fixed it', ...NO_CHECKS }, noLog, L);
   assert.equal(item.status, 'done');
 });
 
 test("settle: a ticket run by someone other than the owner cannot finish the ticket", () => {
   const s = fresh();
   const item = ticket(s, 'leo');
-  settleAfterRun(s, { mode: 'ticket', agentId: 'sam', itemId: item.id, raised: false, finished: false, sentToThread: false, awaiting: [], askedBy: [], summary: 'x' }, noLog, L);
+  settleAfterRun(s, { mode: 'ticket', agentId: 'sam', itemId: item.id, raised: false, finished: false, sentToThread: false, awaiting: [], askedBy: [], summary: 'x', ...NO_CHECKS }, noLog, L);
   assert.equal(item.status, 'in-progress');
 });
 
@@ -275,12 +277,12 @@ test('settle: answering your comment leaves the ticket alone and posts the reply
   const s = fresh();
   const item = ticket(s, 'leo');
   addComment(item, { from: 'you', text: 'Why blue?' });
-  settleAfterRun(s, { mode: 'ticket', agentId: 'leo', itemId: item.id, raised: false, finished: false, sentToThread: false, awaiting: [], askedBy: [], summary: 'Brand color.', reason: 'comment' }, noLog, L);
+  settleAfterRun(s, { mode: 'ticket', agentId: 'leo', itemId: item.id, raised: false, finished: false, sentToThread: false, awaiting: [], askedBy: [], summary: 'Brand color.', reason: 'comment', ...NO_CHECKS }, noLog, L);
   assert.equal(item.status, 'in-progress', 'a reply never closes the ticket');
   assert.equal(item.comments?.at(-1)?.from, 'leo');
   assert.equal(item.comments?.at(-1)?.text, 'Brand color.');
   // When the desk already commented with the tool, the summary is not posted again.
-  settleAfterRun(s, { mode: 'ticket', agentId: 'leo', itemId: item.id, raised: false, finished: false, sentToThread: false, awaiting: [], askedBy: [], summary: 'again', reason: 'comment', commented: true }, noLog, L);
+  settleAfterRun(s, { mode: 'ticket', agentId: 'leo', itemId: item.id, raised: false, finished: false, sentToThread: false, awaiting: [], askedBy: [], summary: 'again', reason: 'comment', commented: true, ...NO_CHECKS }, noLog, L);
   assert.equal(item.comments?.length, 2);
 });
 

@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { z } from 'zod';
 import type { Agent, Attachment, ConnectionMode, ItemKind, ItemStatus, Message, RunReason, Thread, WorkItem } from '../../shared/types';
-import { hasQa } from '../../shared/types';
+import { hasQa, signoffOn } from '../../shared/types';
 import { parseReportUrl } from '../../shared/reportUrl';
 import { attachmentsDir, saveUpload } from '../attachments';
 import {
@@ -18,6 +18,7 @@ import {
   MAX_SENDS_PER_RUN,
   messagesOf,
   note,
+  noticeFinished,
   noticeHandoff,
   postAgentMessage,
   resolveRecipients,
@@ -29,7 +30,7 @@ import { findHuddle, huddlePromptText, recordContribution, recordSummary, type C
 import { runtimeServers, type AllowedServer } from '../connections';
 import { inputSaysDelete, isDestructiveTool, isReadOnlyTool } from '../mcp';
 import { changedAfterQa, clearSignoff, finishWork, noteChangedFiles, QA_MAX_FIXES, qaDeskOf, recordQaResult, verdictProblem } from '../qa';
-import { folderExists, HQ_ROOT, instructionsFileIn, isInside } from '../paths';
+import { claudeEnv, folderExists, HQ_ROOT, instructionsFileIn, isInside } from '../paths';
 import { argsLine, runSkillScript, scriptReply, SKILL_TIMEOUT_MS } from '../skillRunner';
 import { getSkill, SkillError, skillDir, skillsForDesk } from '../skills';
 import { now, uid, WORKSPACES, type Project } from '../store';
@@ -395,14 +396,19 @@ export function runNotes(p: Project, agent: Agent, connections: AllowedServer[],
           ? '- You were woken by a message. Reply with send_message in this thread. If the conversation finishes your ticket, you may also call report_done.'
           : '- You were woken by a message. Reply with send_message in this thread. You do not own this ticket, so do not try to finish it or call report_done. If something needs the founder, raise_for_decision opens a new ticket.',
   );
-  // Dev-team projects: say where finished work goes, so the summary is written for the checker.
-  if (mode === 'ticket' && reason !== 'comment' && hasQa(p.meta.template)) {
-    const qa = qaDeskOf(s);
-    lines.push(
-      qa && qa.id !== agent.id && qa.status !== 'off'
-        ? `- This project has QA: report_done sends the ticket to ${qa.name} for a check, then to ${ownerName} to sign off. If QA finds issues, it comes back to you. In your report_done summary, say what you changed and how to check it.`
-        : `- report_done sends the ticket to ${ownerName} to sign off. In your summary, say what you changed and how to check it.`,
-    );
+  // Say where finished work goes, so the summary is written for whoever checks it: the QA desk, or the founder's sign-off.
+  if (mode === 'ticket' && reason !== 'comment') {
+    const signoff = signoffOn(p.meta);
+    const qa = hasQa(p.meta.template) ? qaDeskOf(s) : undefined;
+    if (qa && qa.id !== agent.id && qa.status !== 'off') {
+      lines.push(
+        signoff
+          ? `- This project has QA: report_done sends the ticket to ${qa.name} for a check, then to ${ownerName} to sign off. If QA finds issues, it comes back to you. In your report_done summary, say what you changed and how to check it.`
+          : `- This project has QA: report_done sends the ticket to ${qa.name} for a check; a pass closes it. If QA finds issues, it comes back to you. In your report_done summary, say what you changed and how to check it.`,
+      );
+    } else if (signoff) {
+      lines.push(`- report_done sends the ticket to ${ownerName} to sign off. In your summary, say what you changed and how to check it.`);
+    }
   }
   if (reason === 'approved' && connections.length) {
     lines.push("- This run follows the founder's approval, so changes through your connections are allowed. Do exactly what the approved ticket describes, nothing more, then call report_done listing every change you made.");
@@ -516,10 +522,14 @@ function imagesFor(input: RunInput): Attachment[] {
   return [];
 }
 
-function ticketPrompt(input: RunInput): string {
+/** The prompt for a ticket run: the ticket, its comments, history and discussion, and why the desk runs now. Exported for tests. */
+export function ticketPrompt(input: Pick<RunInput, 'project' | 'item' | 'reason' | 'note' | 'thread'>): string {
   const { project: p, reason, note: founderNote, thread } = input;
   const item = input.item!;
   const from = p.state.agents.find((a) => a.id === item.from);
+  // Your Send back or Instruct reached finished work: the desk fixes it and reports it done again, back to your sign-off.
+  const rework = item.qa?.reworkOf === 'signoff';
+  const again = `call report_done again${signoffOn(p.meta) ? '; it comes back to the founder to sign off' : ''}. Do not raise it as a decision.`;
   const lines = [
     `# ${p.ticket(item)}: ${item.title}`,
     `Kind: ${item.kind} · Status: ${item.status}${item.client ? ` · Client: ${item.client}` : ''} · From: ${from?.name ?? item.from}`,
@@ -545,16 +555,24 @@ function ticketPrompt(input: RunInput): string {
       lines.push('The founder sent this instruction. Work it now.');
       break;
     case 'send-back':
-      lines.push(`The founder sent this back${founderNote ? ` with this note: "${founderNote}"` : ''}. Revise it and raise it again when ready.`);
+      lines.push(
+        rework
+          ? `The founder sent your finished work back${founderNote ? ` with this note: "${founderNote}"` : ''}. Fix what ${founderNote ? 'the note asks' : 'they ask (see Comments and any attached images)'}, then ${again}`
+          : `The founder sent this back${founderNote ? ` with this note: "${founderNote}"` : ''}. Revise it and raise it again when ready.`,
+      );
       break;
     case 'instruct':
-      lines.push(founderNote ? `The founder added an instruction: "${founderNote}". Act on it.` : 'The founder added instructions in the attached images. Act on them.');
+      lines.push(
+        `${founderNote ? `The founder added an instruction: "${founderNote}".` : 'The founder added instructions in the attached images.'} ${rework ? `Act on ${founderNote ? 'it' : 'them'}, then ${again}` : `Act on ${founderNote ? 'it' : 'them'}.`}`,
+      );
       break;
     case 'approved':
       lines.push('The founder approved this. Finalize it: put the final version in reports/, then call report_done. Do not raise it again.');
       break;
     case 'handoff':
-      lines.push(`${nameOf(p, item.handoffFrom ?? item.from)} handed this to you. Work it now. When you call report_done, they are told automatically.`);
+      lines.push(
+        `${nameOf(p, item.handoffFrom ?? item.from)} handed this to you. Work it now. When you call report_done, they are told it is finished${signoffOn(p.meta) ? ', and again once the founder signs it off' : ''}.`,
+      );
       break;
     case 'qa-fail':
       lines.push(
@@ -1092,20 +1110,18 @@ function hqTools(ctx: RunContext): HqTools {
       }
       // The files it changed go on the ticket first, so a QA check sees them.
       noteChangedFiles(target, ctx.changed);
-      // Dev-team projects: finished work goes to QA, then to the founder's sign-off, before Done.
-      const where = finishWork(s, target, args.summary, hasQa(p.meta.template));
+      // Finished work goes to QA (dev-team projects), then to the founder's sign-off, before Done.
+      const where = finishWork(s, target, args.summary, { qa: hasQa(p.meta.template), signoff: signoffOn(p.meta) });
       ctx.finished = true;
       const ref = `${p.ticket(target)} "${target.title}"`;
       p.log(ctx.agent.id, where === 'done' ? `Finished ${ref}` : where === 'qa' ? `Finished ${ref}, sent to QA` : `Finished ${ref}, ready for ${ownerName}'s sign-off`);
 
-      // A handed-off ticket reports back to whoever handed it over, once it is really done.
-      if (where === 'done') {
-        const posted = noticeHandoff(s, target, ctx.agent.id, `Done with ${p.ticket(target)}: ${args.summary}`);
-        if (posted) {
-          if (posted.threadId === ctx.thread?.id) ctx.sentToThread = true;
-          p.commit();
-          ctx.hooks.deliver(posted.threadId, posted.deliver);
-        }
+      // A handed-off ticket reports back to whoever handed it over: done, or finished and waiting for QA or sign-off, so it can carry on.
+      const posted = noticeFinished(s, target, ctx.agent.id, p.ticket(target), where, args.summary);
+      if (posted) {
+        if (posted.threadId === ctx.thread?.id) ctx.sentToThread = true;
+        p.commit();
+        ctx.hooks.deliver(posted.threadId, posted.deliver);
       }
       p.commit();
       if (where === 'qa') ctx.hooks.kickoff(target.id, 'qa');
@@ -1216,7 +1232,7 @@ function hqTools(ctx: RunContext): HqTools {
       p.log(ctx.agent.id, `Handed ${p.ticket(item)} to ${target.name}`);
       p.commit();
       ctx.hooks.kickoff(item.id, 'handoff');
-      return ok(`Created ${p.ticket(item)} for ${target.name} in thread ${picked.id}. You will be told when it is done.`);
+      return ok(`Created ${p.ticket(item)} for ${target.name} in thread ${picked.id}. You will be told when they finish it, even while it waits for QA or ${ownerName}'s sign-off.`);
     },
   );
 
@@ -1240,20 +1256,33 @@ function hqTools(ctx: RunContext): HqTools {
       if (problem) return fail(problem);
       const ready = await imagesFrom(args);
       if (typeof ready === 'string') return fail(ready);
-      const outcome = recordQaResult(s, item, ctx.agent.id, { ...verdict, summary: withImageNote(args.summary, ready) }, ready.save(), ctx.qaRound);
+      const outcome = recordQaResult(s, item, ctx.agent.id, { ...verdict, summary: withImageNote(args.summary, ready) }, ready.save(), ctx.qaRound, signoffOn(p.meta));
       if (typeof outcome === 'string') return fail(outcome);
       ctx.qaDone = true;
       const ref = `${p.ticket(item)} "${item.title}"`;
       const owner = nameOf(p, item.assignee);
-      p.log(ctx.agent.id, outcome === 'signoff' ? `Passed QA on ${ref}` : outcome === 'rework' ? `Failed QA on ${ref}, back to ${owner}` : `Failed QA on ${ref} again; it needs ${ownerName}`);
+      p.log(
+        ctx.agent.id,
+        outcome === 'signoff' ? `Passed QA on ${ref}` : outcome === 'done' ? `Passed QA on ${ref}, done` : outcome === 'rework' ? `Failed QA on ${ref}, back to ${owner}` : `Failed QA on ${ref} again; it needs ${ownerName}`,
+      );
       p.commit();
+      // Sign-off off: the pass closed it, so a handed-off ticket reports back now (only the pass, when it already heard it was finished).
+      if (outcome === 'done') {
+        const posted = noticeHandoff(s, item, item.assignee, `Done with ${p.ticket(item)} (passed QA).`, `Passed QA: ${p.ticket(item)} is done.`);
+        if (posted) {
+          p.commit();
+          ctx.hooks.deliver(posted.threadId, posted.deliver);
+        }
+      }
       if (outcome === 'rework') ctx.hooks.kickoff(item.id, 'qa-fail');
       return ok(
         outcome === 'signoff'
           ? `Passed. It waits for ${ownerName} to sign it off. You can stop now.`
-          : outcome === 'rework'
-            ? `Failed and sent back to ${owner} with your issues. You can stop now.`
-            : `Failed again, so it goes to ${ownerName} to decide. You can stop now.`,
+          : outcome === 'done'
+            ? 'Passed. The ticket is done. You can stop now.'
+            : outcome === 'rework'
+              ? `Failed and sent back to ${owner} with your issues. You can stop now.`
+              : `Failed again, so it goes to ${ownerName} to decide. You can stop now.`,
       );
     },
   );
@@ -1588,7 +1617,7 @@ async function runOnce(input: RunInput, ctx: RunContext, systemPrompt: string, r
     abortController: controller,
     resume,
     // The 1-hour prompt cache, which HQ_SESSION_CACHE_MIN assumes: a subscription has it, and this keeps it for API-key runs and on overage too.
-    env: { ...process.env, CLAUDE_AGENT_SDK_CLIENT_APP: 'ai-team-hq/0.4.0', ENABLE_PROMPT_CACHING_1H: '1' },
+    env: claudeEnv({ CLAUDE_AGENT_SDK_CLIENT_APP: 'ai-team-hq/0.4.0', ENABLE_PROMPT_CACHING_1H: '1' }),
   };
 
   let outcome: RunOutcome | null = null;
@@ -1942,6 +1971,7 @@ export const claudeRunner: AgentRunner = {
         reason: ctx.reason,
         commented: ctx.commented,
         qa: hasQa(p.meta.template),
+        signoff: signoffOn(p.meta),
       },
       (id, text) => p.log(id, text),
     );
@@ -1949,9 +1979,10 @@ export const claudeRunner: AgentRunner = {
     if (wake.length && ctx.thread) ctx.hooks.deliver(ctx.thread.id, wake);
     // Finished without report_done in a dev-team project, or changed after QA: it went to QA, so wake the QA desk.
     if (liveItem && liveItem.status === 'qa' && (before !== 'qa' || recheck)) ctx.hooks.kickoff(liveItem.id, 'qa');
-    // Finished without report_done on a project without QA: the desk that handed it over hears back, as report_done would tell it.
-    if (liveItem && liveItem.status === 'done' && before !== 'done') {
-      const posted = noticeHandoff(p.state, liveItem, ctx.agent.id, `Done with ${p.ticket(liveItem)}: ${outcome.summary.trim().slice(0, 800) || 'Finished.'}`);
+    // Finished without report_done (to Done, QA or your sign-off): the desk that handed it over hears back, as report_done would tell it.
+    const after = liveItem?.status;
+    if (liveItem && after !== before && (after === 'done' || after === 'qa' || after === 'signoff')) {
+      const posted = noticeFinished(p.state, liveItem, ctx.agent.id, p.ticket(liveItem), after, outcome.summary);
       if (posted) {
         p.commit();
         ctx.hooks.deliver(posted.threadId, posted.deliver);

@@ -1,7 +1,7 @@
 import express, { Router, type Response } from 'express';
 import fs from 'node:fs';
 import type { Attachment, Decision, ItemStatus, ProjectAccess, ProjectMeta, ProjectSummary, ReportInfo, StateResponse, TeamTemplate, ThreadResponse, WorkItem } from '../shared/types';
-import { canEditDescription, hasQa, MAX_ATTACHMENTS, MAX_DESCRIPTION } from '../shared/types';
+import { canEditDescription, hasQa, MAX_ATTACHMENTS, MAX_DESCRIPTION, signoffOn } from '../shared/types';
 import { acceptInstruction, addAgent, parseSkills, refreshStatuses, removeAgent, settleInstructions } from './agents';
 import { AttachmentError, pickAttachments, resolveAttachment, saveUpload } from './attachments';
 import {
@@ -101,10 +101,10 @@ function summary(p: Project): ProjectSummary {
   };
 }
 
-type ProjectPatch = Partial<Pick<ProjectMeta, 'name' | 'key' | 'path' | 'access'>>;
+type ProjectPatch = Partial<Pick<ProjectMeta, 'name' | 'key' | 'path' | 'access' | 'signoff'>>;
 
-/** Validate the editable project fields present in `body`. */
-function readProjectPatch(body: Record<string, unknown>, exceptId?: string): { patch: ProjectPatch; error?: string } {
+/** Validate the editable project fields present in `body`. Exported for tests. */
+export function readProjectPatch(body: Record<string, unknown>, exceptId?: string): { patch: ProjectPatch; error?: string } {
   const patch: ProjectPatch = {};
   if ('name' in body) {
     const name = str(body.name);
@@ -129,6 +129,11 @@ function readProjectPatch(body: Record<string, unknown>, exceptId?: string): { p
   if ('access' in body) {
     if (!ACCESS.includes(body.access as ProjectAccess)) return { patch, error: 'Access must be read or write' };
     patch.access = body.access as ProjectAccess;
+  }
+  // Tickets already waiting for sign-off stay there when you turn it off; new finished work goes to Done.
+  if ('signoff' in body) {
+    if (typeof body.signoff !== 'boolean') return { patch, error: 'signoff must be true or false' };
+    patch.signoff = body.signoff;
   }
   return { patch };
 }
@@ -165,6 +170,7 @@ router.post('/projects', (req, res) => {
     path: patch.path ?? null,
     access: patch.access ?? 'read',
     template,
+    signoff: patch.signoff ?? true,
   });
   res.status(201).json(summary(p));
 });
@@ -407,7 +413,12 @@ project.patch('/agents/:id', (req, res) => {
     if (body.qa && !hasQa(p.meta.template)) return res.status(400).json({ error: 'QA is for dev-team projects' });
     if (body.qa) setQaDesk(p.state, agent.id);
     else if (agent.qa) setQaDesk(p.state, null);
-    p.log('you', body.qa ? `${agent.name} is now the QA desk` : `${agent.name} is no longer the QA desk; finished tickets come to you to sign off`);
+    p.log(
+      'you',
+      body.qa
+        ? `${agent.name} is now the QA desk`
+        : `${agent.name} is no longer the QA desk; finished tickets ${signoffOn(p.meta) ? 'come to you to sign off' : 'go straight to Done'}`,
+    );
     // Tickets waiting in QA go to the new QA desk, or to your sign-off, instead of waiting on a desk that stopped.
     recheck = rerouteAllQa(p.state);
   }
@@ -459,7 +470,7 @@ project.post('/items/:id/decision', (req, res) => {
   const name = agent?.name ?? item.assignee;
   const ref = p.ticket(item);
 
-  // Finished and checked (or QA gave up on it): approving signs it off. Nothing is left for a desk to do.
+  // Finished and waiting for your sign-off (or QA gave up on it): approving signs it off. Nothing is left for a desk to do.
   const signOff = decision === 'approve' && closesOnApprove(item);
   // An instruction needs something to say. Checked before anything changes.
   if (decision === 'instruct' && !note && !images.length) return res.status(400).json({ error: 'instruct needs a note' });
@@ -510,8 +521,8 @@ project.post('/items/:id/decision', (req, res) => {
   const opts = { includeNotes: req.body?.includeNotes === true };
   let run = null;
   if (signOff) {
-    // A handed-off ticket reports back once you sign it off.
-    const posted = noticeHandoff(s, item, item.assignee, `Done with ${ref} (signed off by you).`);
+    // A handed-off ticket reports back once you sign it off; only that, when the desk already heard it was finished.
+    const posted = noticeHandoff(s, item, item.assignee, `Done with ${ref} (signed off by you).`, `Signed off: ${ref} is done.`);
     if (posted) {
       p.commit();
       deliver(p, posted.threadId, posted.deliver);
@@ -569,8 +580,8 @@ project.patch('/items/:id', (req, res) => {
   p.commit();
   if (moved === 'qa') kickoff(p, item.id, 'qa');
   if (moved === 'done') {
-    // A handed-off ticket you mark done reports back, as one a desk finishes does.
-    const posted = noticeHandoff(s, item, item.assignee, `Done with ${p.ticket(item)} (marked done by you).`);
+    // A handed-off ticket you mark done reports back, as one a desk finishes does; as signed off, when the desk already heard it was finished.
+    const posted = noticeHandoff(s, item, item.assignee, `Done with ${p.ticket(item)} (marked done by you).`, `Signed off: ${p.ticket(item)} is done.`);
     if (posted) {
       p.commit();
       deliver(p, posted.threadId, posted.deliver);

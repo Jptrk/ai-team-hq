@@ -1,5 +1,5 @@
 import { useCallback } from 'react';
-import type { Decision, ItemStatus, StateResponse } from '../../shared/types';
+import { signoffOn, type Decision, type ItemStatus, type StateResponse } from '../../shared/types';
 import { HUDDLE_KIND_LABEL } from '../../shared/huddle';
 import { api, type AgentBody, type HuddleBody } from '../api';
 import { agentById, ticketKey } from '../util';
@@ -165,11 +165,13 @@ export function useProjectActions({ pid, state, notify, after, openTicket, openT
       if (!pid) return;
       await guard(async () => {
         const agent = await api.updateAgent(pid, id, { qa: on });
-        notify(on ? `${agent.name} now checks finished tickets` : `${agent.name} stopped QA. Finished tickets come to you to sign off`);
+        // Sign-off off: finished tickets go straight to Done; only those already waiting for a check come to you.
+        const next = !state || signoffOn(state.project) ? 'Finished tickets come to you to sign off' : 'Finished tickets go straight to Done; any waiting in QA come to you';
+        notify(on ? `${agent.name} now checks finished tickets` : `${agent.name} stopped QA. ${next}`);
         await after();
       }, 'Could not change the QA desk');
     },
-    [pid, guard, notify, after],
+    [pid, state, guard, notify, after],
   );
 
   const makeLead = useCallback(

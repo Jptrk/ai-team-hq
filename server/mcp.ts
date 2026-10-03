@@ -5,7 +5,7 @@ import path from 'node:path';
 import { maskArgs, maskPath, maskUrl, SECRET_NAME, secretForms, toolKey, type Masked } from '../shared/mcpSpec';
 import type { McpAuth, McpServerInfo, McpSource, McpToolInfo } from '../shared/types';
 import { claudeJsonPath } from './mcpCli';
-import { samePath } from './paths';
+import { claudeEnv, samePath } from './paths';
 
 export { toolKey };
 
@@ -308,7 +308,7 @@ export function openSession(cwd: string, servers: Record<string, McpServerConfig
       permissionMode: 'default',
       canUseTool: async () => ({ behavior: 'deny', message: 'Connection check only.' }),
       abortController: abort,
-      env: { ...process.env, CLAUDE_AGENT_SDK_CLIENT_APP: 'ai-team-hq/0.3.0' },
+      env: claudeEnv({ CLAUDE_AGENT_SDK_CLIENT_APP: 'ai-team-hq/0.3.0' }),
     },
   });
   const drain = (async () => {
