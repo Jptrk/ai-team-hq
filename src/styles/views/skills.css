@@ -86,6 +86,9 @@
     color: var(--text);
     cursor: pointer;
   }
+  .skill-scripts .confirm-inline {
+    flex-basis: 100%;
+  }
   .skill-warn {
     flex-basis: 100%;
   }

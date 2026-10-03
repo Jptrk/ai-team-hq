@@ -25,6 +25,7 @@ import { useProjectActions } from './hooks/useProjectActions';
 import { useTheme } from './hooks/useTheme';
 import { roughTokens } from '../shared/huddle';
 import { hasQa } from '../shared/types';
+import { ConfirmInline } from './ui/ConfirmInline';
 import { ProjectIdContext, TeamNotesContext, type TeamNotesInfo } from './lib/projectContext';
 import { KEYS, storage } from './lib/storage';
 import { projectPath, useHashRoute, type ViewId } from './route';
@@ -98,9 +99,25 @@ export function App() {
     if (!panelTicket && !panelAgent) pushedPanel.current = false;
   }, [panelTicket, panelAgent]);
 
-  // Editors in the ticket modal report unsaved text here. True when you choose to keep it.
+  // Editors in the ticket modal report unsaved text here. With unsaved text the modal asks first, in the page
+  // (a browser can silently turn confirm() off, and then the modal could never close), and `then` runs on Discard.
   const [panelDrafts] = useState(createDraftGuard);
-  const keepDrafts = useCallback(() => panelDrafts.dirty() && !window.confirm('Discard your unsaved text?'), [panelDrafts]);
+  const [discardAsk, setDiscardAsk] = useState(false);
+  const afterDiscard = useRef<(() => void) | null>(null);
+  const keepDrafts = useCallback(
+    (then: () => void): boolean => {
+      if (!panelDrafts.dirty()) return false;
+      afterDiscard.current = then;
+      setDiscardAsk(true);
+      return true;
+    },
+    [panelDrafts],
+  );
+  // A question about one ticket's text never carries over to another, or past closing.
+  useEffect(() => {
+    setDiscardAsk(false);
+    afterDiscard.current = null;
+  }, [panelTicket, panelAgent]);
 
   const openPanel = useCallback(
     (subject: { ticket?: string; agent?: string }) => {
@@ -109,7 +126,7 @@ export function App() {
       const path = projectPath(pid, onProject ? view : 'board', { threadId: onProject ? threadId : undefined, huddleId: onProject ? huddleId : undefined, ...subject });
       const replacing = Boolean(panelTicket || panelAgent);
       // Switching to another ticket or person drops what you typed in this one.
-      if (replacing && (subject.ticket !== panelTicket || subject.agent !== panelAgent) && keepDrafts()) return;
+      if (replacing && (subject.ticket !== panelTicket || subject.agent !== panelAgent) && keepDrafts(() => navigate(path, replacing))) return;
       if (!replacing) pushedPanel.current = true;
       navigate(path, replacing);
     },
@@ -118,14 +135,18 @@ export function App() {
   const openTicket = useCallback((key: string) => openPanel({ ticket: key }), [openPanel]);
   const openAgent = useCallback((id: string) => openPanel({ agent: id }), [openPanel]);
   // Esc, the backdrop, the close button and Android back all come here. False when the modal stays open.
-  const closePanel = useCallback((): boolean => {
-    if (!pid || keepDrafts()) return false;
+  const closeNow = useCallback(() => {
+    if (!pid) return;
     if (pushedPanel.current) {
       pushedPanel.current = false;
       window.history.back();
     } else navigate(projectPath(pid, view, { threadId, huddleId }), true);
+  }, [pid, view, threadId, huddleId, navigate]);
+  const closePanel = useCallback((): boolean => {
+    if (!pid || keepDrafts(closeNow)) return false;
+    closeNow();
     return true;
-  }, [pid, view, threadId, huddleId, navigate, keepDrafts]);
+  }, [pid, keepDrafts, closeNow]);
   const openThread = useCallback((id: string) => pid && navigate(projectPath(pid, 'chat', { threadId: id })), [pid, navigate]);
   const openHuddle = useCallback((id: string) => pid && navigate(projectPath(pid, 'huddles', { huddleId: id })), [pid, navigate]);
 
@@ -524,7 +545,26 @@ export function App() {
           {body}
         </main>
         <PanelModal open={panelOpen} subjectKey={panelKey} label={panelLabel} onClose={closePanel} returnFocus={returnFocus}>
-          <DraftGuardProvider value={panelDrafts}>{panel}</DraftGuardProvider>
+          <DraftGuardProvider value={panelDrafts}>
+            {discardAsk && (
+              <div className="discard-ask">
+                <ConfirmInline
+                  title="Discard your unsaved text?"
+                  confirmLabel="Discard"
+                  onConfirm={() => {
+                    setDiscardAsk(false);
+                    const then = afterDiscard.current;
+                    afterDiscard.current = null;
+                    then?.();
+                  }}
+                  onCancel={() => setDiscardAsk(false)}
+                >
+                  What you typed in this ticket hasn't been saved or sent. Cancel to keep editing.
+                </ConfirmInline>
+              </div>
+            )}
+            {panel}
+          </DraftGuardProvider>
         </PanelModal>
         {state && current && (
           <CreateModal

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Agent, ConnectionMode, ConnectionRow, ConnectionsResponse, ConnectionState, McpSource } from '../../shared/types';
 import { api } from '../api';
 import type { Notify } from '../hooks/useFlags';
+import { ConfirmInline } from '../ui/ConfirmInline';
 import { timeAgo } from '../util';
 import { AddConnectionModal } from './connections/AddConnectionModal';
 import { canSignIn, RowActions, type RowActionHandlers } from './connections/ConnectionActions';
@@ -48,6 +49,8 @@ export function ConnectionsPanel({ pid, agents, ownerName, hasFolder, notify }: 
   // Rows with an action on its way. Each row has its own, so one finishing never frees another.
   const [busy, setBusy] = useState<ReadonlySet<string>>(() => new Set());
   const [error, setError] = useState<string | null>(null);
+  // The connection whose switch to Auto waits for your yes.
+  const [confirmAuto, setConfirmAuto] = useState<string | null>(null);
   const [showAll, setShowAll] = useState(false);
   const [adding, setAdding] = useState(false);
   // A fresh form after every close, so typed secrets never stay in memory.
@@ -135,6 +138,7 @@ export function ConnectionsPanel({ pid, agents, ownerName, hasFolder, notify }: 
     markBusy(row.name, true);
     setError(null);
     setConfirmRemove(null);
+    setConfirmAuto((c) => (c === row.name ? null : c));
     version.current++;
     let res: ConnectionsResponse | null = null;
     try {
@@ -296,20 +300,29 @@ export function ConnectionsPanel({ pid, agents, ownerName, hasFolder, notify }: 
                 aria-pressed={row.connection.mode === 'auto'}
                 disabled={busy.has(row.name)}
                 onClick={() => {
-                  if (row.connection.mode === 'auto') return;
-                  // It acts as you on that service, so make it a deliberate choice.
-                  if (
-                    !window.confirm(
-                      `Desks will post and change things on ${row.name} as ${ownerName}, without asking you first. Deleting or removing anything still waits for your approval, but HQ can't fully see inside tools that run code, scripts or batches, so a delete there can slip through. What desks read (issues, pages, the web) can also steer what they do. Turn on Auto?`,
-                    )
-                  )
-                    return;
-                  update(row, { mode: 'auto' });
+                  // It acts as you on that service, so it waits for a yes in the page.
+                  if (row.connection.mode !== 'auto') setConfirmAuto(row.name);
                 }}
               >
                 Auto
               </button>
             </div>
+            {confirmAuto === row.name && row.connection.mode !== 'auto' && (
+              <ConfirmInline
+                title={`Turn on Auto for ${row.name}?`}
+                confirmLabel="Turn on Auto"
+                busy={busy.has(row.name)}
+                onConfirm={() => {
+                  setConfirmAuto(null);
+                  update(row, { mode: 'auto' });
+                }}
+                onCancel={() => setConfirmAuto(null)}
+              >
+                Desks will post and change things on {row.name} as {ownerName}, without asking you first. Deleting or removing anything still waits for your approval, but
+                HQ can't fully see inside tools that run code, scripts or batches, so a delete there can slip through. What desks read (issues, pages, the web) can also
+                steer what they do.
+              </ConfirmInline>
+            )}
             {row.connection.mode === 'auto' && (
               <p className="field-hint conn-auto-note">
                 <span className="warn">Auto:</span> desks change things on {row.name} as you without asking. Deletes still wait for your approval, but ones hidden inside code,

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Agent, ProjectSkillsResponse, SkillMeta } from '../../shared/types';
 import { api } from '../api';
 import type { Notify } from '../hooks/useFlags';
+import { ConfirmInline } from '../ui/ConfirmInline';
 import { timeAgo } from '../util';
 import { InstallSkillModal } from './skills/InstallSkillModal';
 import { folderUrl, plural, sizeLabel, sourceLabel } from './skills/skillInfo';
@@ -31,6 +32,8 @@ export function SkillsPanel({ pid, agents, ownerName, notify }: Props) {
   // A fresh dialog after every close, so it starts at the link again.
   const [installKey, setInstallKey] = useState(0);
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
+  // The skill whose "Allow scripts" waits for your yes.
+  const [confirmScripts, setConfirmScripts] = useState<string | null>(null);
   // Bumped whenever an action starts or ends: a load that began before then is older than what's shown.
   const version = useRef(0);
   const desks = agents.filter((a) => !a.isHuman);
@@ -81,6 +84,7 @@ export function SkillsPanel({ pid, agents, ownerName, notify }: Props) {
     markBusy(skill.id, true);
     setError(null);
     setConfirmRemove(null);
+    setConfirmScripts((c) => (c === skill.id ? null : c));
     version.current++;
     try {
       const res = await run();
@@ -99,15 +103,13 @@ export function SkillsPanel({ pid, agents, ownerName, notify }: Props) {
     void act(skill, () => api.setSkillDesks(pid, skill.id, on.includes(id) ? on.filter((d) => d !== id) : [...on, id]));
   };
 
-  const setScripts = (skill: SkillMeta, allowed: boolean) => {
-    // Scripts run on this PC as you, so allowing them is a deliberate choice.
-    if (
-      allowed &&
-      !window.confirm(
-        `Allow scripts for ${skill.name}? Desks with this skill can then run its ${plural(skill.scripts.length, 'script')} on this PC, as ${ownerName}, in every project where it is on. They are not sandboxed: a script can read and change anything you can. A project's read-only setting and HQ's file rules don't limit scripts: they can write anywhere you can. Only allow this for skills you trust.`,
-      )
-    )
+  const setScripts = (skill: SkillMeta, allowed: boolean, confirmed = false) => {
+    // Scripts run on this PC as you, so allowing them waits for a yes in the page.
+    if (allowed && !confirmed) {
+      setConfirmScripts(skill.id);
       return;
+    }
+    setConfirmScripts(null);
     void act(
       skill,
       async () => {
@@ -186,6 +188,18 @@ export function SkillsPanel({ pid, agents, ownerName, notify }: Props) {
               </span>
               Allow scripts
             </label>
+            {confirmScripts === skill.id && !skill.scriptsAllowed && (
+              <ConfirmInline
+                title={`Allow scripts for ${skill.name}?`}
+                confirmLabel="Allow scripts"
+                busy={isBusy}
+                onConfirm={() => setScripts(skill, true, true)}
+                onCancel={() => setConfirmScripts(null)}
+              >
+                Desks with this skill can then run its {plural(n, 'script')} on this PC, as {ownerName}, in every project where it is on. They are not sandboxed: a script can
+                read and change anything you can, and a project's read-only setting and HQ's file rules don't limit it. Only allow this for skills you trust.
+              </ConfirmInline>
+            )}
             {skill.scriptsAllowed && (
               <p className="field-hint skill-warn">
                 <span className="warn">Scripts allowed:</span> desks with this skill can run them on this PC, as you, in every project where it is on. They are not sandboxed.
