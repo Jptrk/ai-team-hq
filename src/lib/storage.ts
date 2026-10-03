@@ -28,4 +28,6 @@ export const KEYS = {
   theme: 'hq.theme',
   sidebar: 'hq.sidebar',
   reportView: 'hq.reportView',
+  /** Skills page: the repo groups you left open. */
+  skillGroups: 'hq.skillGroups',
 } as const;

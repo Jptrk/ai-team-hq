@@ -11,6 +11,73 @@
   .skills-empty svg {
     color: var(--text-subtle);
   }
+  /* One collapsible row per GitHub repo, its skills inside. */
+  .skill-group + .skill-group {
+    border-top: 1px solid var(--border);
+  }
+  .skill-group-head {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px 10px;
+    padding: 12px 16px;
+    cursor: pointer;
+    list-style: none;
+  }
+  .skill-group-head::-webkit-details-marker {
+    display: none;
+  }
+  .skill-group-head:hover {
+    background: var(--surface-hover);
+  }
+  .skill-group-head:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: -2px;
+  }
+  .skill-group-chevron {
+    flex: none;
+    color: var(--text-subtle);
+    transition: transform var(--ease);
+  }
+  .skill-group > details[open] > .skill-group-head .skill-group-chevron {
+    transform: rotate(90deg);
+  }
+  .skill-group-title {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 2px 8px;
+    flex: 1;
+    min-width: 0;
+  }
+  .skill-group-name {
+    font-weight: 650;
+    overflow-wrap: anywhere;
+  }
+  .skill-group-owner {
+    color: var(--text-subtle);
+    font-size: var(--fs-sm);
+  }
+  .skill-group-meta {
+    color: var(--text-subtle);
+    font-size: var(--fs-sm);
+  }
+  .skill-group-on {
+    color: var(--success-text);
+  }
+  .skill-group-body {
+    border-top: 1px solid var(--border);
+  }
+  .skill-group-link {
+    margin: 0;
+    padding: 8px 16px 0;
+    font-size: var(--fs-sm);
+  }
+  .skill-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
   .skill {
     display: flex;
     flex-direction: column;
@@ -156,8 +223,12 @@
   }
 
   @media (max-width: 719px) {
-    .skill {
+    .skill,
+    .skill-group-head {
       padding: 12px;
+    }
+    .skill-group-link {
+      padding: 8px 12px 0;
     }
   }
 }

@@ -9,7 +9,8 @@ interface Props {
   open: boolean;
   onClose: () => void;
   /** After an install: the whole library, and how many were installed. */
-  onInstalled: (library: SkillMeta[], count: number) => void;
+  /** `repo` is the owner/repo the skills came from. */
+  onInstalled: (library: SkillMeta[], count: number, repo: string) => void;
 }
 
 const msg = (e: unknown, fallback: string) => (e instanceof Error ? e.message : fallback);
@@ -104,7 +105,7 @@ export function InstallSkillModal({ open, onClose, onInstalled }: Props) {
       );
       // Installed: the server already threw the fetched copy away.
       token.current = null;
-      onInstalled(library, chosen.length);
+      onInstalled(library, chosen.length, preview.repo);
     } catch (e) {
       setError(msg(e, 'Could not install those skills'));
     } finally {

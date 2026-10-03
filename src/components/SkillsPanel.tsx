@@ -1,12 +1,13 @@
-import { Plus, Sparkles } from 'lucide-react';
+import { ChevronRight, Plus, Sparkles } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Agent, ProjectSkillsResponse, SkillMeta } from '../../shared/types';
 import { api } from '../api';
 import type { Notify } from '../hooks/useFlags';
+import { KEYS, storage } from '../lib/storage';
 import { ConfirmInline } from '../ui/ConfirmInline';
 import { timeAgo } from '../util';
 import { InstallSkillModal } from './skills/InstallSkillModal';
-import { folderUrl, plural, sizeLabel, sourceLabel } from './skills/skillInfo';
+import { folderUrl, groupByRepo, openKeys, parseOpenGroups, plural, repoParts, repoUrl, sizeLabel, sourceLabel, withOpen } from './skills/skillInfo';
 
 interface Props {
   pid: string;
@@ -34,6 +35,12 @@ export function SkillsPanel({ pid, agents, ownerName, notify }: Props) {
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
   // The skill whose "Allow scripts" waits for your yes.
   const [confirmScripts, setConfirmScripts] = useState<string | null>(null);
+  // Repo groups that are open. Null until you open or close one: then a lone group starts open, several start closed.
+  const [openGroups, setOpenGroups] = useState<ReadonlySet<string> | null>(() => parseOpenGroups(storage.get(KEYS.skillGroups)));
+  const saveOpenGroups = (next: ReadonlySet<string>) => {
+    setOpenGroups(next);
+    storage.set(KEYS.skillGroups, JSON.stringify([...next]));
+  };
   // Bumped whenever an action starts or ends: a load that began before then is older than what's shown.
   const version = useRef(0);
   const desks = agents.filter((a) => !a.isHuman);
@@ -135,8 +142,11 @@ export function SkillsPanel({ pid, agents, ownerName, notify }: Props) {
     );
   };
 
-  const onInstalled = (library: SkillMeta[], count: number) => {
+  const onInstalled = (library: SkillMeta[], count: number, repo: string) => {
     setInstalling(false);
+    // Open the repo you just installed from, so its skills are right there to turn on; the rest stay as they were.
+    // Starts from what was showing, so a lone group that was open by default stays open.
+    saveOpenGroups(withOpen(open, groupByRepo(library).map((g) => g.key), repo.toLowerCase(), true));
     version.current++;
     setData((d) => ({ library, desks: d?.desks ?? {} }));
     notify(`Installed ${plural(count, 'skill')}. Turn ${count === 1 ? 'it' : 'them'} on for desks below.`, { tone: 'success' });
@@ -145,6 +155,19 @@ export function SkillsPanel({ pid, agents, ownerName, notify }: Props) {
   };
 
   const library = data?.library ?? [];
+  const groups = groupByRepo(library);
+  const keys = groups.map((g) => g.key);
+  const open = openKeys(openGroups, keys);
+  const setGroupOpen = (key: string, nowOpen: boolean) => {
+    if (open.has(key) === nowOpen) return;
+    if (!nowOpen) {
+      // A question left open inside a closed group would stay hidden and keep answering Esc.
+      const ids = new Set(groups.find((g) => g.key === key)?.skills.map((s) => s.id));
+      setConfirmScripts((c) => (c && ids.has(c) ? null : c));
+      setConfirmRemove((c) => (c && ids.has(c) ? null : c));
+    }
+    saveOpenGroups(withOpen(openGroups, keys, key, nowOpen));
+  };
   const armed = confirmRemove ? library.find((s) => s.id === confirmRemove) : undefined;
 
   const renderSkill = (skill: SkillMeta) => {
@@ -292,7 +315,49 @@ export function SkillsPanel({ pid, agents, ownerName, notify }: Props) {
           </button>
         </div>
       ) : (
-        <ul className="conn-list skill-list">{library.map(renderSkill)}</ul>
+        <ul className="conn-list skill-groups">
+          {groups.map((g) => {
+            const { owner, name } = repoParts(g.repo);
+            const onHere = g.skills.filter((s) => (data.desks[s.id] ?? []).length > 0).length;
+            const allowed = g.skills.filter((s) => s.scriptsAllowed).length;
+            const link = repoUrl(g.repo);
+            return (
+              <li key={g.key} className="skill-group">
+                <details
+                  open={open.has(g.key)}
+                  onToggle={(e) => {
+                    // React passes toggle events up, so the inner "N scripts" list would land here too.
+                    if (e.target !== e.currentTarget) return;
+                    setGroupOpen(g.key, e.currentTarget.open);
+                  }}
+                >
+                  <summary className="skill-group-head">
+                    <ChevronRight size={16} className="skill-group-chevron" aria-hidden />
+                    <span className="skill-group-title">
+                      <span className="skill-group-name">{name}</span>
+                      {owner && <span className="skill-group-owner">{owner}</span>}
+                    </span>
+                    <span className="skill-group-meta">
+                      {plural(g.skills.length, 'skill')}
+                      {onHere > 0 && <span className="skill-group-on"> · {onHere} on here</span>}
+                      {allowed > 0 && <span> · scripts allowed on {allowed}</span>}
+                    </span>
+                  </summary>
+                  <div className="skill-group-body">
+                    {link && (
+                      <p className="skill-group-link">
+                        <a href={link} target="_blank" rel="noopener noreferrer" className="mono">
+                          github.com/{g.repo}
+                        </a>
+                      </p>
+                    )}
+                    <ul className="skill-list">{g.skills.map(renderSkill)}</ul>
+                  </div>
+                </details>
+              </li>
+            );
+          })}
+        </ul>
       )}
 
       <InstallSkillModal key={installKey} open={installing} onClose={() => setInstalling(false)} onInstalled={onInstalled} />

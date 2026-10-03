@@ -22,9 +22,9 @@ import { parseRoute, projectPath } from './route';
 import { latestDecision, readableInk } from './util';
 import { MCP_PRESETS, presetArgs, presetDefaults } from '../shared/mcpPresets';
 import { buildSpec, safeAuthUrl } from '../shared/mcpSpec';
-import type { ConnectionRow } from '../shared/types';
+import type { ConnectionRow, SkillMeta } from '../shared/types';
 import { alreadySetUp, blankRow, CUSTOM, hostOf, initialForm, presetCards, signInButtons, splitArgs, timeLeft, toRequest } from './components/connections/addForm';
-import { folderUrl, newFetchToken, pickedAtFirst, plural, repoUrl, sizeLabel, sourceLabel } from './components/skills/skillInfo';
+import { folderUrl, groupByRepo, newFetchToken, openKeys, parseOpenGroups, pickedAtFirst, plural, repoParts, repoUrl, sizeLabel, sourceLabel, withOpen } from './components/skills/skillInfo';
 
 let passed = 0;
 function test(name: string, fn: () => void) {
@@ -554,6 +554,46 @@ test('skills: the install dialog ticks new skills and reinstalls, never copies, 
   const a = newFetchToken();
   assert.match(a, /^[0-9a-f]{24}$/);
   assert.notEqual(newFetchToken(), a);
+});
+
+test('skills group by the repo they came from', () => {
+  const skill = (id: string, name: string, repo: string) =>
+    ({ id, name, description: '', source: { repo, path: `.claude/skills/${id}` }, installedAt: '', files: 1, bytes: 1, scripts: [], scriptsAllowed: false }) as SkillMeta;
+  const groups = groupByRepo([
+    skill('ui-ux-pro-max', 'ui-ux-pro-max', 'nextlevelbuilder/ui-ux-pro-max-skill'),
+    skill('pdf', 'pdf', 'anthropics/skills'),
+    skill('brand', 'brand', 'NextLevelBuilder/UI-UX-Pro-Max-Skill'),
+    skill('docx', 'docx', 'anthropics/skills'),
+  ]);
+  // Groups by repo name (skills before ui-ux-pro-max-skill), case doesn't split a repo, skills by name inside.
+  assert.deepEqual(
+    groups.map((g) => [g.key, g.skills.map((s) => s.id)]),
+    [
+      ['anthropics/skills', ['docx', 'pdf']],
+      ['nextlevelbuilder/ui-ux-pro-max-skill', ['brand', 'ui-ux-pro-max']],
+    ],
+  );
+  assert.deepEqual(repoParts('nextlevelbuilder/ui-ux-pro-max-skill'), { owner: 'nextlevelbuilder', name: 'ui-ux-pro-max-skill' });
+  assert.deepEqual(repoParts('loose'), { owner: '', name: 'loose' });
+  assert.equal(groups[1].repo, 'nextlevelbuilder/ui-ux-pro-max-skill', 'keeps the casing it first saw');
+});
+
+test('skill groups: which are open, saved per browser', () => {
+  const keys = ['a/one', 'b/two'];
+  // Nothing saved: a lone group opens, several start closed.
+  assert.deepEqual([...openKeys(null, ['a/one'])], ['a/one']);
+  assert.deepEqual([...openKeys(null, keys)], []);
+  // Saved: only groups that still exist count.
+  assert.deepEqual([...openKeys(new Set(['b/two', 'gone/repo']), keys)], ['b/two']);
+  // Unreadable or odd values count as nothing saved.
+  for (const raw of [null, '', 'not json', '{}', '"a/one"']) assert.equal(parseOpenGroups(raw), null, String(raw));
+  assert.deepEqual([...parseOpenGroups('["a/one", 3]')!], ['a/one']);
+  // The first toggle with nothing saved starts from what was showing: closing the lone open group.
+  assert.deepEqual([...withOpen(null, ['a/one'], 'a/one', false)], []);
+  // Opening after an install keeps the others as they were, and drops removed repos.
+  assert.deepEqual([...withOpen(new Set(['a/one', 'gone/repo']), keys, 'b/two', true)].sort(), ['a/one', 'b/two']);
+  // An install from a second repo starts from what was showing (the lone group, open by default), so it stays open.
+  assert.deepEqual([...withOpen(openKeys(null, ['a/one']), keys, 'b/two', true)].sort(), ['a/one', 'b/two']);
 });
 
 console.log(`ui: ${passed} tests passed`);
