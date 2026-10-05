@@ -3,3 +3,4 @@
 - [SDK/CLI internals offline](sdk-cli-internals.md) — grep sdk.mjs and claude.exe: stream shapes, tool ordering, mcp_authenticate shape, wt `;` splitting
 - [UI dialog review checks](ui-dialog-review-checks.md) — top-layer/inert flags, nested-dialog CSS leaks, Android close requests, stale caches
 - [Huddle engine review checks](huddle-engine-review-checks.md) — resume/stop races in the drive loop, blind note approval, .mts probe pattern
+- [Desk identity review checks](desk-identity-review-checks.md) — ids reused after reset/rename inherit stale workspace ROLE.md/memory.md; founder-name clashes
