@@ -514,7 +514,7 @@ export type HuddleProposalSummary = Omit<HuddleProposal, 'text'> & { text?: stri
 /** A huddle as the 3-second poll carries it: the board and transcript load when you open it. */
 export type HuddleSummary = Omit<Huddle, 'entries' | 'cards' | 'proposals'> & { proposals: HuddleProposalSummary[]; entryCount: number; cardCount: number };
 
-export type TeamTemplate = 'business' | 'dev' | 'blank';
+export type TeamTemplate = 'business' | 'dev' | 'design' | 'blank';
 /** read = agents can read the linked folder; write = they can also edit files in it. */
 export type ProjectAccess = 'read' | 'write';
 
@@ -634,6 +634,7 @@ export function defaultQaDesk(agents: Agent[]): Agent | undefined {
 export const TEMPLATE_LABEL: Record<TeamTemplate, string> = {
   business: 'Business team',
   dev: 'Dev team',
+  design: 'Design team',
   blank: 'Blank',
 };
 

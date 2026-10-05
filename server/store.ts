@@ -43,6 +43,7 @@ interface Registry {
 
 let registry: Registry | null = null;
 let emptySeed = false;
+let freshNames = false;
 const handles = new Map<string, Project>();
 
 export class Project {
@@ -120,9 +121,13 @@ function saveRegistry(): void {
   fs.writeFileSync(REGISTRY_FILE, JSON.stringify(registry, null, 2));
 }
 
-/** Call once at boot. `empty` seeds new default projects without demo work (live mode). */
-export function initStore(opts: { emptySeed: boolean }): void {
+/**
+ * Call once at boot. `emptySeed` seeds new default projects without demo work (live mode). `freshNames` gives
+ * each new or reset team its own desk names; off by default so tests get the template names.
+ */
+export function initStore(opts: { emptySeed: boolean; freshNames?: boolean }): void {
   emptySeed = opts.emptySeed;
+  freshNames = opts.freshNames ?? false;
   reg();
   for (const meta of reg().projects) getProject(meta.id);
 }
@@ -141,10 +146,31 @@ function reg(): Registry {
   } else {
     const meta = makeMeta({ name: 'My Company', key: 'HQ', path: null, access: 'read', template: 'business' }, registry, 'hq');
     registry.projects.push(meta);
-    writeState(meta.id, seed('business', { empty: emptySeed, ownerName: registry.owner.name, projectName: meta.name }));
+    writeState(meta.id, seedTeam(meta.id, 'business', emptySeed, meta.name, []));
   }
   saveRegistry();
   return registry;
+}
+
+/**
+ * A new team for project `id`. `avoid` is desk names other projects use, so the new desks get different ones.
+ * Work it out before the new project joins the registry: listing projects loads each one, and a project with no
+ * db.json yet would seed itself. Desk folders already in the project's workspace (from a reset, or a removed desk)
+ * are never reused while another name is free: ensureWorkspace keeps an existing ROLE.md and memory.md.
+ */
+function seedTeam(id: string, template: TeamTemplate, empty: boolean, projectName: string, avoid: string[]): State {
+  let staleIds: string[] = [];
+  try {
+    staleIds = fs.readdirSync(path.join(WORKSPACES, id), { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
+  } catch {
+    /* no workspace yet */
+  }
+  return seed(template, { empty, ownerName: reg().owner.name, projectName, randomNames: freshNames, avoidNames: avoid, staleIds });
+}
+
+/** Every desk name in every project. */
+function deskNamesInUse(): string[] {
+  return allProjects().flatMap((p) => p.state.agents.filter((a) => !a.isHuman).map((a) => a.name));
 }
 
 function writeState(id: string, state: State): void {
@@ -316,7 +342,7 @@ export function getProject(id: string): Project | null {
   const file = stateFile(id);
   const fresh = !fs.existsSync(file);
   const state = fresh
-    ? seed(meta.template, { empty: true, ownerName: reg().owner.name, projectName: meta.name })
+    ? seedTeam(id, meta.template, true, meta.name, [])
     : migrateState(JSON.parse(fs.readFileSync(file, 'utf8')) as State, meta.template);
   const project = new Project(id, state);
   handles.set(id, project);
@@ -363,10 +389,11 @@ export function keyTaken(key: string, exceptId?: string): boolean {
 
 export function createProject(input: ProjectInput): Project {
   const r = reg();
+  const avoid = freshNames ? deskNamesInUse() : [];
   const meta = makeMeta(input, r);
   r.projects.push(meta);
   saveRegistry();
-  writeState(meta.id, seed(input.template, { empty: true, ownerName: r.owner.name, projectName: meta.name }));
+  writeState(meta.id, seedTeam(meta.id, input.template, true, meta.name, avoid));
   return getProject(meta.id)!;
 }
 
@@ -407,7 +434,8 @@ export function archiveProject(id: string): string {
 export function resetProject(id: string, empty: boolean): State {
   const project = getProject(id);
   if (!project) throw new Error('project not found');
-  project.state = seed(project.meta.template, { empty, ownerName: reg().owner.name, projectName: project.meta.name });
+  // Its own current names count as taken too, so a reset brings in new people.
+  project.state = seedTeam(id, project.meta.template, empty, project.meta.name, freshNames ? deskNamesInUse() : []);
   project.save();
   return project.state;
 }

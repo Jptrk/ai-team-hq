@@ -95,13 +95,77 @@ function devTeam(): Agent[] {
   ]);
 }
 
+function designTeam(): Agent[] {
+  return desks([
+    { id: 'hazel', name: 'Hazel', role: 'Design Lead', desk: 'Lead desk', lead: true, color: '#3b6ea5',
+      skills: ['plan', 'planning', 'priorities', 'brief', 'critique', 'direction', 'strategy', 'roadmap', 'feedback', 'breakdown', 'review', 'creative'] },
+    { id: 'jasper', name: 'Jasper', role: 'Product Designer', desk: 'Product desk', color: '#2f8f6b',
+      skills: ['ux', 'flow', 'flows', 'wireframe', 'wireframes', 'journey', 'prototype', 'prototypes', 'interaction', 'onboarding', 'screen', 'screens', 'figma', 'feature', 'checkout'] },
+    { id: 'luna', name: 'Luna', role: 'UI Designer', desk: 'UI desk', color: '#c9407a',
+      skills: ['ui', 'visual', 'mockup', 'mockups', 'layout', 'color', 'colors', 'typography', 'font', 'fonts', 'icon', 'icons', 'spacing', 'dark-mode', 'polish', 'landing'] },
+    { id: 'rowan', name: 'Rowan', role: 'Brand Designer', desk: 'Brand desk', color: '#e0a83a',
+      skills: ['brand', 'branding', 'logo', 'identity', 'guidelines', 'palette', 'illustration', 'illustrations', 'graphic', 'graphics', 'poster', 'social', 'campaign', 'marketing', 'deck', 'slides'] },
+    { id: 'priya', name: 'Priya', role: 'UX Researcher', desk: 'Research desk', color: '#8a5fb8',
+      skills: ['research', 'interview', 'interviews', 'survey', 'surveys', 'persona', 'personas', 'usability', 'insights', 'competitor', 'competitors', 'competitive', 'heuristic', 'analytics'] },
+    { id: 'mateo', name: 'Mateo', role: 'Content Designer', desk: 'Content desk', color: '#6b7f3a',
+      skills: ['copy', 'microcopy', 'ux-writing', 'content', 'tone', 'voice', 'wording', 'labels', 'naming', 'headline', 'headlines', 'cta', 'writing'] },
+    { id: 'kenji', name: 'Kenji', role: 'Motion Designer', desk: 'Motion desk', color: '#d98a2b',
+      skills: ['motion', 'animation', 'animations', 'animate', 'transition', 'transitions', 'lottie', 'video', 'micro-interaction', 'gif', 'loading'] },
+    { id: 'sloane', name: 'Sloane', role: 'Design Systems Engineer', desk: 'Systems desk', color: '#4f8fd6',
+      skills: ['design-system', 'system', 'tokens', 'token', 'storybook', 'component', 'components', 'css', 'react', 'frontend', 'handoff', 'accessibility', 'a11y', 'contrast', 'variables', 'library'] },
+  ]);
+}
+
 function blankTeam(): Agent[] {
   return desks([
     { id: 'alex', name: 'Alex', role: 'Generalist', desk: 'Main desk', lead: true, color: '#3b6ea5', skills: [] },
   ]);
 }
 
-const TEAMS: Record<TeamTemplate, () => Agent[]> = { business: businessTeam, dev: devTeam, blank: blankTeam };
+const TEAMS: Record<TeamTemplate, () => Agent[]> = { business: businessTeam, dev: devTeam, design: designTeam, blank: blankTeam };
+
+/**
+ * Names a fresh team draws from, so each project's desks aren't the same people. One plain word each: the id is
+ * the name lowercased, and @Name has to match it. None of the template defaults above, so a new team reads new.
+ */
+export const DESK_NAMES = [
+  'Ada', 'Aiko', 'Amara', 'Anika', 'Ari', 'Arjun', 'Asha', 'Ayla', 'Bea', 'Beatriz', 'Bianca', 'Bodhi', 'Bruno',
+  'Camila', 'Carmen', 'Cleo', 'Cyrus', 'Dalia', 'Dante', 'Darius', 'Diego', 'Dina', 'Elena', 'Eli', 'Elif', 'Emeka',
+  'Enzo', 'Esme', 'Ezra', 'Farah', 'Felix', 'Finn', 'Freya', 'Gael', 'Gia', 'Hana', 'Hiro', 'Hugo', 'Idris', 'Imani',
+  'Ines', 'Iris', 'Isla', 'Jada', 'Jalen', 'Jonah', 'Juno', 'Kai', 'Kamal', 'Keira', 'Kian', 'Kofi', 'Lars', 'Layla',
+  'Lena', 'Lina', 'Luca', 'Lucia', 'Mae', 'Malik', 'Mara', 'Marco', 'Maya', 'Mei', 'Mila', 'Milo', 'Mira', 'Nadia',
+  'Naomi', 'Nia', 'Nico', 'Nina', 'Noah', 'Olga', 'Orla', 'Oscar', 'Pablo', 'Quinn', 'Rafael', 'Rania', 'Ravi',
+  'Rhea', 'Rosa', 'Rumi', 'Sana', 'Santiago', 'Selin', 'Silas', 'Sofia', 'Soren', 'Tariq', 'Tess', 'Tomas', 'Uma',
+  'Valeria', 'Vera', 'Wren', 'Yara', 'Yusuf', 'Zane', 'Zara', 'Zoe',
+];
+
+function shuffled<T>(list: T[]): T[] {
+  const out = [...list];
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
+
+/**
+ * A new name (and id) for every desk: never the founder's (any word of it), never twice in the team. Free names
+ * first, then names in `avoid` (other projects' desks), and last any with a workspace folder in `staleIds`: an old
+ * desk's ROLE.md and memory.md would come back under a new role.
+ */
+function renameDesks(agents: Agent[], avoid: string[], staleIds: string[]): void {
+  const desks = agents.filter((a) => !a.isHuman);
+  const reserved = new Set(['you', 'founder', 'patrick', ...agents.filter((a) => a.isHuman).flatMap((a) => a.name.toLowerCase().split(/\s+/))]);
+  const used = new Set(avoid.map((n) => n.toLowerCase()));
+  const stale = new Set(staleIds.map((n) => n.toLowerCase()));
+  const rank = (n: string) => (stale.has(n.toLowerCase()) ? 2 : used.has(n.toLowerCase()) ? 1 : 0);
+  const allowed = DESK_NAMES.filter((n) => !reserved.has(n.toLowerCase()));
+  const names = [0, 1, 2].flatMap((r) => shuffled(allowed.filter((n) => rank(n) === r)));
+  desks.forEach((a, i) => {
+    a.name = names[i];
+    a.id = names[i].toLowerCase();
+  });
+}
 
 function businessDemo(): WorkItem[] {
   return [
@@ -197,16 +261,23 @@ export interface SeedOptions {
   empty?: boolean;
   ownerName: string;
   projectName: string;
+  /** Desks get names from DESK_NAMES instead of the template's. The demo keeps its own: its tickets name them. */
+  randomNames?: boolean;
+  /** Names to skip while others are free: desks in the other projects. */
+  avoidNames?: string[];
+  /** Desk ids that already have a workspace folder in this project. Used only once every other name is. */
+  staleIds?: string[];
 }
 
 export function seed(template: TeamTemplate, opts: SeedOptions): State {
+  const demo = template === 'business' && !opts.empty;
   const agents = [founder(opts.ownerName), ...TEAMS[template]()].slice(0, MAX_TEAM);
+  if (opts.randomNames && !demo) renameDesks(agents, opts.avoidNames ?? [], opts.staleIds ?? []);
   assignSeats(agents);
   // A reset or a fresh project skips migrateState, so number the Office desks here too.
   assignDeskNumbers(agents);
   const lead = agents.find((a) => a.lead) ?? agents.find((a) => !a.isHuman);
 
-  const demo = template === 'business' && !opts.empty;
   const items = demo ? businessDemo() : [];
   let seq = 0;
   for (const item of [...items].reverse()) item.number = ++seq;

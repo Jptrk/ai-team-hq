@@ -13,46 +13,63 @@ import { allProjects, now, today, uid, type Project } from './store';
 
 const TICK_MS = 9_000;
 
+/** Keyed by role, not name: a new team's desks get fresh names (see DESK_NAMES in seed.ts). */
 const FOLLOW_UPS: Record<string, { title: string; summary: string; kind: WorkItem['kind'] }[]> = {
-  paige: [
+  'Report Desk + EA': [
     { kind: 'decide', title: 'Reply to Toi: new time for Tue check-in', summary: 'Toi asked to move the Tuesday check-in. Proposed 3 PM ET, calendar is clear. Approve to send.' },
     { kind: 'decide', title: 'Confirm dentist reschedule to Thursday 9 AM', summary: 'The clinic offered Thursday 9 AM. Nothing conflicts. Approve to confirm.' },
   ],
-  mike: [
+  'Pipeline Desk': [
     { kind: 'review', title: 'Proposal draft for Harbor & Co', summary: 'Scope and pricing drafted from the discovery call notes. Review before it goes to the client.' },
     { kind: 'fyi', title: '3 deals flagged as stale', summary: 'No activity in 14 days: Alder Labs, Pinecrest, Volta. Suggest a re-engagement sequence.' },
   ],
-  riley: [{ kind: 'review', title: 'First-touch messages for top 10 prospects', summary: 'Ten personalized openers ready. Review the tone before I send.' }],
-  maria: [{ kind: 'decide', title: 'Refund request from an academy member', summary: 'A member asked for a refund 9 days after purchase. Policy says 7. Your call.' }],
-  denzel: [{ kind: 'review', title: 'Lead-alert webhook rebuilt', summary: 'New leads now post to Slack within 10 seconds. Review the message format.' }],
-  shakira: [{ kind: 'review', title: 'Thumbnail v1 for module 1', summary: 'First thumbnail in the academy style. Approve the direction and I will do the other five.' }],
-  dylan: [{ kind: 'fyi', title: 'Daily standup summary', summary: 'All desks reported. Two items need you, everything else is on track.' }],
-  nora: [{ kind: 'review', title: 'Sprint plan for next week', summary: 'Broke the open requests into 9 tickets with estimates. Review the order before I hand them out.' }],
-  leo: [{ kind: 'review', title: 'Checkout page layout fix', summary: 'Proposed patch for the mobile checkout overflow. Diff is in the report.' }],
-  sam: [{ kind: 'decide', title: 'Add an index on orders.customer_id?', summary: 'The order history query scans the table. An index cuts it from 900ms to 12ms. Approve the migration plan?' }],
-  ivy: [{ kind: 'fyi', title: 'Regression run: 2 flaky tests', summary: 'Two cart tests fail intermittently on a timing issue. Details and repro in the report.' }],
-  omar: [{ kind: 'review', title: 'Dockerfile slimmed down', summary: 'Multi-stage build drops the image from 1.4 GB to 380 MB. Review before I open a PR.' }],
-  grace: [{ kind: 'review', title: 'Security review of the PayPal endpoint', summary: 'Two findings: missing idempotency key and a verbose error message. Fix plan in the report.' }],
-  theo: [{ kind: 'review', title: 'README refresh', summary: 'Rewrote setup steps for the monorepo. Review the new quick start.' }],
+  'Social Prospecting': [{ kind: 'review', title: 'First-touch messages for top 10 prospects', summary: 'Ten personalized openers ready. Review the tone before I send.' }],
+  'Social + Inbound': [{ kind: 'decide', title: 'Refund request from an academy member', summary: 'A member asked for a refund 9 days after purchase. Policy says 7. Your call.' }],
+  'Automation Builder': [{ kind: 'review', title: 'Lead-alert webhook rebuilt', summary: 'New leads now post to Slack within 10 seconds. Review the message format.' }],
+  Designer: [{ kind: 'review', title: 'Thumbnail v1 for module 1', summary: 'First thumbnail in the academy style. Approve the direction and I will do the other five.' }],
+  COO: [{ kind: 'fyi', title: 'Daily standup summary', summary: 'All desks reported. Two items need you, everything else is on track.' }],
+  'Tech Lead': [{ kind: 'review', title: 'Sprint plan for next week', summary: 'Broke the open requests into 9 tickets with estimates. Review the order before I hand them out.' }],
+  'Frontend Engineer': [{ kind: 'review', title: 'Checkout page layout fix', summary: 'Proposed patch for the mobile checkout overflow. Diff is in the report.' }],
+  'Backend Engineer': [{ kind: 'decide', title: 'Add an index on orders.customer_id?', summary: 'The order history query scans the table. An index cuts it from 900ms to 12ms. Approve the migration plan?' }],
+  'QA Engineer': [{ kind: 'fyi', title: 'Regression run: 2 flaky tests', summary: 'Two cart tests fail intermittently on a timing issue. Details and repro in the report.' }],
+  'DevOps Engineer': [{ kind: 'review', title: 'Dockerfile slimmed down', summary: 'Multi-stage build drops the image from 1.4 GB to 380 MB. Review before I open a PR.' }],
+  'Code Reviewer': [{ kind: 'review', title: 'Security review of the PayPal endpoint', summary: 'Two findings: missing idempotency key and a verbose error message. Fix plan in the report.' }],
+  'Docs Writer': [{ kind: 'review', title: 'README refresh', summary: 'Rewrote setup steps for the monorepo. Review the new quick start.' }],
+  'Design Lead': [{ kind: 'review', title: 'Critique notes on the onboarding flow', summary: 'Ran a critique with the product and UI desks. Three changes proposed, ranked by impact. Review the order before we start.' }],
+  'Product Designer': [{ kind: 'review', title: 'Wireframes for the new settings flow', summary: 'Two flows: one long page vs. grouped tabs. Click-through prototype for both in the report. Pick one.' }],
+  'UI Designer': [{ kind: 'review', title: 'High-fidelity mockups for the pricing page', summary: 'Desktop and mobile done in the current type scale. One open question on the plan comparison table.' }],
+  'Brand Designer': [{ kind: 'decide', title: 'Two logo directions: pick one', summary: 'A wordmark and a monogram, both shown on the app icon, the site header and a business card. Your call.' }],
+  'UX Researcher': [{ kind: 'fyi', title: 'Usability round 1: 5 sessions summarized', summary: '4 of 5 people missed the export button. Clips and the full write-up are in the report.' }],
+  'Content Designer': [{ kind: 'review', title: 'Error messages rewritten for checkout', summary: '14 messages now say what happened and what to do next. Review the tone before they go to the UI desk.' }],
+  'Motion Designer': [{ kind: 'review', title: 'Loading animation v1', summary: 'A 1.2s loop that respects reduced motion. Lottie file and a GIF preview in the report.' }],
+  'Design Systems Engineer': [{ kind: 'review', title: 'Color tokens for dark mode', summary: 'Every surface and text token has a dark value, all pass AA contrast. Review before I publish the library.' }],
 };
 
 /** Background work each desk picks up on its own when its queue is empty. */
 const ROUTINES: Record<string, string[]> = {
-  dylan: ['Checking every desk for blockers', 'Rebalancing the week against your calendar', 'Writing the standup summary'],
-  paige: ['Clearing the inbox and drafting replies', 'Compiling the EOD report', 'Confirming tomorrow’s meetings'],
-  mike: ['Following up on stale deals', 'Updating next steps on open deals', 'Prepping call notes for tomorrow'],
-  riley: ['Scoring new LinkedIn connections', 'Drafting first-touch messages', 'Checking replies to last week’s outreach'],
-  maria: ['Answering community DMs', 'Tagging warm inbound leads for Mike', 'Scheduling this week’s posts'],
-  denzel: ['Monitoring automations for failures', 'Cleaning up webhook logs', 'Testing the lead-alert flow'],
-  shakira: ['Drafting next week’s thumbnails', 'Refreshing the carousel template', 'Exporting assets to the shared folder'],
-  rodrigo: ['Reconciling timesheets', 'Reviewing the contractor agreements', 'Updating the policy handbook'],
-  nora: ['Grooming the backlog', 'Reading through last week’s merged changes', 'Updating the architecture notes'],
-  leo: ['Auditing components for accessibility', 'Cleaning up unused styles', 'Checking bundle size'],
-  sam: ['Reviewing slow API endpoints', 'Tidying database migrations', 'Checking error logs'],
-  ivy: ['Running the regression suite', 'Triaging new bug reports', 'Writing missing unit tests'],
-  omar: ['Watching the CI pipeline', 'Checking dependency updates', 'Reviewing infra costs'],
-  grace: ['Reviewing open pull requests', 'Scanning for outdated packages', 'Checking lint warnings'],
-  theo: ['Updating the changelog', 'Fixing stale README sections', 'Documenting new endpoints'],
+  COO: ['Checking every desk for blockers', 'Rebalancing the week against your calendar', 'Writing the standup summary'],
+  'Report Desk + EA': ['Clearing the inbox and drafting replies', 'Compiling the EOD report', 'Confirming tomorrow’s meetings'],
+  'Pipeline Desk': ['Following up on stale deals', 'Updating next steps on open deals', 'Prepping call notes for tomorrow'],
+  'Social Prospecting': ['Scoring new LinkedIn connections', 'Drafting first-touch messages', 'Checking replies to last week’s outreach'],
+  'Social + Inbound': ['Answering community DMs', 'Tagging warm inbound leads for the pipeline desk', 'Scheduling this week’s posts'],
+  'Automation Builder': ['Monitoring automations for failures', 'Cleaning up webhook logs', 'Testing the lead-alert flow'],
+  Designer: ['Drafting next week’s thumbnails', 'Refreshing the carousel template', 'Exporting assets to the shared folder'],
+  'HR + Compliance': ['Reconciling timesheets', 'Reviewing the contractor agreements', 'Updating the policy handbook'],
+  'Tech Lead': ['Grooming the backlog', 'Reading through last week’s merged changes', 'Updating the architecture notes'],
+  'Frontend Engineer': ['Auditing components for accessibility', 'Cleaning up unused styles', 'Checking bundle size'],
+  'Backend Engineer': ['Reviewing slow API endpoints', 'Tidying database migrations', 'Checking error logs'],
+  'QA Engineer': ['Running the regression suite', 'Triaging new bug reports', 'Writing missing unit tests'],
+  'DevOps Engineer': ['Watching the CI pipeline', 'Checking dependency updates', 'Reviewing infra costs'],
+  'Code Reviewer': ['Reviewing open pull requests', 'Scanning for outdated packages', 'Checking lint warnings'],
+  'Docs Writer': ['Updating the changelog', 'Fixing stale README sections', 'Documenting new endpoints'],
+  'Design Lead': ['Reviewing work in progress across desks', 'Updating the design brief', 'Planning this week’s critique'],
+  'Product Designer': ['Mapping the current signup flow', 'Sketching edge cases for empty states', 'Updating the clickable prototype'],
+  'UI Designer': ['Tidying spacing on the dashboard screens', 'Refreshing the icon set', 'Checking mockups at mobile widths'],
+  'Brand Designer': ['Updating the brand guidelines', 'Drafting social templates', 'Collecting moodboard references'],
+  'UX Researcher': ['Tagging interview notes', 'Writing the next survey', 'Reviewing support tickets for patterns'],
+  'Content Designer': ['Auditing button labels', 'Updating the voice and tone guide', 'Rewriting empty-state copy'],
+  'Motion Designer': ['Tuning easing curves for transitions', 'Exporting Lottie files', 'Prototyping a hover micro-interaction'],
+  'Design Systems Engineer': ['Syncing tokens with the code', 'Documenting components in Storybook', 'Checking color contrast across themes'],
 };
 
 function pick<T>(arr: T[]): T | undefined {
@@ -183,7 +200,7 @@ function tickProject(p: Project): void {
     if (agent.isHuman || agent.status === 'off') continue;
     const busy = s.items.some((i) => i.assignee === agent.id && (i.status === 'in-progress' || i.status === 'sent-back' || i.status === 'todo'));
     if (busy || Math.random() > 0.6) continue;
-    const title = pick(ROUTINES[agent.id] ?? []);
+    const title = pick(ROUTINES[agent.role] ?? []);
     if (!title) continue;
     s.items.unshift({
       id: uid('wi'),
@@ -242,7 +259,7 @@ function tickProject(p: Project): void {
         agent.lastActive = now();
       }
     } else if (roll < 0.45) {
-      const follow = pick(FOLLOW_UPS[item.assignee] ?? []);
+      const follow = pick((agent && FOLLOW_UPS[agent.role]) || []);
       const alreadyOpen = s.items.some((i) => i.status === 'needs-you' && i.title === follow?.title);
       if (follow && !alreadyOpen) {
         s.items.unshift({

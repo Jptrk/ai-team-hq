@@ -253,7 +253,12 @@ Creating a project:
   That file goes into every agent's prompt for the project.
 - **Name** and **Key** fill in from the folder. The key prefixes ticket numbers: `GA-1`, `GA-2`.
 - **Team**: Dev team (Tech Lead, Frontend, Backend, QA, DevOps, Code Reviewer, Docs), Business
-  team (COO, EA, Pipeline, Prospecting, Inbound, Automation, Design, HR), or Blank.
+  team (COO, EA, Pipeline, Prospecting, Inbound, Automation, Design, HR), Design team (Design
+  Lead, Product, UI, Brand, UX Research, Content, Motion, Design Systems), or Blank. Each new team
+  gets fresh desk names, picked to differ from the names in your other projects, so two Dev teams
+  aren't the same people. Resetting a project brings in new names too, so the new desks start
+  with a fresh ROLE.md and memory.md (the old desks' folders stay in `workspaces/`). The business
+  demo keeps its own names, since its tickets name them.
 - **Access**: Read only (default) or Read & write. Read only means agents read the code and put
   plans and diffs in reports. Read & write lets them edit files, but never `.git`, `node_modules`,
   `.env*` or key files. There is no shell either way: no builds, tests, git, or commits.
@@ -592,7 +597,7 @@ On a project made from the **Dev team** template, finished work is checked befor
 
 1. **The owner finishes.** When a desk calls `report_done`, the ticket moves to the **QA** column
    instead.
-2. **The QA desk checks it.** The project's QA desk (Ivy by default) is woken. It reads the ticket,
+2. **The QA desk checks it.** The project's QA desk (the QA Engineer by default) is woken. It reads the ticket,
    the files the owner changed and the owner's reports, then records a verdict with `qa_result`.
 3. **Pass:** the ticket moves to **Sign-off**, with QA's verdict, and shows in **Needs you** under
    "Ready for sign-off". **Mark done** closes it. Send back, Instruct and Hold work as usual. With
@@ -625,11 +630,11 @@ On a project made from the **Dev team** template, finished work is checked befor
   tickets waiting in QA go to the new QA desk, or to your sign-off. They come to you even with
   sign-off off: they were waiting for a check, so HQ never closes them unchecked. The same goes for
   a ticket you move into QA by hand, or one changed after QA, with no QA desk free. Your pick sticks
-  across restarts, none included; a reset starts the team again with Ivy as the QA desk.
+  across restarts, none included; a reset starts the team again with its QA Engineer as the QA desk.
 - **By hand.** Drag a card into QA, or pick "in QA" in a ticket's status menu, to have it checked.
-  "Put Ivy on it" on a ticket in QA runs the check again.
+  "Put [QA desk's name] on it" on a ticket in QA runs the check again.
 - **Cost.** Each check is one desk run, with the same caps as a ticket run.
-- Business and blank projects have no QA column: finished work goes to your sign-off (or Done).
+- Business, design and blank projects have no QA column: finished work goes to your sign-off (or Done).
 
 | Env | Default | What |
 | --- | ------- | ---- |

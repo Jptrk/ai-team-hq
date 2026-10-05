@@ -9,7 +9,7 @@ import { deriveActivities, stampNeedsYou, startsFrom, waitingSince, withSince, t
 import { assignDeskNumbers, deskSlotsFor, withDeskNumbers } from '../shared/desks';
 import type { Agent, Run, State, Thread, WorkItem } from '../shared/types';
 import { lastTools, noteTools, setLastTool, toolKind } from './runner/liveTools';
-import { seed } from './seed';
+import { DESK_NAMES, seed } from './seed';
 import { migrateState } from './store';
 
 let passed = 0;
@@ -232,9 +232,9 @@ test('desk numbers: kept when someone leaves; newcomers take the lowest free one
 });
 
 test('seed() numbers every desk, so a reset or a fresh project has the right office', () => {
-  for (const template of ['business', 'dev', 'blank'] as const) {
+  for (const template of ['business', 'dev', 'design', 'blank'] as const) {
     for (const empty of [true, false]) {
-      const s = seed(template, { empty, ownerName: 'Patrick', projectName: 'X' });
+      const s = seed(template, { empty, ownerName: 'Patrick', projectName: 'X', randomNames: empty });
       const desks = s.agents.filter((a) => !a.isHuman);
       assert.deepEqual(desks.map((a) => a.deskNo), desks.map((_, i) => i + 1), template);
       assert.equal(s.agents.find((a) => a.isHuman)?.deskNo, undefined);
@@ -300,6 +300,71 @@ test('last tools: only running runs are reported; another project\'s live runs a
   // A poll for one project must not forget a run in another.
   assert.deepEqual(lastTools(new Set(['elsewhere']), t0), { elsewhere: 'other' });
   assert.deepEqual(lastTools(new Set(['gone']), t0), {}, 'an entry untouched for 30 minutes is gone');
+});
+
+test('fresh names: every desk renamed, its id the name lowercased, no repeats, never the founder', () => {
+  const defaults = new Set<string>();
+  for (const template of ['business', 'dev', 'design', 'blank'] as const) {
+    for (const a of seed(template, { empty: true, ownerName: 'Patrick', projectName: 'X' }).agents) defaults.add(a.name);
+  }
+  assert.equal(new Set(DESK_NAMES).size, DESK_NAMES.length, 'no name twice in the list');
+  for (const n of DESK_NAMES) {
+    assert.match(n, /^[A-Z][a-z]+$/, n);
+    assert.ok(!defaults.has(n), `${n} is a template default`);
+  }
+  for (let round = 0; round < 50; round++) {
+    const s = seed('design', { empty: true, ownerName: 'Kai', projectName: 'X', randomNames: true });
+    const desks = s.agents.filter((a) => !a.isHuman);
+    assert.equal(desks.length, 8);
+    assert.equal(new Set(desks.map((a) => a.name)).size, desks.length);
+    for (const a of desks) {
+      assert.ok(DESK_NAMES.includes(a.name), a.name);
+      assert.equal(a.id, a.name.toLowerCase());
+    }
+    assert.ok(!desks.some((a) => a.name === 'Kai'), "never the founder's name");
+    // The roster keeps its shape: roles, lead and keywords stay with the desk.
+    assert.deepEqual(desks.map((a) => a.role), ['Design Lead', 'Product Designer', 'UI Designer', 'Brand Designer', 'UX Researcher', 'Content Designer', 'Motion Designer', 'Design Systems Engineer']);
+    assert.deepEqual(desks.filter((a) => a.lead).map((a) => a.role), ['Design Lead']);
+  }
+});
+
+test('fresh names: names other projects use only once the rest run out', () => {
+  const avoidNames = DESK_NAMES.slice(0, DESK_NAMES.length - 7);
+  for (let round = 0; round < 20; round++) {
+    const s = seed('dev', { empty: true, ownerName: 'Patrick', projectName: 'X', randomNames: true, avoidNames });
+    assert.deepEqual(s.agents.filter((a) => !a.isHuman).map((a) => a.name).sort(), DESK_NAMES.slice(-7).sort());
+  }
+  // Fewer free names than desks: the team still gets one name each, never twice.
+  const tight = seed('business', { empty: true, ownerName: 'Patrick', projectName: 'X', randomNames: true, avoidNames: DESK_NAMES.slice(3) });
+  const names = tight.agents.filter((a) => !a.isHuman).map((a) => a.name);
+  assert.equal(new Set(names).size, 8);
+  for (const n of DESK_NAMES.slice(0, 3)) assert.ok(names.includes(n), `${n} was free, so it is used`);
+});
+
+test('fresh names: an id with an old workspace folder comes last, after names other projects use', () => {
+  // An old desk's folder keeps its ROLE.md and memory.md, so reusing its id would hand them to a new role.
+  const staleIds = DESK_NAMES.slice(0, 50).map((n) => n.toLowerCase());
+  const avoidNames = DESK_NAMES.slice(50, DESK_NAMES.length - 3);
+  for (let round = 0; round < 20; round++) {
+    const s = seed('dev', { empty: true, ownerName: 'Patrick', projectName: 'X', randomNames: true, avoidNames, staleIds });
+    const names = s.agents.filter((a) => !a.isHuman).map((a) => a.name);
+    for (const n of DESK_NAMES.slice(-3)) assert.ok(names.includes(n), `${n} was free`);
+    assert.ok(names.every((n) => !staleIds.includes(n.toLowerCase())), 'a name another project uses beats an old folder');
+  }
+});
+
+test('fresh names: no desk shares any word of the founder\'s name', () => {
+  for (let round = 0; round < 100; round++) {
+    const s = seed('design', { empty: true, ownerName: 'Maya Lopez', projectName: 'X', randomNames: true, avoidNames: DESK_NAMES.filter((n) => n !== 'Maya') });
+    assert.ok(!s.agents.some((a) => !a.isHuman && a.name === 'Maya'));
+  }
+});
+
+test('fresh names: the business demo keeps its names, since its tickets and activity name them', () => {
+  const demo = seed('business', { empty: false, ownerName: 'Patrick', projectName: 'X', randomNames: true });
+  assert.ok(demo.agents.some((a) => a.id === 'paige' && a.name === 'Paige'));
+  const ids = new Set(demo.agents.map((a) => a.id));
+  for (const i of demo.items) assert.ok(ids.has(i.assignee), i.id);
 });
 
 console.log(`\nactivity: ${passed} tests passed`);

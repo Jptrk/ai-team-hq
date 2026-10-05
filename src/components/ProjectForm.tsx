@@ -16,6 +16,7 @@ interface Props {
 const TEAMS: { id: TeamTemplate; title: string; desks: string }[] = [
   { id: 'dev', title: 'Dev team', desks: 'Tech Lead, Frontend, Backend, QA, DevOps, Code Reviewer, Docs' },
   { id: 'business', title: 'Business team', desks: 'COO, EA, Pipeline, Prospecting, Inbound, Automation, Design, HR' },
+  { id: 'design', title: 'Design team', desks: 'Design Lead, Product, UI, Brand, Research, Content, Motion, Design Systems' },
   { id: 'blank', title: 'Blank', desks: 'One generalist. Add your own desks after.' },
 ];
 
@@ -171,7 +172,7 @@ export function ProjectForm({ mode, project, projects, onCancel, onSaved, onArch
         {!editing && (
           <fieldset className="field">
             <legend className="label">Team</legend>
-            <div className="choices">
+            <div className="choices two">
               {TEAMS.map((t) => (
                 <label key={t.id} className={`choice${template === t.id ? ' on' : ''}`}>
                   <input type="radio" name="template" value={t.id} checked={template === t.id} onChange={() => setTemplate(t.id)} />
@@ -180,6 +181,7 @@ export function ProjectForm({ mode, project, projects, onCancel, onSaved, onArch
                 </label>
               ))}
             </div>
+            <p className="field-hint">Every new team gets its own names, different from your other projects.</p>
           </fieldset>
         )}
 

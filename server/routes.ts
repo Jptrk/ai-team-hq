@@ -64,7 +64,7 @@ export const router = Router();
 
 const ITEM_STATUSES: ItemStatus[] = ['todo', 'in-progress', 'needs-you', 'approved', 'held', 'sent-back', 'qa', 'signoff', 'done'];
 const DECISIONS: Decision[] = ['approve', 'hold', 'send-back', 'instruct'];
-const TEMPLATES: TeamTemplate[] = ['business', 'dev', 'blank'];
+const TEMPLATES: TeamTemplate[] = ['business', 'dev', 'design', 'blank'];
 const ACCESS: ProjectAccess[] = ['read', 'write'];
 
 const str = (v: unknown) => (typeof v === 'string' ? v.trim() : '');

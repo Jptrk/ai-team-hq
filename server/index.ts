@@ -42,7 +42,7 @@ if (process.env.NODE_ENV === 'production' && fs.existsSync(dist)) {
 }
 
 const live = isLive();
-initStore({ emptySeed: live });
+initStore({ emptySeed: live, freshNames: true });
 for (const p of allProjects()) {
   const removed = sweepAttachments(p.id, p.state);
   if (removed) console.log(`[hq] ${p.meta.key}: removed ${removed} unused image${removed === 1 ? '' : 's'}`);
