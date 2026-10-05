@@ -20,6 +20,7 @@
     "test:activity": "tsx server/activity.test.ts",
     "test:office": "tsx src/office.test.ts",
     "test:skills": "tsx server/skills.test.ts",
+    "test:settings": "tsx server/settings.test.ts",
     "office:sync": "node scripts/office-sync.mjs"
   },
   "dependencies": {

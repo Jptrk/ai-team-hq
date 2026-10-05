@@ -61,5 +61,5 @@ export function useHqData(pid: string | null) {
     paused.current = on;
   }, []);
 
-  return { meta, projects, state, error, refresh, loadProjects, after, setPollPaused };
+  return { meta, setMeta, projects, state, error, refresh, loadProjects, after, setPollPaused };
 }

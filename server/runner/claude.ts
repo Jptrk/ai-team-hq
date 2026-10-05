@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { z } from 'zod';
-import type { Agent, Attachment, ConnectionMode, ItemKind, ItemStatus, Message, RunReason, Thread, WorkItem } from '../../shared/types';
+import type { Agent, Attachment, ConnectionMode, EffortLevel, ItemKind, ItemStatus, Message, RunReason, Thread, WorkItem } from '../../shared/types';
 import { hasQa, signoffOn } from '../../shared/types';
 import { parseReportUrl } from '../../shared/reportUrl';
 import { attachmentsDir, saveUpload } from '../attachments';
@@ -31,6 +31,7 @@ import { runtimeServers, type AllowedServer } from '../connections';
 import { inputSaysDelete, isDestructiveTool, isReadOnlyTool } from '../mcp';
 import { changedAfterQa, clearSignoff, finishWork, noteChangedFiles, QA_MAX_FIXES, qaDeskOf, recordQaResult, verdictProblem } from '../qa';
 import { claudeEnv, folderExists, HQ_ROOT, instructionsFileIn, isInside } from '../paths';
+import { settings } from '../settings';
 import { argsLine, runSkillScript, scriptReply, SKILL_TIMEOUT_MS } from '../skillRunner';
 import { getSkill, SkillError, skillDir, skillsForDesk } from '../skills';
 import { now, uid, WORKSPACES, type Project } from '../store';
@@ -445,16 +446,21 @@ export interface SessionParts {
   hq: string;
   /** This desk's connections: each one's tools, by name. */
   connections: Pick<AllowedServer, 'key' | 'tools'>[];
+  /** HQ's effort setting, when set. */
+  effort?: EffortLevel;
 }
 
 /**
- * Fingerprint of what Claude caches ahead of a session's messages: model, SDK, system prompt, tools.
+ * Fingerprint of what Claude caches ahead of a session's messages: model, SDK, system prompt, tools, effort.
  * Any of them changing means the next resume is not cached. Exported for tests.
  */
 export function sessionKeyOf(parts: SessionParts, sdk = SDK_VERSION): string {
   const connections = parts.connections.map((c) => `${c.key}: ${Object.keys(c.tools).sort().join(',')}`).sort();
+  const fields: unknown[] = [MODEL, sdk, parts.systemPrompt, Object.keys(parts.servers).sort(), parts.builtins, parts.hq, connections];
+  // Effort goes ahead of the messages too, so changing it re-reads the session. Left out when unset: keys from before the setting still match.
+  if (parts.effort) fields.push(parts.effort);
   return createHash('sha256')
-    .update(JSON.stringify([MODEL, sdk, parts.systemPrompt, Object.keys(parts.servers).sort(), parts.builtins, parts.hq, connections]))
+    .update(JSON.stringify(fields))
     .digest('hex')
     .slice(0, 16);
 }
@@ -479,7 +485,7 @@ export function freshStartReason(
   if (!big) return null;
   const size = agent.sessionTokens !== undefined ? `about ${Math.round(agent.sessionTokens / 1000)}k tokens` : `about $${(agent.sessionTotalUsd ?? 0).toFixed(2)} so far`;
   if (agent.sessionKey === undefined) return `its session predates HQ's cache tracking (${size})`;
-  if (agent.sessionKey !== key) return `its session (${size}) was cached with different instructions or tools`;
+  if (agent.sessionKey !== key) return `its session (${size}) was cached with different instructions, tools or effort`;
   const idleMin = agent.sessionAt ? (nowMs - Date.parse(agent.sessionAt)) / 60_000 : Infinity;
   if (!(idleMin <= limits.cacheMin)) return `its session (${size}) had been idle ${Number.isFinite(idleMin) ? `${Math.round(idleMin)} minutes` : 'too long'}, past the cache`;
   return null;
@@ -760,6 +766,8 @@ interface RunContext {
   scripts?: number;
   /** The current attempt's signal: aborted when the run is cancelled or times out. A running skill script dies with it. */
   signal?: AbortSignal;
+  /** HQ's effort setting, read once as the run starts, so the session key and every attempt use the same level. Unset: the model's default. */
+  effort?: EffortLevel;
 }
 
 /** One change an auto connection made: where, with which tool, and a short hint of what it touched. */
@@ -1585,6 +1593,17 @@ function builtinTools(mode: RunMode): string[] {
   return mode === 'huddle' ? READ_TOOLS : mode === 'qa' ? FILE_TOOLS : [...FILE_TOOLS, ...(WEB ? WEB_TOOLS : [])];
 }
 
+/**
+ * A desk run's environment. The 1-hour prompt cache, which HQ_SESSION_CACHE_MIN assumes: a subscription has it,
+ * and this keeps it for API-key runs and on overage too. With HQ's effort set, CLAUDE_CODE_EFFORT_LEVEL from your
+ * shell or .env is dropped: Claude Code would let it beat --effort. Exported for tests.
+ */
+export function runEnv(effort: EffortLevel | undefined, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env = claudeEnv({ CLAUDE_AGENT_SDK_CLIENT_APP: 'ai-team-hq/0.4.0', ENABLE_PROMPT_CACHING_1H: '1' }, base);
+  if (effort) delete env.CLAUDE_CODE_EFFORT_LEVEL;
+  return env;
+}
+
 async function runOnce(input: RunInput, ctx: RunContext, systemPrompt: string, resume: string | undefined, signal: AbortSignal): Promise<RunOutcome> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), RUN_TIMEOUT_MS);
@@ -1614,10 +1633,11 @@ async function runOnce(input: RunInput, ctx: RunContext, systemPrompt: string, r
     // Message and huddle turns are short by design. A QA check reads code, so it gets a ticket run's room.
     maxTurns: ctx.mode === 'ticket' || ctx.mode === 'qa' ? MAX_TURNS : MSG_MAX_TURNS,
     maxBudgetUsd: ctx.mode === 'ticket' || ctx.mode === 'qa' ? MAX_BUDGET_USD : MSG_MAX_BUDGET_USD,
+    // One level for every kind of run: a desk resumes one session for tickets and chats, and a level that changed between them would re-read it.
+    ...(ctx.effort ? { effort: ctx.effort } : {}),
     abortController: controller,
     resume,
-    // The 1-hour prompt cache, which HQ_SESSION_CACHE_MIN assumes: a subscription has it, and this keeps it for API-key runs and on overage too.
-    env: claudeEnv({ CLAUDE_AGENT_SDK_CLIENT_APP: 'ai-team-hq/0.4.0', ENABLE_PROMPT_CACHING_1H: '1' }),
+    env: runEnv(ctx.effort),
   };
 
   let outcome: RunOutcome | null = null;
@@ -1832,6 +1852,7 @@ export const claudeRunner: AgentRunner = {
       autoChanges: new Map(),
       autoAllowed: [],
       contextTokens: 0,
+      effort: settings().effort,
       // A QA check reads the owner's reports; ticket, message and QA runs read the desk's skills.
       extraRead: [...(mode === 'qa' && input.item ? qaReadRoots(p, input.item) : []), ...skillReadRoots(p, input.agent.id, mode)],
     };
@@ -1842,7 +1863,7 @@ export const claudeRunner: AgentRunner = {
     // Everything cached ahead of the desk's session. The hq tools are built here only to fingerprint them; each attempt builds its own server.
     const key = freshSession
       ? ''
-      : sessionKeyOf({ systemPrompt, servers, builtins: builtinTools(mode), hq: toolsetPrint(hqTools(ctx)), connections: allowed });
+      : sessionKeyOf({ systemPrompt, servers, builtins: builtinTools(mode), hq: toolsetPrint(hqTools(ctx)), connections: allowed, effort: ctx.effort });
     // A cold, big session would be re-read at full price: start fresh instead.
     const cold = freshSession ? null : freshStartReason(input.agent, key, Date.now());
     if (cold) {

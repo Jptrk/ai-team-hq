@@ -774,6 +774,35 @@ mode allows (see Connections).
 
 Edit `workspaces/<project>/<agent>/ROLE.md` to change how a desk behaves. It is read on every run.
 
+### Effort
+
+Effort is how hard Claude works on each turn: how much it thinks, and how many tool calls it makes.
+More effort means slower runs and more usage. Pick it in the header: click the `LIVE` pill, then
+**Effort**. It is one setting for all of HQ, every desk in every project, saved in `data/settings.json`.
+
+| Level | When |
+| ----- | ---- |
+| Model default | What HQ always used: the model picks (`high` on `claude-opus-5`), or `CLAUDE_CODE_EFFORT_LEVEL` when it is set |
+| Low | Fastest, uses the least. Simple chats and drafts |
+| Medium | A balance of speed, cost and quality |
+| High | Hard reasoning and coding |
+| Extra high | Long, demanding coding work |
+| Max | The deepest reasoning; slowest, uses the most |
+
+- **One level for every kind of run.** A desk resumes one conversation for tickets, chats and its
+  other runs. Changing the level between them would make Claude re-read the whole conversation at
+  full price, so there is no separate level per run type.
+- **From the next run.** A run that already started keeps its level.
+- **After a change, long conversations start fresh.** The level is part of what Claude caches ahead
+  of a conversation, so a desk whose conversation is big starts a fresh one on its next run (see
+  [Sessions and the prompt cache](#sessions-and-the-prompt-cache)). A small one just resumes.
+- **The run limits still hold.** Extra high and Max reach `HQ_MSG_MAX_BUDGET_USD` (chat replies),
+  `HQ_MAX_BUDGET_USD` and `HQ_RUN_TIMEOUT_MS` sooner. If runs stop with "Reached maximum budget",
+  raise those or pick a lower level.
+- `xhigh` and `max` need a model that has them; `claude-opus-5` has all five, and Claude Code runs
+  them at `high` on a model without them. A level picked in HQ beats `CLAUDE_CODE_EFFORT_LEVEL`.
+  On a wide window the header pill shows the level when one is set: `LIVE · claude-opus-5 · medium effort`.
+
 ## Env
 
 See `.env.example`. `HQ_RUNNER=sim` forces sim mode even with a key.
@@ -793,7 +822,7 @@ chat reply's whole budget ("Reached maximum budget ($1)").
 - **Cold and big starts fresh.** When a desk's session is big and its cache has likely gone cold,
   the run starts a fresh session instead. Cold means idle longer than `HQ_SESSION_CACHE_MIN`, or
   anything cached ahead of the session changed since: the model, the SDK, the system prompt, HQ's
-  tools or a connection's tools (an HQ update does that). Big means grown more than
+  tools, a connection's tools (an HQ update does that) or the [effort](#effort) level. Big means grown more than
   `HQ_FRESH_SESSION_TOKENS` past the session's base, the size of its first turn (system prompt,
   tools, first prompt), which any fresh session starts with anyway. Sessions from before HQ kept
   the base count their whole size. `memory.md`, reports and the ticket carry what matters, and a
@@ -823,6 +852,7 @@ chat reply's whole budget ("Reached maximum budget ($1)").
 | `data/projects/<id>/attachments/` | Images you pasted, named by the server |
 | `workspaces/<id>/<agent>/` | One desk's `ROLE.md`, `memory.md`, `reports/` |
 | `data/skills/` | The skills library and the installed skills (see [Skills](#skills)) |
+| `data/settings.json` | Settings for all of HQ: the [effort](#effort) level |
 | `data/archive/` | Removed projects |
 | `data/backup/` | The single-project `db.json` from before projects existed |
 
@@ -842,6 +872,7 @@ npm run test:mcp
 npm run test:office
 npm run test:activity
 npm run test:skills
+npm run test:settings
 ```
 
 - **`test:guard`** checks what an agent may read and write in its workspace and the linked folder. It also checks which MCP tools run freely, need approval, or are refused.
@@ -889,6 +920,7 @@ npm run test:skills
   - the Skills section of the system prompt, the read-only fence around skill folders, and the API routes
 
   It fetches nothing: a stand-in builds a local fixture where git would clone.
+- **`test:settings`** checks the effort setting: the five levels, a hand-edited `data/settings.json`, saving and going back to the model default, and the `PATCH /api/settings` route. It writes only in a scratch folder.
 - **`test:attachments`** checks image uploads: type sniffing, file names, picking ids, the startup sweep, and the image blocks sent to desks. It also checks desk images: screenshot capture from connected tools (held in memory, saved only when attached) and attaching image files by path, links included.
 
 To try the UI against a copy of your data, run the API from another folder and point Vite at it.
@@ -913,7 +945,8 @@ Everything project-specific lives under `/api/projects/:pid`.
 
 | Method | Path | Body / query |
 | ------ | ---- | ------------ |
-| GET    | /api/meta | |
+| GET    | /api/meta | includes `effort`: the level every desk run uses, or null for the model default |
+| PATCH  | /api/settings | `{ effort }`: `low`, `medium`, `high`, `xhigh`, `max`, or null for the model default. For all of HQ; answers with the new meta |
 | GET    | /api/fs/check | `?path=<folder>&except=<pid>` |
 | GET    | /api/projects | |
 | POST   | /api/projects | `{ name, key?, path?, access?, template?, signoff? }`; `signoff` defaults to true |

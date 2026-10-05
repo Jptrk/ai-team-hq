@@ -74,7 +74,10 @@ app.listen(PORT, '127.0.0.1', () => {
   console.log(`[hq] ${projects.length} project${projects.length === 1 ? '' : 's'}: ${projects.map((p) => `${p.key} ${p.name}`).join(', ')}`);
   console.log(
     live
-      ? `[hq] runner=claude model=${m.model} auth=${m.auth} (real agents, real spend)`
+      ? `[hq] runner=claude model=${m.model} effort=${m.effort ?? 'model default'} auth=${m.auth} (real agents, real spend)`
       : `[hq] runner=sim (no Claude calls). Go live with HQ_RUNNER=claude in .env${m.auth === 'none' ? ' plus an ANTHROPIC_API_KEY or a Claude Code login' : ''}.`,
   );
+  if (live && !m.effort && process.env.CLAUDE_CODE_EFFORT_LEVEL) {
+    console.warn(`[hq] CLAUDE_CODE_EFFORT_LEVEL=${process.env.CLAUDE_CODE_EFFORT_LEVEL} is set, so desk runs use it while HQ's effort is Model default. A level picked in HQ overrides it.`);
+  }
 });

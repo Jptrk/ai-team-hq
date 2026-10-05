@@ -24,6 +24,7 @@ import {
   retryRefusal,
   runCost,
   SDK_VERSION,
+  runEnv,
   sessionKeyOf,
   targetOf,
   toolsetPrint,
@@ -467,7 +468,7 @@ const result = (id: string, isError: boolean) => ({ type: 'user', message: { con
   extra += cases.length;
   const legacy = freshStartReason({ sessionId: 's', sessionTotalUsd: 16.4 }, 'k1', now, limits);
   const changed = freshStartReason({ sessionId: 's', sessionAt: ago(2), sessionTokens: 120_000, sessionKey: 'k0' }, 'k1', now, limits);
-  const textOk = legacy === "its session predates HQ's cache tracking (about $16.40 so far)" && changed === 'its session (about 120k tokens) was cached with different instructions or tools';
+  const textOk = legacy === "its session predates HQ's cache tracking (about $16.40 so far)" && changed === 'its session (about 120k tokens) was cached with different instructions, tools or effort';
   if (!textOk) failed++;
   console.log(`${textOk ? 'ok  ' : 'FAIL'} session: the log says why: ${legacy} / ${changed}`);
   extra += 1;
@@ -601,16 +602,32 @@ const result = (id: string, isError: boolean) => ({ type: 'user', message: { con
   });
   const base = sessionKeyOf(parts(), '1.0.0');
   const same = sessionKeyOf(parts({ connections: [figma(['get_screenshot', 'get_file'])] }), '1.0.0');
+  // No effort set: the key is the one sessions had before the setting existed, so they keep resuming.
+  const unset = sessionKeyOf(parts({ effort: undefined }), '1.0.0');
   const differs = [
     sessionKeyOf(parts({ hq: hqPrint('Post a one-line status.') }), '1.0.0'),
     sessionKeyOf(parts({ hq: hqPrint(undefined, 300) }), '1.0.0'),
     sessionKeyOf(parts({ connections: [figma(['get_file', 'get_screenshot', 'post_comment'])] }), '1.0.0'),
     sessionKeyOf(parts(), '1.0.1'),
     sessionKeyOf(parts({ builtins: ['Read', 'Write', 'WebSearch'] }), '1.0.0'),
+    sessionKeyOf(parts({ effort: 'low' }), '1.0.0'),
+    sessionKeyOf(parts({ effort: 'max' }), '1.0.0'),
   ];
-  const ok = same === base && differs.every((k) => k !== base) && new Set(differs).size === differs.length && SDK_VERSION !== 'unknown';
+  const ok = same === base && unset === base && differs.every((k) => k !== base) && new Set(differs).size === differs.length && SDK_VERSION !== 'unknown';
   if (!ok) failed++;
-  console.log(`${ok ? 'ok  ' : 'FAIL'} session: the key sees hq tools, connection tools and the SDK (${SDK_VERSION})`);
+  console.log(`${ok ? 'ok  ' : 'FAIL'} session: the key sees hq tools, connection tools, effort and the SDK (${SDK_VERSION})`);
+  extra += 1;
+}
+
+// ---------- HQ's effort wins over CLAUDE_CODE_EFFORT_LEVEL ----------
+{
+  const base = { PATH: 'x', CLAUDE_CODE_EFFORT_LEVEL: 'medium' };
+  const set = runEnv('max', base);
+  const unset = runEnv(undefined, base);
+  const ok =
+    set.CLAUDE_CODE_EFFORT_LEVEL === undefined && unset.CLAUDE_CODE_EFFORT_LEVEL === 'medium' && set.ENABLE_PROMPT_CACHING_1H === '1' && set.PATH === 'x' && base.CLAUDE_CODE_EFFORT_LEVEL === 'medium';
+  if (!ok) failed++;
+  console.log(`${ok ? 'ok  ' : 'FAIL'} env: a level picked in HQ drops CLAUDE_CODE_EFFORT_LEVEL; Model default leaves it`);
   extra += 1;
 }
 

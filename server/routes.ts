@@ -1,7 +1,7 @@
 import express, { Router, type Response } from 'express';
 import fs from 'node:fs';
-import type { Attachment, Decision, ItemStatus, ProjectAccess, ProjectMeta, ProjectSummary, ReportInfo, StateResponse, TeamTemplate, ThreadResponse, WorkItem } from '../shared/types';
-import { canEditDescription, hasQa, MAX_ATTACHMENTS, MAX_DESCRIPTION, signoffOn } from '../shared/types';
+import type { Attachment, Decision, EffortLevel, ItemStatus, ProjectAccess, ProjectMeta, ProjectSummary, ReportInfo, StateResponse, TeamTemplate, ThreadResponse, WorkItem } from '../shared/types';
+import { canEditDescription, EFFORT_LEVELS, hasQa, isEffortLevel, MAX_ATTACHMENTS, MAX_DESCRIPTION, signoffOn } from '../shared/types';
 import { acceptInstruction, addAgent, parseSkills, refreshStatuses, removeAgent, settleInstructions } from './agents';
 import { AttachmentError, pickAttachments, resolveAttachment, saveUpload } from './attachments';
 import {
@@ -41,6 +41,7 @@ import { resumeHuddleRun, startHuddle, stopHuddleRun } from './huddles';
 import { checkFolder, folderExists, KEY_PATTERN, suggestKey } from './paths';
 import { backToWork, closesOnApprove, moveByHand, qaDeskOf, rerouteAllQa, setQaDesk } from './qa';
 import { resolveReport } from './runner/claude';
+import { setEffort } from './settings';
 import { cancelPreview, installSkills, listLibrary, previewSkills, projectSkills, removeSkill, setScriptsAllowed, setSkillDesks, SkillError } from './skills';
 import { officeState } from './office';
 import { cancelRun, deliver, isLive, kickoff, meta } from './runner';
@@ -141,6 +142,28 @@ export function readProjectPatch(body: Record<string, unknown>, exceptId?: strin
 // ---------- global ----------
 
 router.get('/meta', (_req, res) => {
+  res.json({ ...meta(), owner: ownerName() });
+});
+
+/** The settings body: `effort` is a level, or null for the model's default. Exported for tests. */
+export function readSettingsPatch(body: Record<string, unknown>): { effort?: EffortLevel | null; error?: string } {
+  if (!('effort' in body)) return { error: 'Nothing to change' };
+  const effort = body.effort;
+  if (effort === null || isEffortLevel(effort)) return { effort };
+  return { error: `effort must be ${EFFORT_LEVELS.slice(0, -1).join(', ')} or ${EFFORT_LEVELS.at(-1)}, or null` };
+}
+
+/** Settings for all of HQ, every project. Answers with the new meta. */
+router.patch('/settings', jsonOnly, (req, res) => {
+  const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? (req.body as Record<string, unknown>) : {};
+  const { effort, error } = readSettingsPatch(body);
+  if (error) return res.status(400).json({ error });
+  try {
+    setEffort(effort ?? null);
+  } catch (e) {
+    console.error('[hq] settings:', e instanceof Error ? e.message : 'error');
+    return res.status(500).json({ error: 'Could not save the setting.' });
+  }
   res.json({ ...meta(), owner: ownerName() });
 });
 

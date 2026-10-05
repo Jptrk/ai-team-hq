@@ -44,7 +44,7 @@ const VIEW_TITLE: Record<ViewId, string> = { 'needs-you': 'Needs you', chat: 'Ch
 export function App() {
   const [route, navigate] = useHashRoute();
   const pid = route.kind === 'project' || route.kind === 'settings' || route.kind === 'connections' || route.kind === 'skills' ? route.pid : null;
-  const { meta, projects, state, error, after, loadProjects, setPollPaused } = useHqData(pid);
+  const { meta, setMeta, projects, state, error, after, loadProjects, setPollPaused } = useHqData(pid);
   const { theme, pref, setPref, toggle } = useTheme();
   const { flags, notify, dismiss } = useFlags();
   const searchRef = useRef<SearchHandle>(null);
@@ -515,6 +515,7 @@ export function App() {
         <TopBar
           ref={searchRef}
           meta={meta}
+          onMeta={setMeta}
           ownerName={owner?.name ?? 'You'}
           ownerColor={owner?.color}
           items={state?.items ?? null}

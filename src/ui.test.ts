@@ -19,7 +19,7 @@ import { fitWithin, imageFiles } from './lib/images';
 import { cleanMarkdown, escapeTypedText, looksLikeDiffOrTerminal, looksLikeMarkdown, needsPlainEditor } from './lib/markdownPaste';
 import { attachmentUrl, isAttachmentUrl, isReportUrl, reportFileName, resolveReportHref } from './markdown/reportLinks';
 import { parseRoute, projectPath } from './route';
-import { awaitsSignoff, latestDecision, readableInk, signoffVerdict, waitingSummary, waitingTitle } from './util';
+import { awaitsSignoff, latestDecision, readableInk, effortLabel, runnerLabel, signoffVerdict, waitingSummary, waitingTitle } from './util';
 import { MCP_PRESETS, presetArgs, presetDefaults } from '../shared/mcpPresets';
 import { buildSpec, safeAuthUrl } from '../shared/mcpSpec';
 import type { ConnectionRow, SkillMeta } from '../shared/types';
@@ -643,6 +643,14 @@ test('skill groups: which are open, saved per browser', () => {
   assert.deepEqual([...withOpen(new Set(['a/one', 'gone/repo']), keys, 'b/two', true)].sort(), ['a/one', 'b/two']);
   // An install from a second repo starts from what was showing (the lone group, open by default), so it stays open.
   assert.deepEqual([...withOpen(openKeys(null, ['a/one']), keys, 'b/two', true)].sort(), ['a/one', 'b/two']);
+});
+
+test('header pill: sim, live with the model, and the effort only when set', () => {
+  assert.equal(runnerLabel({ runner: 'sim', model: 'claude-opus-5' }), 'Sim');
+  assert.equal(runnerLabel({ runner: 'claude', model: 'claude-opus-5' }), 'Live · claude-opus-5');
+  assert.equal(effortLabel({ runner: 'sim', effort: 'high' }), '');
+  assert.equal(effortLabel({ runner: 'claude', effort: null }), '');
+  assert.equal(effortLabel({ runner: 'claude', effort: 'xhigh' }), ' · extra high effort');
 });
 
 console.log(`ui: ${passed} tests passed`);

@@ -8,6 +8,7 @@ import type {
   ConnectionsResponse,
   McpSource,
   Decision,
+  EffortLevel,
   Huddle,
   HuddleKind,
   HuddleProposal,
@@ -72,6 +73,8 @@ export interface AgentBody {
 
 export const api = {
   meta: () => request<Meta & { owner: string }>('/api/meta'),
+  /** Settings for all of HQ. Answers with the new meta. */
+  setSettings: (body: { effort: EffortLevel | null }) => request<Meta & { owner: string }>('/api/settings', json('PATCH', body)),
   projects: () => request<ProjectSummary[]>('/api/projects'),
   createProject: (body: ProjectBody) => request<ProjectSummary>('/api/projects', json('POST', body)),
   updateProject: (pid: string, body: ProjectBody) => request<ProjectSummary>(pp(pid), json('PATCH', body)),

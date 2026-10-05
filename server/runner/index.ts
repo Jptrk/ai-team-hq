@@ -8,6 +8,7 @@ import { rewindCursor } from '../cursor';
 import { unansweredImages } from '../comments';
 import { claudeConfigDir } from '../mcpCli';
 import { clearSignoff, qaDeskOf, queuedQaRun, rerouteQa } from '../qa';
+import { settings } from '../settings';
 import { now, uid, type Project } from '../store';
 import { claudeRunner, MODEL, runCost } from './claude';
 import { enqueue } from './queue';
@@ -64,7 +65,7 @@ export function isLive(): boolean {
 }
 
 export function meta(): Meta {
-  return { runner: runnerName(), model: MODEL, liveReady: authSource() !== 'none', auth: authSource() };
+  return { runner: runnerName(), model: MODEL, effort: settings().effort ?? null, liveReady: authSource() !== 'none', auth: authSource() };
 }
 
 const controllers = new Map<string, AbortController>();

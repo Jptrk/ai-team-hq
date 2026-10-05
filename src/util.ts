@@ -1,4 +1,16 @@
-import type { Agent, AgentStatus, Comment, ItemStatus, WorkItem } from '../shared/types';
+import type { Agent, AgentStatus, Comment, EffortLevel, ItemStatus, Meta, WorkItem } from '../shared/types';
+
+export const EFFORT_LABEL: Record<EffortLevel, string> = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Max' };
+
+/** The header pill: Sim, or Live with the model. */
+export function runnerLabel(meta: Pick<Meta, 'runner' | 'model'>): string {
+  return meta.runner === 'claude' ? `Live · ${meta.model}` : 'Sim';
+}
+
+/** The pill's effort part, live with a level set; wide windows only. */
+export function effortLabel(meta: Pick<Meta, 'runner' | 'effort'>): string {
+  return meta.runner === 'claude' && meta.effort ? ` · ${EFFORT_LABEL[meta.effort].toLowerCase()} effort` : '';
+}
 
 export function agentById(agents: Agent[], id: string): Agent | undefined {
   return agents.find((a) => a.id === id);

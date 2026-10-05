@@ -566,10 +566,17 @@ export interface PathCheck {
 
 export type RunnerName = 'claude' | 'sim';
 
+/** How hard Claude works on each desk turn, lowest first: more effort means more thinking and more usage. The Agent SDK's levels. */
+export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+export type EffortLevel = (typeof EFFORT_LEVELS)[number];
+export const isEffortLevel = (v: unknown): v is EffortLevel => typeof v === 'string' && (EFFORT_LEVELS as readonly string[]).includes(v);
+
 /** Server-side facts the UI needs that are not persisted. */
 export interface Meta {
   runner: RunnerName;
   model: string;
+  /** The effort every desk run uses, one setting for all of HQ. Null: the model's own default. */
+  effort: EffortLevel | null;
   /** True when some credential exists, so live mode can actually run. */
   liveReady: boolean;
   /** Which credential the Agent SDK will use. */

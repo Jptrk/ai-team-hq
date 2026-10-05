@@ -5,7 +5,16 @@ import { useLayer } from './useLayer';
 export function usePopover<T extends HTMLElement = HTMLDivElement>() {
   const [open, setOpen] = useState(false);
   const ref = useRef<T>(null);
-  useLayer(open, () => setOpen(false), { blurFirst: false });
+  useLayer(
+    open,
+    () => {
+      // Esc from inside: back to the button that opened it (the anchor's first), not the page.
+      const inside = Boolean(ref.current?.contains(document.activeElement));
+      setOpen(false);
+      if (inside) ref.current?.querySelector<HTMLElement>('button')?.focus();
+    },
+    { blurFirst: false },
+  );
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
