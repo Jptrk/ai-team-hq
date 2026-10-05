@@ -135,6 +135,9 @@ export const api = {
   /** The library, and which desks have each skill in this project. */
   projectSkills: (pid: string) => request<ProjectSkillsResponse>(`${pp(pid)}/skills`),
   setSkillDesks: (pid: string, id: string, desks: string[]) => request<ProjectSkillsResponse>(`${pp(pid)}/skills/${encodeURIComponent(id)}`, json('PUT', { desks })),
+  /** Adds desks to, or takes them off, several skills at once. Each skill keeps its other desks. */
+  changeSkillDesks: (pid: string, skills: string[], change: { add?: string[]; remove?: string[] }) =>
+    request<ProjectSkillsResponse>(`${pp(pid)}/skills`, json('PATCH', { skills, ...change })),
 
   huddle: (pid: string, hid: string) => request<Huddle>(`${pp(pid)}/huddles/${encodeURIComponent(hid)}`),
   startHuddle: (pid: string, body: HuddleBody) => request<Huddle>(`${pp(pid)}/huddles`, json('POST', body)),

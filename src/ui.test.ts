@@ -24,7 +24,7 @@ import { MCP_PRESETS, presetArgs, presetDefaults } from '../shared/mcpPresets';
 import { buildSpec, safeAuthUrl } from '../shared/mcpSpec';
 import type { ConnectionRow, SkillMeta } from '../shared/types';
 import { alreadySetUp, blankRow, CUSTOM, hostOf, initialForm, presetCards, signInButtons, splitArgs, timeLeft, toRequest } from './components/connections/addForm';
-import { folderUrl, groupByRepo, newFetchToken, openKeys, parseOpenGroups, pickedAtFirst, plural, repoParts, repoUrl, sizeLabel, sourceLabel, withOpen } from './components/skills/skillInfo';
+import { deskCoverage, folderUrl, groupByRepo, newFetchToken, openKeys, parseOpenGroups, pickedAtFirst, plural, repoParts, repoUrl, sizeLabel, sourceLabel, withOpen } from './components/skills/skillInfo';
 
 let passed = 0;
 function test(name: string, fn: () => void) {
@@ -625,6 +625,17 @@ test('skills group by the repo they came from', () => {
   assert.deepEqual(repoParts('nextlevelbuilder/ui-ux-pro-max-skill'), { owner: 'nextlevelbuilder', name: 'ui-ux-pro-max-skill' });
   assert.deepEqual(repoParts('loose'), { owner: '', name: 'loose' });
   assert.equal(groups[1].repo, 'nextlevelbuilder/ui-ux-pro-max-skill', 'keeps the casing it first saw');
+});
+
+test('skills on desks: all, some or none of these skills on these desks', () => {
+  const map = { a: ['leo', 'sam'], b: ['leo'] };
+  assert.equal(deskCoverage(['a'], map, ['leo', 'sam']), 'all');
+  assert.equal(deskCoverage(['a', 'b'], map, ['leo']), 'all', 'one desk with both');
+  assert.equal(deskCoverage(['a', 'b'], map, ['leo', 'sam']), 'some');
+  assert.equal(deskCoverage(['b'], map, ['sam']), 'none');
+  assert.equal(deskCoverage(['c'], map, ['leo']), 'none', 'a skill on no desk');
+  assert.equal(deskCoverage([], map, ['leo']), 'none');
+  assert.equal(deskCoverage(['a'], map, []), 'none', 'no desks to have it');
 });
 
 test('skill groups: which are open, saved per browser', () => {

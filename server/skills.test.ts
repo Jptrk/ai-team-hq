@@ -816,6 +816,40 @@ test('desks: only real desks of this project, in team order; none turns it off; 
   assert.deepEqual(migrated.skillDesks, {}, 'older projects start with none');
 });
 
+test('desks at once: add and remove keep each skill\'s other desks, every desk, and an unknown skill changes nothing', () => {
+  const real = p.state.agents.filter((a) => !a.isHuman).map((a) => a.id);
+  assert.ok(real.length > 2 && real.includes('leo') && real.includes('ivy'));
+  skills.setSkillDesks(p, 'brand-kit', ['ivy']);
+  skills.setSkillDesks(p, 'ui-ux-pro-max', []);
+  // Leo for both: Brand Kit keeps Ivy, in team order. The founder, unknown desks and repeats drop out.
+  assert.deepEqual(skills.changeSkillDesks(p, ['brand-kit', 'ui-ux-pro-max', 'brand-kit'], ['leo', 'you', 'ghost'], []), ['brand-kit', 'ui-ux-pro-max']);
+  assert.deepEqual(p.state.skillDesks['brand-kit'], ['leo', 'ivy']);
+  assert.deepEqual(p.state.skillDesks['ui-ux-pro-max'], ['leo']);
+  assert.match(p.state.activity[0].text, /Skills Brand Kit, ui-ux-pro-max on for Leo$/);
+
+  const last = p.state.activity[0];
+  assert.deepEqual(skills.changeSkillDesks(p, ['brand-kit'], ['leo'], []), [], 'Leo has it already');
+  assert.equal(p.state.activity[0], last, 'no line when nothing changed');
+
+  skills.changeSkillDesks(p, ['brand-kit', 'ui-ux-pro-max'], real, []);
+  for (const id of ['brand-kit', 'ui-ux-pro-max']) assert.deepEqual(p.state.skillDesks[id], real);
+  assert.match(p.state.activity[0].text, /Skills Brand Kit, ui-ux-pro-max on for every desk/);
+
+  // A desk in both lists comes off.
+  assert.deepEqual(skills.changeSkillDesks(p, ['brand-kit'], ['ivy'], ['ivy']), ['brand-kit']);
+  assert.equal(p.state.skillDesks['brand-kit'].includes('ivy'), false);
+  assert.match(p.state.activity[0].text, /Skill Brand Kit off for Ivy$/);
+
+  skills.changeSkillDesks(p, ['brand-kit', 'ui-ux-pro-max'], [], real);
+  assert.equal('brand-kit' in p.state.skillDesks, false, 'off for every desk removes the key');
+  assert.equal('ui-ux-pro-max' in p.state.skillDesks, false);
+  assert.match(p.state.activity[0].text, /off for every desk/);
+
+  assert.throws(() => skills.changeSkillDesks(p, ['brand-kit', 'ghost'], ['leo'], []), (e) => status(e) === 404);
+  assert.equal('brand-kit' in p.state.skillDesks, false, 'nothing changed');
+  skills.setSkillDesks(p, 'ui-ux-pro-max', ['leo']);
+});
+
 test('desks: saved desks are cleaned at load, skills gone from the library drop out at start', () => {
   const raw = JSON.parse(JSON.stringify(p.state)) as typeof p.state;
   raw.skillDesks = JSON.parse('{"ui-ux-pro-max":["leo","you","ghost","leo",7],"brand-kit":"leo","Bad_ID":["leo"],"__proto__":["leo"],"empty":[],"nora-only":["nora"]}');
@@ -1125,6 +1159,16 @@ test('routes: library, preview, install, scripts, remove, and desks per project'
   assert.equal(put.status, 200);
   assert.deepEqual((put.body as { desks: Record<string, string[]> }).desks['brand-kit-2'], ['leo']);
   assert.equal((await api('PUT', `/projects/${p.id}/skills/ghost`, { desks: ['leo'] })).status, 404);
+  const many = (body: unknown) => api('PATCH', `/projects/${p.id}/skills`, body);
+  assert.equal((await many({ skills: ['brand-kit-2'] })).status, 400, 'no desks to add or remove');
+  assert.equal((await many({ skills: [], add: ['ivy'] })).status, 400);
+  assert.equal((await many({ skills: ['brand-kit-2'], add: 'ivy' })).status, 400);
+  assert.equal((await many({ skills: ['brand-kit-2', 'ghost'], add: ['ivy'] })).status, 404);
+  const added = await many({ skills: ['brand-kit-2'], add: ['ivy'] });
+  assert.equal(added.status, 200);
+  assert.deepEqual((added.body as { desks: Record<string, string[]> }).desks['brand-kit-2'], ['leo', 'ivy'], 'keeps Leo');
+  const dropped = await many({ skills: ['brand-kit-2'], remove: ['ivy'] });
+  assert.deepEqual((dropped.body as { desks: Record<string, string[]> }).desks['brand-kit-2'], ['leo']);
   const got = await api('GET', `/projects/${p.id}/skills`);
   assert.deepEqual((got.body as { desks: Record<string, string[]> }).desks['brand-kit-2'], ['leo']);
   assert.equal((await api('DELETE', '/skills/ghost')).status, 404);

@@ -42,7 +42,7 @@ import { checkFolder, folderExists, KEY_PATTERN, suggestKey } from './paths';
 import { backToWork, closesOnApprove, moveByHand, qaDeskOf, rerouteAllQa, setQaDesk } from './qa';
 import { resolveReport } from './runner/claude';
 import { setEffort } from './settings';
-import { cancelPreview, installSkills, listLibrary, previewSkills, projectSkills, removeSkill, setScriptsAllowed, setSkillDesks, SkillError } from './skills';
+import { cancelPreview, changeSkillDesks, installSkills, listLibrary, previewSkills, projectSkills, removeSkill, setScriptsAllowed, setSkillDesks, SkillError } from './skills';
 import { officeState } from './office';
 import { cancelRun, deliver, isLive, kickoff, meta } from './runner';
 import {
@@ -892,6 +892,25 @@ project.put('/skills/:id', jsonOnly, (req, res) => {
     res.json(projectSkills(p));
   } catch (e) {
     skillFailed(res, e, 'Could not change that skill');
+  }
+});
+
+/** Give several skills to desks, or take them off, keeping each skill's other desks: "All desks", or a whole repo. */
+project.patch('/skills', jsonOnly, (req, res) => {
+  const p = P(res);
+  const body = (req.body ?? {}) as { skills?: unknown; add?: unknown; remove?: unknown };
+  const list = (v: unknown, max: number) => (Array.isArray(v) && v.length <= max && v.every((d) => typeof d === 'string') ? (v as string[]) : null);
+  const ids = list(body.skills, 500);
+  const add = body.add === undefined ? [] : list(body.add, 50);
+  const remove = body.remove === undefined ? [] : list(body.remove, 50);
+  if (!ids?.length || !add || !remove || !(add.length + remove.length)) {
+    return res.status(400).json({ error: 'Send skills, and the desks to add or remove' });
+  }
+  try {
+    changeSkillDesks(p, ids, add, remove);
+    res.json(projectSkills(p));
+  } catch (e) {
+    skillFailed(res, e, 'Could not change those skills');
   }
 });
 

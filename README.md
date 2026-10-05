@@ -426,6 +426,13 @@ same format Claude Code uses, so repos of Claude Code skills work, for example
   Connections in the sidebar), and every project sees it.
 - **Turned on per desk, in each project.** Each skill on the Skills page has this project's desks as chips. A
   new skill is on no desk. A desk that leaves the team drops out of its skills.
+  - **All desks** (first chip, with two or more desks) turns a skill on for every desk in the project, or off
+    again when they all have it. It is dashed while only some desks have it.
+  - **A whole repo at once.** An open group of two or more skills has a switch, **All skills here, every desk**,
+    and (with two or more desks) a row of desk chips, **Give every skill here to**, to give one desk every skill
+    in the repo. The switch sits halfway, and a chip is dashed, when only some are on. Each click is one change
+    and one line in the activity feed, naming the skills that changed.
+  - "Every desk" means the desks on the team now. A desk added later gets nothing until you turn skills on for it.
 - **Installing from GitHub.** **Install a skill**, paste a link, **Find skills**. HQ fetches the repo and lists
   every `SKILL.md` in it, with its description, files, size and the scripts it could run. Tick the ones you
   want, then **Install**. Nothing is installed before that. **Cancel** throws the fetched copy away, and while
@@ -985,6 +992,7 @@ Everything project-specific lives under `/api/projects/:pid`.
 | DELETE | /api/skills/:id | deletes it from HQ and from every project's desks |
 | GET    | /api/projects/:pid/skills | `{ library, desks }`: which desks have each skill here |
 | PUT    | /api/projects/:pid/skills/:id | `{ desks }`; an empty list turns it off in this project |
+| PATCH  | /api/projects/:pid/skills | `{ skills, add?, remove? }`: adds desks to, or takes them off, several skills; each keeps its other desks |
 | GET    | /api/projects/:pid/threads/:tid | thread + messages; marks read |
 | POST   | /api/projects/:pid/threads | `{ text, title?, itemId?, attachments? }` |
 | POST   | /api/projects/:pid/threads/:tid/messages | `{ text, attachments? }` |

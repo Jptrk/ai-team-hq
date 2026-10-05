@@ -1,5 +1,5 @@
-import { ChevronRight, Plus, Sparkles } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { ChevronRight, Plus, Sparkles, Users } from 'lucide-react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import type { Agent, ProjectSkillsResponse, SkillMeta } from '../../shared/types';
 import { api } from '../api';
 import type { Notify } from '../hooks/useFlags';
@@ -7,7 +7,7 @@ import { KEYS, storage } from '../lib/storage';
 import { ConfirmInline } from '../ui/ConfirmInline';
 import { timeAgo } from '../util';
 import { InstallSkillModal } from './skills/InstallSkillModal';
-import { folderUrl, groupByRepo, openKeys, parseOpenGroups, plural, repoParts, repoUrl, sizeLabel, sourceLabel, withOpen } from './skills/skillInfo';
+import { deskCoverage, folderUrl, groupByRepo, openKeys, parseOpenGroups, plural, repoParts, repoUrl, sizeLabel, sourceLabel, withOpen, type Coverage, type SkillGroup } from './skills/skillInfo';
 
 interface Props {
   pid: string;
@@ -17,6 +17,10 @@ interface Props {
 }
 
 const msg = (e: unknown, fallback: string) => (e instanceof Error ? e.message : fallback);
+
+// A chip that covers several skills or desks: pressed when all are on, mixed (dashed) when only some are.
+const pressed = (c: Coverage) => (c === 'all' ? true : c === 'some' ? 'mixed' : false);
+const chipClass = (c: Coverage) => `mention-chip${c === 'all' ? ' on' : c === 'some' ? ' some' : ''}`;
 
 // A second click on Remove counts for this long.
 const REMOVE_ARMED_MS = 5_000;
@@ -43,7 +47,12 @@ export function SkillsPanel({ pid, agents, ownerName, notify }: Props) {
   };
   // Bumped whenever an action starts or ends: a load that began before then is older than what's shown.
   const version = useRef(0);
+  // Actions on their way. When two overlap their answers can land out of order, so the last to finish loads again.
+  const inFlight = useRef(0);
+  const overlapped = useRef(false);
+  const uid = useId();
   const desks = agents.filter((a) => !a.isHuman);
+  const deskIds = desks.map((a) => a.id);
 
   const load = useCallback(async () => {
     const v = ++version.current;
@@ -78,21 +87,24 @@ export function SkillsPanel({ pid, agents, ownerName, notify }: Props) {
     return () => window.clearTimeout(t);
   }, [confirmRemove]);
 
-  const markBusy = (id: string, on: boolean) =>
+  const markBusy = (ids: readonly string[], on: boolean) =>
     setBusy((b) => {
       const next = new Set(b);
-      if (on) next.add(id);
-      else next.delete(id);
+      for (const id of ids) {
+        if (on) next.add(id);
+        else next.delete(id);
+      }
       return next;
     });
 
-  /** Run one skill's action; an error goes in the banner. */
-  const act = async (skill: SkillMeta, run: () => Promise<ProjectSkillsResponse>, done?: () => void) => {
-    markBusy(skill.id, true);
+  /** Run an action on these skills; an error goes in the banner. */
+  const act = async (ids: readonly string[], run: () => Promise<ProjectSkillsResponse>, done?: () => void) => {
+    markBusy(ids, true);
     setError(null);
     setConfirmRemove(null);
-    setConfirmScripts((c) => (c === skill.id ? null : c));
+    setConfirmScripts((c) => (c && ids.includes(c) ? null : c));
     version.current++;
+    if (inFlight.current++ > 0) overlapped.current = true;
     try {
       const res = await run();
       version.current++;
@@ -101,13 +113,23 @@ export function SkillsPanel({ pid, agents, ownerName, notify }: Props) {
     } catch (e) {
       setError(msg(e, 'That did not work'));
     } finally {
-      markBusy(skill.id, false);
+      markBusy(ids, false);
+      if (--inFlight.current === 0 && overlapped.current) {
+        overlapped.current = false;
+        void load();
+      }
     }
   };
 
   const toggleDesk = (skill: SkillMeta, id: string) => {
     const on = data?.desks[skill.id] ?? [];
-    void act(skill, () => api.setSkillDesks(pid, skill.id, on.includes(id) ? on.filter((d) => d !== id) : [...on, id]));
+    void act([skill.id], () => api.setSkillDesks(pid, skill.id, on.includes(id) ? on.filter((d) => d !== id) : [...on, id]));
+  };
+
+  /** Give these skills to these desks, or take them off, in one go. `said` is the toast, if any. */
+  const changeDesks = (skills: readonly SkillMeta[], deskList: string[], on: boolean, said?: string) => {
+    const ids = skills.map((s) => s.id);
+    void act(ids, () => api.changeSkillDesks(pid, ids, on ? { add: deskList } : { remove: deskList }), said ? () => notify(said, { tone: 'success' }) : undefined);
   };
 
   const setScripts = (skill: SkillMeta, allowed: boolean, confirmed = false) => {
@@ -118,7 +140,7 @@ export function SkillsPanel({ pid, agents, ownerName, notify }: Props) {
     }
     setConfirmScripts(null);
     void act(
-      skill,
+      [skill.id],
       async () => {
         await api.updateSkill(skill.id, { scriptsAllowed: allowed });
         return api.projectSkills(pid);
@@ -133,7 +155,7 @@ export function SkillsPanel({ pid, agents, ownerName, notify }: Props) {
       return;
     }
     void act(
-      skill,
+      [skill.id],
       async () => {
         await api.removeSkill(skill.id);
         return api.projectSkills(pid);
@@ -172,6 +194,8 @@ export function SkillsPanel({ pid, agents, ownerName, notify }: Props) {
 
   const renderSkill = (skill: SkillMeta) => {
     const on = data?.desks[skill.id] ?? [];
+    const everyDesk = deskCoverage([skill.id], data?.desks ?? {}, deskIds);
+    const allOn = everyDesk === 'all';
     const isBusy = busy.has(skill.id);
     const confirming = confirmRemove === skill.id;
     const link = folderUrl(skill.source);
@@ -234,8 +258,23 @@ export function SkillsPanel({ pid, agents, ownerName, notify }: Props) {
         )}
 
         <div className="conn-desks">
-          <span className="label">Desks in this project</span>
-          <div className="chips">
+          <span className="label" id={`${uid}-desks-${skill.id}`}>
+            Desks in this project
+          </span>
+          <div className="chips" role="group" aria-labelledby={`${uid}-desks-${skill.id}`}>
+            {desks.length > 1 && (
+              <button
+                type="button"
+                className={`${chipClass(everyDesk)} all-desks`}
+                aria-pressed={pressed(everyDesk)}
+                title={allOn ? 'Turn it off for every desk' : 'Turn it on for every desk'}
+                disabled={isBusy}
+                onClick={() => changeDesks([skill], deskIds, !allOn)}
+              >
+                <Users size={12} aria-hidden />
+                All desks
+              </button>
+            )}
             {desks.map((a) => {
               const picked = on.includes(a.id);
               return (
@@ -270,6 +309,79 @@ export function SkillsPanel({ pid, agents, ownerName, notify }: Props) {
         </div>
         {confirming && <p className="field-hint conn-remove-note">Removes it from HQ: every project and every desk loses it.</p>}
       </li>
+    );
+  };
+
+  /** A repo's switch for all its skills on every desk, and chips to give one desk all of them. */
+  const renderGroupDesks = (g: SkillGroup) => {
+    const n = g.skills.length;
+    if (!data || !desks.length || n < 2) return null;
+    const ids = g.skills.map((s) => s.id);
+    const cover = deskCoverage(ids, data.desks, deskIds);
+    const everywhere = ids.filter((id) => deskCoverage([id], data.desks, deskIds) === 'all').length;
+    const groupBusy = ids.some((id) => busy.has(id));
+    const scripted = g.skills.filter((s) => s.scriptsAllowed).length;
+    const { name } = repoParts(g.repo);
+    // Says where things end up: "every skill" is right even when some already were.
+    const turn = (deskList: string[], on: boolean, who: string) =>
+      changeDesks(g.skills, deskList, on, `Every skill from ${name} is ${on ? 'on' : 'off'} for ${who}`);
+    const hintId = `${uid}-cover-${g.key}`;
+    const chipsId = `${uid}-give-${g.key}`;
+    return (
+      <div className="skill-group-desks">
+        <label className="skill-allow">
+          <span className="switch">
+            <input
+              type="checkbox"
+              checked={cover === 'all'}
+              ref={(el) => {
+                // Some on, some off: the switch shows halfway, and reads as mixed.
+                if (el) el.indeterminate = cover === 'some';
+              }}
+              aria-describedby={hintId}
+              disabled={groupBusy}
+              onChange={() => turn(deskIds, cover !== 'all', 'every desk')}
+            />
+            <span className="switch-track" aria-hidden />
+          </span>
+          All skills here, every desk
+        </label>
+        <span className="field-hint" id={hintId}>
+          {everywhere} of {n} on for every desk
+        </span>
+        {desks.length > 1 && (
+          <div className="conn-desks">
+            <span className="label" id={chipsId}>
+              Give every skill here to
+            </span>
+            <div className="chips" role="group" aria-labelledby={chipsId}>
+              {desks.map((a) => {
+                const c = deskCoverage(ids, data.desks, [a.id]);
+                return (
+                  <button
+                    key={a.id}
+                    type="button"
+                    className={chipClass(c)}
+                    aria-pressed={pressed(c)}
+                    title={c === 'all' ? `Take all ${n} off ${a.name}` : `Give ${a.name} all ${n}`}
+                    disabled={groupBusy}
+                    onClick={() => turn([a.id], c !== 'all', a.name)}
+                  >
+                    <span className="dot" style={{ background: a.color }} />
+                    {a.name}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+        {scripted > 0 && (
+          <p className="field-hint skill-warn">
+            <span className="warn">{scripted === 1 ? '1 skill here has' : `${scripted} skills here have`} scripts allowed:</span> every desk you turn{' '}
+            {scripted === 1 ? 'it' : 'them'} on for can run {scripted === 1 ? 'its' : 'their'} scripts on this PC, as you. They are not sandboxed.
+          </p>
+        )}
+      </div>
     );
   };
 
@@ -351,6 +463,7 @@ export function SkillsPanel({ pid, agents, ownerName, notify }: Props) {
                         </a>
                       </p>
                     )}
+                    {renderGroupDesks(g)}
                     <ul className="skill-list">{g.skills.map(renderSkill)}</ul>
                   </div>
                 </details>

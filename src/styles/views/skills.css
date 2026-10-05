@@ -73,6 +73,38 @@
     padding: 8px 16px 0;
     font-size: var(--fs-sm);
   }
+  /* A repo's switch for every desk, and its chips for one desk at a time. */
+  .skill-group-desks {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 16px;
+    min-width: 0;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .skill-group-desks .conn-desks,
+  .skill-group-desks .skill-warn {
+    flex-basis: 100%;
+    margin: 0;
+  }
+  /* Some of its skills on, some off: the knob sits halfway. */
+  .skill-group-desks .switch input:indeterminate + .switch-track {
+    background: var(--success-bold);
+    opacity: 0.55;
+  }
+  .skill-group-desks .switch input:indeterminate + .switch-track::after {
+    transform: translateX(8px);
+  }
+  /* A desk with some of a repo's skills, not all. */
+  .mention-chip.some {
+    border-style: dashed;
+    border-color: var(--text-subtle);
+    color: var(--text);
+  }
+  .mention-chip.all-desks svg {
+    flex: none;
+  }
   .skill-list {
     list-style: none;
     margin: 0;
@@ -224,7 +256,8 @@
 
   @media (max-width: 719px) {
     .skill,
-    .skill-group-head {
+    .skill-group-head,
+    .skill-group-desks {
       padding: 12px;
     }
     .skill-group-link {

@@ -64,6 +64,19 @@ export function groupByRepo(skills: readonly SkillMeta[]): SkillGroup[] {
   return [...groups.values()].sort((a, b) => byName(repoParts(a.repo).name, repoParts(b.repo).name) || byName(a.repo, b.repo));
 }
 
+/** How far these skills reach these desks: every skill on every desk, none at all, or some in between. */
+export type Coverage = 'all' | 'some' | 'none';
+
+export function deskCoverage(skillIds: readonly string[], deskMap: Readonly<Record<string, readonly string[]>>, deskIds: readonly string[]): Coverage {
+  if (!skillIds.length || !deskIds.length) return 'none';
+  let on = 0;
+  for (const id of skillIds) {
+    const desks = deskMap[id] ?? [];
+    for (const d of deskIds) if (desks.includes(d)) on++;
+  }
+  return on === 0 ? 'none' : on === skillIds.length * deskIds.length ? 'all' : 'some';
+}
+
 /** "ui-ux-pro-max-skill" and "nextlevelbuilder" from "nextlevelbuilder/ui-ux-pro-max-skill". */
 export function repoParts(repo: string): { owner: string; name: string } {
   const cut = repo.indexOf('/');

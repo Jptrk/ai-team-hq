@@ -1213,6 +1213,52 @@ export function setSkillDesks(p: Project, id: string, desks: string[]): string[]
   return after;
 }
 
+/**
+ * Give several skills to some desks, or take them off, in one project at once: "All desks" on a skill, or a whole
+ * repo's skills. Each skill keeps its other desks, so a page showing older desks can't undo someone else's change.
+ * A desk in both lists comes off. Unknown ids and the founder drop out. Any unknown skill changes nothing.
+ * Returns the skills that changed.
+ */
+export function changeSkillDesks(p: Project, ids: string[], add: string[], remove: string[]): string[] {
+  const skills: SkillMeta[] = [];
+  for (const id of new Set(ids)) {
+    const skill = getSkill(id);
+    if (!skill) throw new SkillError('That skill is not installed. Reload the page.', 404);
+    skills.push(skill);
+  }
+  const s = p.state;
+  s.skillDesks ??= {};
+  const adding = new Set(add);
+  const dropping = new Set(remove);
+  const desks = s.agents.filter((a) => !a.isHuman);
+  const changed: SkillMeta[] = [];
+  for (const skill of skills) {
+    const before = s.skillDesks[skill.id] ?? [];
+    const after = desks.filter((a) => !dropping.has(a.id) && (adding.has(a.id) || before.includes(a.id))).map((a) => a.id);
+    if (before.join(',') === after.join(',')) continue;
+    if (after.length) s.skillDesks[skill.id] = after;
+    else delete s.skillDesks[skill.id];
+    changed.push(skill);
+  }
+  if (!changed.length) return [];
+  const repos = new Set(changed.map((k) => k.source.repo.toLowerCase()));
+  const what =
+    changed.length === 1
+      ? `Skill ${changed[0].name}`
+      : changed.length <= 3
+        ? `Skills ${changed.map((k) => k.name).join(', ')}`
+        : `${changed.length} skills${repos.size === 1 ? ` from ${changed[0].source.repo}` : ''}`;
+  const who = (picked: Set<string>) => {
+    const list = desks.filter((a) => picked.has(a.id));
+    return list.length > 1 && list.length === desks.length ? 'every desk' : list.map((a) => a.name).join(', ');
+  };
+  const on = who(new Set(add.filter((d) => !dropping.has(d))));
+  const off = who(dropping);
+  p.log('you', `${what} ${[on && `on for ${on}`, off && `off for ${off}`].filter(Boolean).join(', ')}`);
+  p.commit();
+  return changed.map((k) => k.id);
+}
+
 /** The Skills page for one project. */
 export function projectSkills(p: Project): ProjectSkillsResponse {
   const library = listLibrary();
