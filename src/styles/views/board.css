@@ -1,4 +1,100 @@
 @layer views {
+  /* What the team does on its own: the board header's switches, today's count, and why it waits. */
+  .auto-bar {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 6px;
+    min-width: 0;
+    max-width: 100%;
+  }
+  .page-actions:has(.auto-bar) {
+    min-width: 0;
+    max-width: 100%;
+  }
+  .auto-switches {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px 16px;
+  }
+  .auto-switch {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: var(--fs-sm);
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .auto-switch:has(input:disabled) {
+    opacity: 0.55;
+    cursor: default;
+  }
+  .auto-today {
+    font-variant-numeric: tabular-nums;
+  }
+  .auto-hold {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 6px 10px;
+    margin: 0;
+    color: var(--warning-text);
+  }
+  .goal-strip {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 4px 10px;
+    margin: 0;
+    max-width: 640px;
+  }
+  .goal-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: min(360px, 100%);
+  }
+  .goal-status {
+    font-weight: 600;
+  }
+  .goal-status.goal-on-track,
+  .goal-status.goal-planning {
+    background: var(--accent-subtle);
+    border-color: var(--accent-subtle-border);
+    color: var(--accent-text);
+  }
+  .goal-status.goal-reached {
+    background: var(--success-subtle);
+    border-color: var(--success-border);
+    color: var(--success-text);
+  }
+  .goal-status.goal-blocked,
+  .goal-status.goal-stalled {
+    background: var(--warning-subtle);
+    border-color: var(--warning-border);
+    color: var(--warning-text);
+  }
+  .goal-edit {
+    font-weight: 600;
+  }
+  .auto-bar .confirm-inline {
+    max-width: 420px;
+    text-align: left;
+  }
+  @media (max-width: 719px) {
+    .auto-bar,
+    .auto-switches,
+    .auto-hold,
+    .goal-strip {
+      align-items: flex-start;
+      justify-content: flex-start;
+    }
+  }
   .board-view {
     flex: 1;
     min-height: 0;
@@ -173,8 +269,9 @@
   }
   .bcard-foot {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 6px;
+    gap: 4px 6px;
     min-height: 24px;
   }
   .bcard-spacer {

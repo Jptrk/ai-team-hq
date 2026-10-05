@@ -1,4 +1,53 @@
-import type { Agent, AgentStatus, Comment, EffortLevel, ItemStatus, Meta, WorkItem } from '../shared/types';
+import type { Agent, AgentStatus, AutoHold, AutoStatus, Comment, EffortLevel, ItemStatus, Meta, PauseInfo, RunReason, WorkItem } from '../shared/types';
+
+/** "15:00" in your time, or "Mon 09:00" when it is not today (a weekly limit). 24-hour, as the server's own texts. */
+export function clockTime(iso: string, nowMs = Date.now()): string {
+  const d = new Date(iso);
+  const time = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
+  return d.toDateString() === new Date(nowMs).toDateString() ? time : `${d.toLocaleDateString(undefined, { weekday: 'short' })} ${time}`;
+}
+
+const HOLD_START: Partial<Record<RunReason, string>> = { handoff: 'The hand-off', qa: 'The QA check', 'qa-fail': 'The fix after QA', auto: "Autopilot's start" };
+const HOLD_WHY: Record<Exclude<AutoHold['why'], 'restart'>, string> = {
+  paused: 'HQ is paused',
+  usage: "Claude's usage limit was reached",
+  account: 'Claude reported an account problem',
+  halted: 'Autopilot stopped in this project',
+  runs: "this project's runs for today are used up",
+  usd: "this project's spend for today is used up",
+};
+
+/** The board's count of what the team started on its own today. */
+export function autoTodayText(t: Pick<AutoStatus['today'], 'runs' | 'maxRuns' | 'usd' | 'maxUsd'>): string {
+  return `Today ${t.runs}/${t.maxRuns} runs · $${t.usd.toFixed(2)} of $${t.maxUsd}`;
+}
+
+/** The goal strip's status chip: planning wins while a plan is queued or running. */
+export function goalLabel(g: Pick<NonNullable<AutoStatus['goal']>, 'status' | 'planning'>): string {
+  if (g.planning) return 'Planning…';
+  return { 'on-track': 'On track', reached: 'Reached?', blocked: 'Blocked', stalled: 'Stalled' }[g.status];
+}
+
+/** What a held start on a ticket waits for. */
+export function holdText(h: Pick<AutoHold, 'reason' | 'why'>): string {
+  const what = HOLD_START[h.reason] ?? 'A run';
+  if (h.why === 'restart') return `${what} was cut off by a server restart. It starts again by itself.`;
+  return `${what} waits: ${HOLD_WHY[h.why]}. It starts by itself once that clears.`;
+}
+
+/** The header's paused control, in a few words. */
+export function pauseLabel(p: Pick<PauseInfo, 'by' | 'until'>): string {
+  if (p.by === 'you') return 'Paused';
+  if (p.by === 'account') return 'Account problem';
+  return p.until ? `Usage limit · until ${clockTime(p.until)}` : 'Usage limit';
+}
+
+/** What the pause means, for its popover and the banner. */
+export function pauseText(p: Pick<PauseInfo, 'by' | 'until' | 'reason'>): string {
+  if (p.by === 'you') return 'The team starts nothing on its own: no hand-offs, chat replies between desks or QA checks. Your own clicks still work, and runs already going finish.';
+  if (p.by === 'account') return `${p.reason ?? 'Claude reported an account problem.'} Nothing the team starts on its own runs until you resume.`;
+  return `${p.reason ?? "Claude's usage limit was reached."} Nothing the team starts on its own runs until then${p.until ? `; it carries on by itself at ${clockTime(p.until)}` : ''}.`;
+}
 
 export const EFFORT_LABEL: Record<EffortLevel, string> = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Max' };
 

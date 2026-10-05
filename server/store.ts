@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { stampNeedsYou } from '../shared/activity';
 import type { Activity, ProjectAccess, ProjectMeta, State, TeamTemplate } from '../shared/types';
-import { defaultQaDesk, hasQa } from '../shared/types';
+import { defaultQaDesk, emptyAutoState, hasQa } from '../shared/types';
 import { assignDeskNumbers } from '../shared/desks';
 import { rewindCursor } from './cursor';
 import { SKILL_ID, slug } from './paths';
@@ -265,6 +265,10 @@ export function migrateState(s: State, template?: TeamTemplate): State {
   s.teamNotes ??= '';
   s.notesEveryRun ??= false;
   s.skillDesks = cleanSkillDesks(s.skillDesks, s.agents);
+  s.auto ??= emptyAutoState();
+  s.auto.heldWakes ??= [];
+  s.auto.failStreak ??= 0;
+  s.auto.usage ??= emptyAutoState().usage;
   // The Office's waiting clock. Before the restart notes below add history, so they don't count as the start.
   stampNeedsYou(s.items, now(), true);
   // A huddle mid-round when the server stopped: it stops too, and Resume picks it up.
@@ -296,7 +300,9 @@ export function migrateState(s: State, template?: TeamTemplate): State {
     if (lead) lead.lead = true;
   }
 
-  for (const r of s.runs) {
+  // Oldest first (runs are stored newest first): when a ticket had several starts cut off, the latest one is what it waits for.
+  const restarted = new Set<string>();
+  for (const r of [...s.runs].reverse()) {
     if (r.status === 'running' || r.status === 'queued') {
       r.status = 'failed';
       r.error = 'Interrupted by a server restart';
@@ -306,7 +312,26 @@ export function migrateState(s: State, template?: TeamTemplate): State {
       const readThread = readThreadId ? s.threads.find((t) => t.id === readThreadId) : undefined;
       if (readThread) rewindCursor(readThread, s.messages, r.agentId, r.cursorFrom, r.startedAt);
       const thread = r.reason === 'message' && r.threadId ? s.threads.find((t) => t.id === r.threadId) : undefined;
-      if (thread) {
+      // The team's own start (a hand-off, a chat wake, a QA check, Autopilot) starts again by itself, once. A second restart leaves it to you.
+      const again = r.auto && r.reason !== 'plan' && r.reason !== 'huddle' ? (r.restarts ?? 0) + 1 : 0;
+      // A plan cut off never planned: the lead plans again once it may.
+      if (r.reason === 'plan' && s.auto.goal) delete s.auto.goal.lastPlanAt;
+      const item = !thread && r.itemId ? s.items.find((i) => i.id === r.itemId) : undefined;
+      if (thread && again === 1 && thread.status !== 'closed') {
+        if (!s.auto.heldWakes.some((w) => w.threadId === thread.id && w.agentId === r.agentId)) {
+          s.auto.heldWakes.push({ threadId: thread.id, agentId: r.agentId, at: r.finishedAt, why: 'restart', restarts: 1 });
+        }
+        thread.count += 1;
+        s.messages.push({ id: uid('msg'), threadId: thread.id, n: thread.count, from: 'hq', to: [], text: 'A reply was cut off by a server restart. It starts again by itself when HQ can run it.', ts: r.finishedAt });
+        thread.updatedAt = r.finishedAt;
+      } else if (item && again === 1) {
+        item.autoHold = { reason: r.reason, at: r.finishedAt, why: 'restart', restarts: 1 };
+        if (!restarted.has(item.id)) item.history.push({ ts: r.finishedAt, text: 'Run interrupted by a server restart. It starts again by itself when HQ can run it.' });
+        restarted.add(item.id);
+      } else if (item && again > 1) {
+        item.autoSkip = { at: r.finishedAt, why: 'A server restart cut its run off twice.' };
+        item.history.push({ ts: r.finishedAt, text: 'Run interrupted by a server restart again. It waits for you: use "Put them on it".' });
+      } else if (thread) {
         // A reply cut off by a restart: pause the thread so Patrick can resume it, and leave the ticket alone.
         if (thread.status === 'open') {
           thread.status = 'paused';
@@ -315,9 +340,8 @@ export function migrateState(s: State, template?: TeamTemplate): State {
         thread.count += 1;
         s.messages.push({ id: uid('msg'), threadId: thread.id, n: thread.count, from: 'hq', to: [], text: 'A reply was cut off by a server restart. Resume to try again.', ts: r.finishedAt, undelivered: [r.agentId] });
         thread.updatedAt = r.finishedAt;
-      } else if (r.itemId) {
-        const item = s.items.find((i) => i.id === r.itemId);
-        item?.history.push({ ts: r.finishedAt, text: 'Run interrupted by a server restart. Use "Put them on it" to retry.' });
+      } else if (item) {
+        item.history.push({ ts: r.finishedAt, text: 'Run interrupted by a server restart. Use "Put them on it" to retry.' });
       }
     }
   }
@@ -397,7 +421,7 @@ export function createProject(input: ProjectInput): Project {
   return getProject(meta.id)!;
 }
 
-export function updateProject(id: string, patch: Partial<Pick<ProjectMeta, 'name' | 'key' | 'path' | 'access' | 'signoff'>>): ProjectMeta {
+export function updateProject(id: string, patch: Partial<Pick<ProjectMeta, 'name' | 'key' | 'path' | 'access' | 'signoff' | 'autopilot' | 'goalMode' | 'goal' | 'autoLimits'>>): ProjectMeta {
   const meta = reg().projects.find((p) => p.id === id);
   if (!meta) throw new Error('project not found');
   Object.assign(meta, patch);

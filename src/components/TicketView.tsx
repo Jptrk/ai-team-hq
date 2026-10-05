@@ -1,4 +1,4 @@
-import { Check, ChevronDown, Link as LinkIcon, MessagesSquare, Pencil, Play, X } from 'lucide-react';
+import { Check, ChevronDown, CirclePause, Link as LinkIcon, MessagesSquare, Pencil, Play, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { canEditDescription, hasQa, MAX_DESCRIPTION, signoffOn, type Decision, type ItemStatus, type StateResponse, type WorkItem } from '../../shared/types';
 import { TextEditor } from '../editor/TextEditor';
@@ -12,7 +12,7 @@ import { Avatar } from '../ui/Avatar';
 import { Segmented } from '../ui/Segmented';
 import { StatusLozenge } from '../ui/Lozenge';
 import { TypeIcon, TYPE_LABEL } from '../ui/TypeIcon';
-import { agentById, awaitsSignoff, doneSummary, ITEM_STATUS_LABEL, latestDecision, signoffVerdict, ticketKey, timeAgo, waitingTitle } from '../util';
+import { agentById, awaitsSignoff, doneSummary, holdText, ITEM_STATUS_LABEL, latestDecision, signoffVerdict, ticketKey, timeAgo, waitingTitle } from '../util';
 import { DecisionBar } from './DecisionBar';
 import { ProjectAvatar } from './ProjectAvatar';
 import { ReportList } from './ReportList';
@@ -287,6 +287,17 @@ export function TicketView({ item, state, live, onClose, onDecide, onComment, on
             </button>
           )}
         </div>
+        {item.autoHold && (
+          <p className="banner warning hold-note">
+            <CirclePause size={15} aria-hidden /> {holdText(item.autoHold)}
+            {runnable ? ` Or put ${worker!.name} on it now.` : ''}
+          </p>
+        )}
+        {item.autoSkip && (
+          <p className="banner hold-note">
+            <CirclePause size={15} aria-hidden /> Autopilot left this for you: {item.autoSkip.why}
+          </p>
+        )}
 
         <div className="ticket-grid">
           <div className="ticket-main">

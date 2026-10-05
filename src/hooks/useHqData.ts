@@ -15,6 +15,12 @@ export function useHqData(pid: string | null) {
   pidRef.current = pid;
   /** Set while a board card is being dragged, so a poll can't remount it mid-drag. */
   const paused = useRef(false);
+  /** Counts the meta changes you made here. A poll sent before one may answer after it: its meta is older, so it is ignored. */
+  const metaRev = useRef(0);
+  const changeMeta = useCallback((next: Meta) => {
+    metaRev.current += 1;
+    setMeta(next);
+  }, []);
 
   const loadProjects = useCallback(async () => {
     try {
@@ -25,20 +31,41 @@ export function useHqData(pid: string | null) {
     }
   }, []);
 
+  // Meta changes without this page: the server pauses itself when Claude's usage limit is hit, and another tab can resume.
+  const loadMeta = useCallback(() => {
+    const rev = metaRev.current;
+    void api.meta().then(
+      (next) => {
+        if (rev === metaRev.current) setMeta((m) => (m && JSON.stringify(m) === JSON.stringify(next) ? m : next));
+      },
+      () => undefined,
+    );
+  }, []);
+
   useEffect(() => {
-    void api.meta().then(setMeta, () => undefined);
+    loadMeta();
     void loadProjects();
-    const handle = window.setInterval(() => void loadProjects(), PROJECTS_POLL_MS);
+    const handle = window.setInterval(() => {
+      void loadProjects();
+      loadMeta();
+    }, PROJECTS_POLL_MS);
     return () => window.clearInterval(handle);
-  }, [loadProjects]);
+  }, [loadProjects, loadMeta]);
 
   const refresh = useCallback(async (force = false) => {
     const want = pidRef.current;
     if (!want || (paused.current && !force)) return;
     try {
+      const rev = metaRev.current;
       const next = await api.state(want);
       // Ignore a slow response for a project the user already left, or one that lands mid-drag.
       if (pidRef.current === want && (!paused.current || force)) setState(next);
+      // The state carries meta too: a pause shows within one poll on a project page.
+      setMeta((m) => {
+        if (!m || rev !== metaRev.current) return m;
+        const merged = { ...m, ...next.meta };
+        return JSON.stringify(merged) === JSON.stringify(m) ? m : merged;
+      });
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not reach the HQ server');
@@ -61,5 +88,6 @@ export function useHqData(pid: string | null) {
     paused.current = on;
   }, []);
 
-  return { meta, setMeta, projects, state, error, refresh, loadProjects, after, setPollPaused };
+  // setMeta for a change you just made (it wins over polls already on their way).
+  return { meta, setMeta: changeMeta, projects, state, error, refresh, loadProjects, after, setPollPaused };
 }

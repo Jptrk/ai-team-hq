@@ -37,7 +37,9 @@ import { PageHeader } from './shell/PageHeader';
 import { Sidebar, type SidebarMode } from './shell/Sidebar';
 import { TopBar } from './shell/TopBar';
 import type { SearchHandle } from './shell/TopBarSearch';
-import { agentById, ticketKey } from './util';
+import { agentById, pauseLabel, pauseText, ticketKey } from './util';
+import { api } from './api';
+import { AutoBar } from './components/AutoBar';
 
 const VIEW_TITLE: Record<ViewId, string> = { 'needs-you': 'Needs you', chat: 'Chat', board: 'Board', huddles: 'Huddles', team: 'Team', office: 'Office', notes: 'Team notes' };
 
@@ -47,6 +49,7 @@ export function App() {
   const { meta, setMeta, projects, state, error, after, loadProjects, setPollPaused } = useHqData(pid);
   const { theme, pref, setPref, toggle } = useTheme();
   const { flags, notify, dismiss } = useFlags();
+  const [resuming, setResuming] = useState(false);
   const searchRef = useRef<SearchHandle>(null);
 
   // ---------- layout ----------
@@ -187,7 +190,7 @@ export function App() {
     const proposals = state.huddles.reduce((n, h) => n + h.proposals.filter((x) => x.status === 'pending').length, 0);
     return {
       huddling: state.huddles.some((h) => h.status === 'running'),
-      needsYou: state.items.filter((i) => i.status === 'needs-you' || i.status === 'signoff').length + paused + proposals,
+      needsYou: state.items.filter((i) => i.status === 'needs-you' || i.status === 'signoff' || (i.autoSkip && !['done', 'held'].includes(i.status))).length + paused + proposals,
       paused,
       unread: state.threads.filter((t) => t.status !== 'closed' && t.count > t.youSeen).length,
     };
@@ -302,15 +305,40 @@ export function App() {
               onOpenAgent={openAgent}
               onOpenThread={openThread}
               onResumeThread={actions.resumeThread}
+              onRun={live ? actions.runItem : undefined}
               onCreate={() => openCreate('task')}
             />
           </div>
         );
       } else if (view === 'board') {
         const selected = panelTicket ? state.items.find((i) => ticketKey(i, key) === panelTicket || i.id === panelTicket) : undefined;
+        const autoBar = (
+          <AutoBar
+            project={state.project}
+            auto={state.auto}
+            autoConnections={state.connections.filter((c) => c.enabled && c.mode === 'auto').length}
+            paused={Boolean(meta?.paused)}
+            onChange={async (patch) => {
+              try {
+                await api.updateProject(state.project.id, patch);
+                await after();
+              } catch (e) {
+                notify(e instanceof Error ? e.message : 'Could not change it', { tone: 'danger' });
+              }
+            }}
+            onResume={async () => {
+              try {
+                await api.resumeAuto(state.project.id);
+                await after();
+              } catch (e) {
+                notify(e instanceof Error ? e.message : 'Could not resume', { tone: 'danger' });
+              }
+            }}
+          />
+        );
         body = (
           <div className="page page-full">
-            {header()}
+            {header(autoBar)}
             <Board
               items={state.items}
               agents={state.agents}
@@ -543,6 +571,27 @@ export function App() {
         )}
         <main id="main" className={mainClass} tabIndex={-1}>
           {error && <p className="banner danger main-error">Lost the server: {error}</p>}
+          {meta?.paused && (
+            <div className="banner warning main-error" role="status">
+              <span>
+                <strong>{pauseLabel(meta.paused)}.</strong> {pauseText(meta.paused)}
+              </span>
+              <button
+                type="button"
+                className="btn btn-outline btn-sm"
+                disabled={resuming}
+                onClick={() => {
+                  setResuming(true);
+                  void api
+                    .setSettings({ paused: false })
+                    .then(setMeta, (e: unknown) => notify(e instanceof Error ? e.message : 'Could not resume', { tone: 'danger' }))
+                    .finally(() => setResuming(false));
+                }}
+              >
+                {meta.paused.by === 'usage' ? 'Resume now' : 'Resume'}
+              </button>
+            </div>
+          )}
           {!live && meta && route.kind === 'project' && view === 'needs-you' && <p className="sim-note muted small">Sim mode: fake activity, no Claude calls.</p>}
           {body}
         </main>

@@ -1,11 +1,11 @@
-import { Keyboard, Menu, Monitor, Moon, PanelLeftClose, PanelLeftOpen, Plus, Sun } from 'lucide-react';
-import { forwardRef, useRef, useState } from 'react';
+import { CirclePause, Keyboard, Menu, Monitor, Moon, PanelLeftClose, PanelLeftOpen, Pause, Play, Plus, Sun } from 'lucide-react';
+import { forwardRef, useEffect, useRef, useState } from 'react';
 import type { Agent, EffortLevel, Meta, WorkItem } from '../../shared/types';
 import { api } from '../api';
 import { usePopover } from '../hooks/usePopover';
 import type { Theme, ThemePref } from '../hooks/useTheme';
 import { Avatar } from '../ui/Avatar';
-import { EFFORT_LABEL, effortLabel, runnerLabel } from '../util';
+import { clockTime, EFFORT_LABEL, effortLabel, pauseLabel, pauseText, runnerLabel } from '../util';
 import { TopBarSearch, type SearchHandle } from './TopBarSearch';
 
 interface Props {
@@ -103,6 +103,89 @@ function EffortPicker({ meta, onMeta }: { meta: Meta; onMeta: (meta: Meta) => vo
         </p>
       )}
     </fieldset>
+  );
+}
+
+/**
+ * Pause for everything the team starts on its own, in every project. Paused (by you, or by Claude's usage limit),
+ * it becomes an amber pill whose popover says why and resumes. Pausing never asks: it only stops work starting.
+ */
+function AutoControl({ meta, onMeta }: { meta: Meta; onMeta: (meta: Meta) => void }) {
+  const pop = usePopover<HTMLDivElement>();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const paused = meta.paused;
+  // The control swaps between the Pause button and the paused pill: whichever is showing gets focus back after a change,
+  // also when Resume came from the banner, so keyboard focus never drops to the page.
+  const button = useRef<HTMLButtonElement>(null);
+  const wasPaused = useRef(Boolean(paused));
+  useEffect(() => {
+    if (wasPaused.current === Boolean(paused)) return;
+    wasPaused.current = Boolean(paused);
+    const lost = !document.activeElement || document.activeElement === document.body;
+    if (lost) button.current?.focus();
+  }, [paused]);
+  const set = async (on: boolean) => {
+    setBusy(true);
+    setError(null);
+    try {
+      onMeta(await api.setSettings({ paused: on }));
+      if (!on) pop.setOpen(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not change it.');
+      pop.setOpen(true);
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (!paused) {
+    return (
+      <div className="popover-anchor" ref={pop.ref}>
+        <button
+          ref={button}
+          type="button"
+          className="status-pill auto-pill"
+          onClick={() => void set(true)}
+          disabled={busy}
+          title="Pause everything the team starts on its own"
+          aria-label="Pause the team: nothing it starts on its own runs until you resume"
+        >
+          <Pause size={14} aria-hidden />
+          <span className="status-pill-text">Pause</span>
+        </button>
+        {error && pop.open && (
+          <div className="popover status-popover" role="alert">
+            <p className="field-hint bad">{error}</p>
+          </div>
+        )}
+      </div>
+    );
+  }
+  return (
+    <div className="popover-anchor" ref={pop.ref}>
+      <button ref={button} type="button" className="status-pill paused" aria-expanded={pop.open} aria-label={`${pauseLabel(paused)}: open to resume`} onClick={() => pop.setOpen((o) => !o)}>
+        <CirclePause size={15} aria-hidden />
+        <span className="status-pill-text">{pauseLabel(paused)}</span>
+      </button>
+      {pop.open && (
+        <div className="popover status-popover" role="dialog" aria-label="Paused">
+          <p className="popover-title">{paused.by === 'you' ? 'The team is paused' : paused.by === 'usage' ? "Claude's usage limit" : 'Claude account problem'}</p>
+          <p className="muted small">{pauseText(paused)}</p>
+          <p className="muted small">
+            Since {clockTime(paused.at)}.{' '}
+            {meta.held ? `${meta.held} start${meta.held === 1 ? '' : 's'} waiting.` : 'Nothing waiting yet.'} A huddle that is running keeps going; stop it from Huddles.
+          </p>
+          <button type="button" className="btn btn-primary btn-sm auto-resume" onClick={() => void set(false)} disabled={busy}>
+            <Play size={13} aria-hidden /> {paused.by === 'usage' ? 'Resume now' : 'Resume'}
+          </button>
+          {error && (
+            <p className="field-hint bad" role="alert">
+              {error}
+            </p>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -213,6 +296,7 @@ export const TopBar = forwardRef<SearchHandle, Props>(function TopBar(p, searchR
           <Plus size={16} aria-hidden />
           <span className="topbar-create-text">{p.createLabel}</span>
         </button>
+        {p.meta && <AutoControl meta={p.meta} onMeta={p.onMeta} />}
         <StatusPill meta={p.meta} onMeta={p.onMeta} />
         <button type="button" className="icon-btn topbar-btn" onClick={p.onToggleTheme} aria-label={p.theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'} title={p.theme === 'dark' ? 'Light theme' : 'Dark theme'}>
           {p.theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}

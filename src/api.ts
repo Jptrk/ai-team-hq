@@ -1,6 +1,7 @@
 import type { AddRequest } from '../shared/mcpSpec';
 import type {
   AddPreview,
+  AutoStatus,
   Agent,
   Attachment,
   Comment,
@@ -53,6 +54,13 @@ export interface ProjectBody {
   template?: TeamTemplate;
   /** Finished tickets wait for your sign-off before Done. */
   signoff?: boolean;
+  /** Free desks start their next To do ticket on their own. */
+  autopilot?: boolean;
+  /** The lead plans tickets toward the goal. Needs goal and autopilot. */
+  goalMode?: boolean;
+  goal?: string;
+  /** Most the team may start on its own per day. */
+  autoLimits?: { runs: number; usd: number };
 }
 
 export interface HuddleBody {
@@ -74,10 +82,12 @@ export interface AgentBody {
 export const api = {
   meta: () => request<Meta & { owner: string }>('/api/meta'),
   /** Settings for all of HQ. Answers with the new meta. */
-  setSettings: (body: { effort: EffortLevel | null }) => request<Meta & { owner: string }>('/api/settings', json('PATCH', body)),
+  setSettings: (body: { effort?: EffortLevel | null; paused?: boolean }) => request<Meta & { owner: string }>('/api/settings', json('PATCH', body)),
   projects: () => request<ProjectSummary[]>('/api/projects'),
   createProject: (body: ProjectBody) => request<ProjectSummary>('/api/projects', json('POST', body)),
   updateProject: (pid: string, body: ProjectBody) => request<ProjectSummary>(pp(pid), json('PATCH', body)),
+  /** Autopilot stopped itself after 3 failed runs: start it again. */
+  resumeAuto: (pid: string) => request<AutoStatus>(`${pp(pid)}/auto/resume`, json('POST')),
   archiveProject: (pid: string) => request<{ ok: true; archivedTo: string }>(pp(pid), json('DELETE')),
   checkPath: (path: string, except?: string) =>
     request<PathCheck>(`/api/fs/check?path=${encodeURIComponent(path)}${except ? `&except=${encodeURIComponent(except)}` : ''}`),

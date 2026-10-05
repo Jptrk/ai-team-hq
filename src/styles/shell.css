@@ -167,6 +167,23 @@
   .status-pill.live .dot {
     background: var(--status-working);
   }
+  .status-pill:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }
+  /* Paused, by you or by Claude's usage limit: hard to miss. */
+  .status-pill.paused {
+    border-color: transparent;
+    background: var(--warning-bold);
+    color: var(--text-on-warning);
+  }
+  .status-pill.paused:hover {
+    background: color-mix(in srgb, var(--warning-bold) 88%, #000);
+  }
+  .auto-resume {
+    align-self: flex-start;
+    margin-top: 4px;
+  }
   .founder-btn {
     border: 0;
     padding: 2px;

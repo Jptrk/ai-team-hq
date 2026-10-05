@@ -42,6 +42,8 @@ const RUN_REASON: Record<Run['reason'], string> = {
   comment: 'your comment',
   qa: 'QA check',
   'qa-fail': 'fixing QA issues',
+  auto: 'Autopilot',
+  plan: 'planning the goal',
 };
 
 const STATUS_TONE: Record<Agent['status'], Tone> = { working: 'success', waiting: 'warning', idle: 'neutral', off: 'neutral' };

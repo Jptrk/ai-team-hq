@@ -1,10 +1,13 @@
 import type { Agent, Attachment, Message, Run, RunReason, RunnerName, Thread, WorkItem } from '../../shared/types';
 import type { Project } from '../store';
+import type { UsageLimit } from './watch';
 
-/** Passed in by the queue so the runner can wake desks without importing it (no cycle). */
+/** Passed in by the queue so the runner can wake desks without importing it (no cycle). Every start through these is the team's own. */
 export interface RunHooks {
   deliver(threadId: string, ids: string[]): void;
   kickoff(itemId: string, reason: RunReason): void;
+  /** Why what the desk starts for a teammate would wait (HQ paused, a limit hit), or null when it starts now. */
+  held(): string | null;
 }
 
 export interface RunInput {
@@ -36,6 +39,8 @@ export interface RunOutcome {
   sessionId?: string;
   /** What a failed first attempt cost, when the run was retried in a fresh session. costUsd is the retry's alone. */
   extraCostUsd?: number;
+  /** Claude's limit stopped it after it had closed out: automatic work should still wait for it. */
+  usage?: UsageLimit;
 }
 
 export interface AgentRunner {

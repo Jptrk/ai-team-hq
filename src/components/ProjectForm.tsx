@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { hasQa, signoffOn, type PathCheck, type ProjectAccess, type ProjectSummary, type TeamTemplate } from '../../shared/types';
+import { autoLimitsOf, hasQa, MAX_GOAL, signoffOn, type PathCheck, type ProjectAccess, type ProjectSummary, type TeamTemplate } from '../../shared/types';
 import { api } from '../api';
 import { AVATAR_FALLBACK, cleanPath, suggestKey } from '../util';
 import { ProjectAvatar } from './ProjectAvatar';
@@ -28,6 +28,12 @@ export function ProjectForm({ mode, project, projects, onCancel, onSaved, onArch
   const [template, setTemplate] = useState<TeamTemplate>(project?.template ?? 'dev');
   const [access, setAccess] = useState<ProjectAccess>(project?.access ?? 'read');
   const [signoff, setSignoff] = useState(project ? signoffOn(project) : true);
+  const [autopilot, setAutopilot] = useState(Boolean(project?.autopilot));
+  const [goalMode, setGoalMode] = useState(Boolean(project?.goalMode));
+  const [goal, setGoal] = useState(project?.goal ?? '');
+  const limits = autoLimitsOf(project ?? {});
+  const [runsText, setRunsText] = useState(String(limits.runs));
+  const [usdText, setUsdText] = useState(String(limits.usd));
   const [nameTouched, setNameTouched] = useState(Boolean(editing));
   const [keyTouched, setKeyTouched] = useState(Boolean(editing));
   const [check, setCheck] = useState<PathCheck | null>(null);
@@ -76,15 +82,30 @@ export function ProjectForm({ mode, project, projects, onCancel, onSaved, onArch
   const folderBad = hasFolder && !checking && check !== null && !check.ok;
   const keyValue = key.trim().toUpperCase();
   const keyBad = keyValue !== '' && (!/^[A-Z][A-Z0-9]{1,9}$/.test(keyValue) || takenKeys.includes(keyValue));
-  const canSave = name.trim() !== '' && keyValue !== '' && !keyBad && !folderBad && !(hasFolder && checking) && !busy;
+  const runs = Number(runsText);
+  const usd = Number(usdText);
+  const runsBad = runsText.trim() === '' || !Number.isInteger(runs) || runs < 1 || runs > 500;
+  const usdBad = usdText.trim() === '' || !Number.isFinite(usd) || usd < 1 || usd > 1000;
+  const goalBad = goalMode && !goal.trim();
+  const autoBad = Boolean(editing) && (runsBad || usdBad || goalBad);
+  const canSave = name.trim() !== '' && keyValue !== '' && !keyBad && !folderBad && !(hasFolder && checking) && !autoBad && !busy;
 
   const submit = async () => {
     if (!canSave) return;
     setBusy(true);
     setError(null);
     const body = { name: name.trim(), key: keyValue, path: cleanPath(folder), access: hasFolder ? access : ('read' as ProjectAccess), signoff };
+    // What the team does on its own is set once the project exists.
+    // Only what you changed here, so a switch flipped on the board meanwhile is not undone.
+    const before = { autopilot: Boolean(project?.autopilot), goalMode: Boolean(project?.goalMode), goal: project?.goal ?? '', limits: autoLimitsOf(project ?? {}) };
+    const auto = {
+      ...(autopilot !== before.autopilot ? { autopilot } : {}),
+      ...((autopilot && goalMode) !== before.goalMode ? { goalMode: autopilot && goalMode } : {}),
+      ...(goal.trim() !== before.goal.trim() ? { goal: goal.trim() } : {}),
+      ...(runs !== before.limits.runs || usd !== before.limits.usd ? { autoLimits: { runs, usd } } : {}),
+    };
     try {
-      const saved = editing ? await api.updateProject(project.id, body) : await api.createProject({ ...body, template });
+      const saved = editing ? await api.updateProject(project.id, { ...body, ...auto }) : await api.createProject({ ...body, template });
       onSaved(saved);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not save');
@@ -212,6 +233,63 @@ export function ProjectForm({ mode, project, projects, onCancel, onSaved, onArch
               : `Finished tickets go straight to Done${hasQa(template) ? ' once QA passes them' : ''}.${editing ? ' Tickets already waiting for sign-off stay until you mark them done.' : ''}`}
           </p>
         </fieldset>
+
+        {editing && (
+          <fieldset className="field auto-settings">
+            <legend className="label">Team runs on its own</legend>
+            <label className="check signoff-check">
+              <input
+                type="checkbox"
+                checked={autopilot}
+                onChange={(e) => {
+                  setAutopilot(e.target.checked);
+                  if (!e.target.checked) setGoalMode(false);
+                }}
+              />{' '}
+              Autopilot: free desks start their next To do ticket on their own
+            </label>
+            <p className="field-hint">
+              {autopilot ? (
+                <>
+                  <span className="warn">On:</span> the team works and spends while you are away, up to the daily limits below. Pause in the header stops it.
+                </>
+              ) : (
+                'Off: To do tickets wait until you put someone on them.'
+              )}
+            </p>
+            <label className="check signoff-check">
+              <input type="checkbox" checked={goalMode} disabled={!autopilot} onChange={(e) => setGoalMode(e.target.checked)} /> Goal mode: the lead plans tickets toward a goal
+            </label>
+            {(goalMode || goal) && (
+              <label className="field">
+                <span className="label">Goal</span>
+                <textarea value={goal} maxLength={MAX_GOAL} rows={4} placeholder="Ship the redesigned checkout by Friday: new cart page, saved cards, and tests." onChange={(e) => setGoal(e.target.value)} />
+                <span className={`field-hint${goalBad ? ' bad' : ''}`}>
+                  {goalBad
+                    ? 'Write the goal, or turn Goal mode off.'
+                    : 'The lead turns it into tickets for the team, at most 5 at a time and 8 open, and tells you in Needs you when it is reached or stuck.'}
+                </span>
+              </label>
+            )}
+            <div className="field-row">
+              <label className="field">
+                <span className="label">Runs per day</span>
+                <input type="number" inputMode="numeric" min={1} max={500} step={1} value={runsText} onChange={(e) => setRunsText(e.target.value)} />
+              </label>
+              <label className="field">
+                <span className="label">Spend per day ($)</span>
+                <input type="number" inputMode="decimal" min={1} max={1000} step={1} value={usdText} onChange={(e) => setUsdText(e.target.value)} />
+              </label>
+            </div>
+            <p className={`field-hint${runsBad || usdBad ? ' bad' : ''}`}>
+              {runsBad
+                ? 'Runs per day: a whole number from 1 to 500.'
+                : usdBad
+                  ? 'Spend per day: from $1 to $1000.'
+                  : 'Counts every run the team starts on its own: Autopilot, goal planning, hand-offs, chat replies between desks, QA checks. Your own clicks never count. Spend is the SDK estimate. Both reset at midnight; past them, the team waits.'}
+            </p>
+          </fieldset>
+        )}
 
         {error && <p className="banner danger">{error}</p>}
 

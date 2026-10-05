@@ -318,6 +318,43 @@
     letter-spacing: 0.06em;
     font-size: 10px;
   }
+  /* A start the team made that waits (HQ paused, a limit), and a ticket Autopilot left for you. */
+  .held-chip,
+  .skip-chip {
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-size: 10px;
+  }
+  .goal-chip {
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-size: 10px;
+    background: var(--accent-subtle);
+    border-color: var(--accent-subtle-border);
+    color: var(--accent-text);
+  }
+  .held-chip {
+    background: var(--warning-subtle);
+    border-color: var(--warning-border);
+    color: var(--warning-text);
+  }
+  .skip-chip {
+    background: var(--danger-subtle);
+    border-color: var(--danger-border);
+    color: var(--danger-text);
+  }
+  .hold-note {
+    margin: var(--space-3) 0 0;
+    gap: 8px;
+    flex-wrap: nowrap;
+    align-items: flex-start;
+  }
+  .hold-note svg {
+    flex: none;
+    margin-top: 2px;
+  }
   .ticket-key {
     font-family: var(--font-mono);
     font-size: var(--fs-xs);

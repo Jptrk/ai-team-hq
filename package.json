@@ -21,6 +21,8 @@
     "test:office": "tsx src/office.test.ts",
     "test:skills": "tsx server/skills.test.ts",
     "test:settings": "tsx server/settings.test.ts",
+    "test:timeouts": "tsx server/timeouts.test.ts",
+    "test:auto": "tsx server/autopilot.test.ts",
     "office:sync": "node scripts/office-sync.mjs"
   },
   "dependencies": {

@@ -46,6 +46,7 @@ function fresh(): State {
     teamNotes: '',
     notesEveryRun: false,
     skillDesks: {},
+    auto: { usage: { day: '2026-10-01', runs: 0, usd: 0 }, failStreak: 0, heldWakes: [] },
     company: { name: 'Test', ownerId: 'you', timezone: 'UTC' },
     agents: [
       desk('you', 'Patrick', { isHuman: true }),

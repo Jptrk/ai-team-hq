@@ -3,7 +3,8 @@ import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
 import { router } from './routes';
-import { isLive, meta } from './runner';
+import { autoSweep, isLive, meta } from './runner';
+import { limitsFromEnv, limitsWarning } from './runner/watch';
 import { startSim } from './sim';
 import { sweepAttachments } from './attachments';
 import { backfillFingerprints } from './connections';
@@ -56,6 +57,15 @@ try {
   console.error('[hq] connections:', e instanceof Error ? e.name : 'error');
 }
 if (!live && process.env.SIMULATE !== '0') startSim();
+// Live: every minute, a usage limit that has reset clears and held work starts again (later: Autopilot picks).
+// The first pass waits a little after boot, so starts a restart cut off begin once the server has settled.
+if (live) {
+  const every = Number(process.env.HQ_AUTO_SWEEP_MS) > 0 ? Number(process.env.HQ_AUTO_SWEEP_MS) : 60_000;
+  setTimeout(() => {
+    autoSweep();
+    setInterval(() => autoSweep(), every);
+  }, 20_000);
+}
 
 // node --watch sends SIGTERM on restart; write any debounced changes first.
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
@@ -77,6 +87,8 @@ app.listen(PORT, '127.0.0.1', () => {
       ? `[hq] runner=claude model=${m.model} effort=${m.effort ?? 'model default'} auth=${m.auth} (real agents, real spend)`
       : `[hq] runner=sim (no Claude calls). Go live with HQ_RUNNER=claude in .env${m.auth === 'none' ? ' plus an ANTHROPIC_API_KEY or a Claude Code login' : ''}.`,
   );
+  const limits = limitsWarning(limitsFromEnv());
+  if (live && limits) console.warn(`[hq] ${limits}`);
   if (live && !m.effort && process.env.CLAUDE_CODE_EFFORT_LEVEL) {
     console.warn(`[hq] CLAUDE_CODE_EFFORT_LEVEL=${process.env.CLAUDE_CODE_EFFORT_LEVEL} is set, so desk runs use it while HQ's effort is Model default. A level picked in HQ overrides it.`);
   }

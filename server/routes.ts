@@ -1,7 +1,7 @@
 import express, { Router, type Response } from 'express';
 import fs from 'node:fs';
 import type { Attachment, Decision, EffortLevel, ItemStatus, ProjectAccess, ProjectMeta, ProjectSummary, ReportInfo, StateResponse, TeamTemplate, ThreadResponse, WorkItem } from '../shared/types';
-import { canEditDescription, EFFORT_LEVELS, hasQa, isEffortLevel, MAX_ATTACHMENTS, MAX_DESCRIPTION, signoffOn } from '../shared/types';
+import { canEditDescription, EFFORT_LEVELS, hasQa, isEffortLevel, MAX_ATTACHMENTS, MAX_GOAL, MAX_DESCRIPTION, signoffOn } from '../shared/types';
 import { acceptInstruction, addAgent, parseSkills, refreshStatuses, removeAgent, settleInstructions } from './agents';
 import { AttachmentError, pickAttachments, resolveAttachment, saveUpload } from './attachments';
 import {
@@ -41,10 +41,11 @@ import { resumeHuddleRun, startHuddle, stopHuddleRun } from './huddles';
 import { checkFolder, folderExists, KEY_PATTERN, suggestKey } from './paths';
 import { backToWork, closesOnApprove, moveByHand, qaDeskOf, rerouteAllQa, setQaDesk } from './qa';
 import { resolveReport } from './runner/claude';
+import { autoGate, autoStatus, haltedHold, resumeProject } from './autopilot';
 import { setEffort } from './settings';
 import { cancelPreview, changeSkillDesks, installSkills, listLibrary, previewSkills, projectSkills, removeSkill, setScriptsAllowed, setSkillDesks, SkillError } from './skills';
 import { officeState } from './office';
-import { cancelRun, deliver, isLive, kickoff, meta } from './runner';
+import { autoTick, cancelRun, deliver, isLive, kickoff, meta, mootRun, pauseAll, resumeAll } from './runner';
 import {
   allProjects,
   archiveProject,
@@ -96,13 +97,18 @@ function summary(p: Project): ProjectSummary {
     teamSize: s.agents.length,
     openItems: s.items.filter((i) => i.status !== 'done').length,
     // Paused chat threads wait on Patrick too.
-    needsYou: s.items.filter((i) => i.status === 'needs-you' || i.status === 'signoff').length + s.threads.filter((t) => t.status === 'paused').length + pendingProposals(s),
+    // So do tickets Autopilot left for you after their run failed.
+    needsYou:
+      s.items.filter((i) => i.status === 'needs-you' || i.status === 'signoff' || (i.autoSkip && !['done', 'held'].includes(i.status))).length +
+      s.threads.filter((t) => t.status === 'paused').length +
+      pendingProposals(s),
     running: s.agents.filter((a) => a.running).length,
     pathOk: p.meta.path ? folderExists(p.meta.path) : true,
+    autoHold: (autoGate(p) ?? haltedHold(p))?.kind ?? null,
   };
 }
 
-type ProjectPatch = Partial<Pick<ProjectMeta, 'name' | 'key' | 'path' | 'access' | 'signoff'>>;
+type ProjectPatch = Partial<Pick<ProjectMeta, 'name' | 'key' | 'path' | 'access' | 'signoff' | 'autopilot' | 'goalMode' | 'goal' | 'autoLimits'>>;
 
 /** Validate the editable project fields present in `body`. Exported for tests. */
 export function readProjectPatch(body: Record<string, unknown>, exceptId?: string): { patch: ProjectPatch; error?: string } {
@@ -136,7 +142,34 @@ export function readProjectPatch(body: Record<string, unknown>, exceptId?: strin
     if (typeof body.signoff !== 'boolean') return { patch, error: 'signoff must be true or false' };
     patch.signoff = body.signoff;
   }
+  for (const flag of ['autopilot', 'goalMode'] as const) {
+    if (!(flag in body)) continue;
+    if (typeof body[flag] !== 'boolean') return { patch, error: `${flag} must be true or false` };
+    patch[flag] = body[flag] as boolean;
+  }
+  if ('goal' in body) {
+    if (body.goal !== null && typeof body.goal !== 'string') return { patch, error: 'goal must be text' };
+    const goal = str(body.goal);
+    if (goal.length > MAX_GOAL) return { patch, error: `The goal can be at most ${MAX_GOAL} characters` };
+    patch.goal = goal || undefined;
+  }
+  if ('autoLimits' in body) {
+    const l = body.autoLimits as { runs?: unknown; usd?: unknown } | null;
+    const runs = l && typeof l === 'object' ? l.runs : undefined;
+    const usd = l && typeof l === 'object' ? l.usd : undefined;
+    if (typeof runs !== 'number' || !Number.isInteger(runs) || runs < 1 || runs > 500) return { patch, error: 'The daily run limit must be a whole number from 1 to 500' };
+    if (typeof usd !== 'number' || !Number.isFinite(usd) || usd < 1 || usd > 1000) return { patch, error: 'The daily spend limit must be from $1 to $1000' };
+    patch.autoLimits = { runs, usd: Math.round(usd * 100) / 100 };
+  }
   return { patch };
+}
+
+/** Goal mode needs a goal to work toward and Autopilot to work through its tickets. Judged on the project as it would be. Exported for tests. */
+export function goalModeProblem(meta: Pick<ProjectMeta, 'goalMode' | 'goal' | 'autopilot'>): string | null {
+  if (!meta.goalMode) return null;
+  if (!meta.goal?.trim()) return 'Goal mode needs a goal: write what the team should work toward.';
+  if (!meta.autopilot) return 'Goal mode needs Autopilot on, so the team works through the tickets it plans.';
+  return null;
 }
 
 // ---------- global ----------
@@ -146,20 +179,30 @@ router.get('/meta', (_req, res) => {
 });
 
 /** The settings body: `effort` is a level, or null for the model's default. Exported for tests. */
-export function readSettingsPatch(body: Record<string, unknown>): { effort?: EffortLevel | null; error?: string } {
-  if (!('effort' in body)) return { error: 'Nothing to change' };
-  const effort = body.effort;
-  if (effort === null || isEffortLevel(effort)) return { effort };
-  return { error: `effort must be ${EFFORT_LEVELS.slice(0, -1).join(', ')} or ${EFFORT_LEVELS.at(-1)}, or null` };
+export function readSettingsPatch(body: Record<string, unknown>): { effort?: EffortLevel | null; paused?: boolean; error?: string } {
+  if (!('effort' in body) && !('paused' in body)) return { error: 'Nothing to change' };
+  const out: { effort?: EffortLevel | null; paused?: boolean } = {};
+  if ('effort' in body) {
+    const effort = body.effort;
+    if (effort !== null && !isEffortLevel(effort)) return { error: `effort must be ${EFFORT_LEVELS.slice(0, -1).join(', ')} or ${EFFORT_LEVELS.at(-1)}, or null` };
+    out.effort = effort;
+  }
+  if ('paused' in body) {
+    if (typeof body.paused !== 'boolean') return { error: 'paused must be true or false' };
+    out.paused = body.paused;
+  }
+  return out;
 }
 
-/** Settings for all of HQ, every project. Answers with the new meta. */
+/** Settings for all of HQ, every project: the effort level, and Pause/Resume for everything the team starts on its own. Answers with the new meta. */
 router.patch('/settings', jsonOnly, (req, res) => {
   const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? (req.body as Record<string, unknown>) : {};
-  const { effort, error } = readSettingsPatch(body);
+  const { effort, paused, error } = readSettingsPatch(body);
   if (error) return res.status(400).json({ error });
   try {
-    setEffort(effort ?? null);
+    if (effort !== undefined) setEffort(effort);
+    if (paused === true) pauseAll();
+    else if (paused === false) resumeAll();
   } catch (e) {
     console.error('[hq] settings:', e instanceof Error ? e.message : 'error');
     return res.status(500).json({ error: 'Could not save the setting.' });
@@ -265,6 +308,24 @@ router.delete('/skills/:id', jsonOnly, (req, res) => {
 const project = Router({ mergeParams: true });
 const P = (res: Response) => res.locals.project as Project;
 
+// Anything you change in a project gives what the team does on its own a pass straight away: held work may start, and
+// with Autopilot on, a desk you just freed picks its next ticket. The minute sweep catches the rest.
+project.use((req, res, next) => {
+  // Not removing the project: there is nothing left to work on.
+  const removing = req.method === 'DELETE' && req.path === '/';
+  if (req.method !== 'GET' && !removing && typeof res.on === 'function') {
+    res.on('finish', () => {
+      if (res.statusCode >= 400) return;
+      try {
+        autoTick(P(res));
+      } catch (e) {
+        console.error(`[hq] ${P(res).meta.key} autopilot:`, e instanceof Error ? e.message : e);
+      }
+    });
+  }
+  next();
+});
+
 router.use(
   '/projects/:pid',
   (req, res, next) => {
@@ -284,8 +345,23 @@ project.patch('/', (req, res) => {
   const p = P(res);
   const { patch, error } = readProjectPatch((req.body ?? {}) as Record<string, unknown>, p.id);
   if (error) return res.status(400).json({ error });
+  // Autopilot off takes Goal mode with it: there is nothing to work through the tickets it would plan.
+  if (patch.autopilot === false && !('goalMode' in patch)) patch.goalMode = false;
+  const problem = goalModeProblem({ ...p.meta, ...patch });
+  if (problem) return res.status(400).json({ error: problem });
   updateProject(p.id, patch);
+  // A raised limit, or Autopilot just turned on: held work and free desks may start now.
+  autoTick(p);
   res.json(summary(p));
+});
+
+/** Autopilot stopped itself here after 3 automatic runs failed in a row: you resume it. Answers with the project's auto status. */
+project.post('/auto/resume', (_req, res) => {
+  const p = P(res);
+  resumeProject(p);
+  p.commit();
+  autoTick(p);
+  res.json(autoStatus(p));
 });
 
 /** Archive: data and workspaces move to data/archive. The linked folder is never touched. */
@@ -302,8 +378,9 @@ project.delete('/', (_req, res) => {
 project.get('/state', (_req, res) => {
   const p = P(res);
   // Messages stay out of the 3-second poll; a thread's messages load when it opens. Same for a huddle's board and transcript.
-  const { messages: _messages, huddles, ...rest } = p.state;
-  const body: StateResponse = { ...rest, huddles: huddles.map(stripHuddle), office: officeState(p), huddleLimit: HUDDLES_PER_DAY, meta: meta(), project: p.meta };
+  // What the team does on its own goes as a status (why it waits, today's count), not the raw held wakes.
+  const { messages: _messages, huddles, auto: _auto, ...rest } = p.state;
+  const body: StateResponse = { ...rest, huddles: huddles.map(stripHuddle), office: officeState(p), huddleLimit: HUDDLES_PER_DAY, meta: meta(), project: p.meta, auto: autoStatus(p) };
   res.json(body);
 });
 
@@ -497,6 +574,9 @@ project.post('/items/:id/decision', (req, res) => {
   const signOff = decision === 'approve' && closesOnApprove(item);
   // An instruction needs something to say. Checked before anything changes.
   if (decision === 'instruct' && !note && !images.length) return res.status(400).json({ error: 'instruct needs a note' });
+  // You decided: whatever the team had held or Autopilot had left on this ticket is settled by your decision.
+  delete item.autoHold;
+  delete item.autoSkip;
 
   switch (decision) {
     case 'approve':
@@ -597,7 +677,17 @@ project.patch('/items/:id', (req, res) => {
     item.history.push({ ts: now(), text: 'Description edited by you' });
   }
   // Into QA the QA desk checks it; into sign-off Approve closes it; anywhere else it stops waiting on a sign-off.
+  const from = item.status;
   const moved = nextStatus !== undefined ? moveByHand(s, item, nextStatus) : null;
+  // You moved it: Autopilot giving up on it no longer applies, and a held start that no longer fits where it is now is dropped.
+  if (nextStatus !== undefined && nextStatus !== from) {
+    delete item.autoSkip;
+    const moot = item.autoHold ? mootRun(item.autoHold.reason, item.status) : null;
+    if (moot) {
+      item.history.push({ ts: now(), text: `Dropped a held start: ${moot}` });
+      delete item.autoHold;
+    }
+  }
   settleInstructions(s);
   refreshStatuses(s);
   p.commit();

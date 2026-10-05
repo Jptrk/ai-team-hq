@@ -1,6 +1,8 @@
 import type { WorkItem } from '../shared/types';
 import { hasQa, signoffOn } from '../shared/types';
 import { leadOf, refreshStatuses, settleInstructions } from './agents';
+import { autoGate, countStart, globalHold, pickStarts } from './autopilot';
+import { createGoalTicket, goalState, planDue, plannerOf, recordGoalStatus } from './goal';
 import { clearWaiting, markRead, messagesOf, postAgentMessage, threadForItem } from './chat';
 import { addComment } from './comments';
 import { finishWork, qaDeskOf, recordQaResult, type QaVerdict } from './qa';
@@ -193,6 +195,13 @@ function tickProject(p: Project): void {
   const s = p.state;
   const finish = { qa: hasQa(p.meta.template), signoff: signoffOn(p.meta) };
   tickComments(p);
+  // Paused: the team starts nothing on its own. Answers to your comments still come.
+  if (globalHold()) {
+    settleInstructions(s);
+    refreshStatuses(s);
+    p.commit();
+    return;
+  }
   tickQa(p);
 
   // Idle desks pick up routine work so the office never goes quiet.
@@ -229,8 +238,41 @@ function tickProject(p: Project): void {
 
   const active = s.items.filter((i) => i.status === 'in-progress' || i.status === 'sent-back');
 
-  // Occasionally start a queued item.
-  if (Math.random() < 0.35) {
+  // Goal mode: the lead plans a step or two toward the goal, as a live lead would.
+  if (p.meta.autopilot && p.meta.goalMode && !autoGate(p) && planDue(s, p.meta)) {
+    const lead = plannerOf(s);
+    const g = goalState(s, p.meta);
+    if (lead && g) {
+      g.lastPlanAt = now();
+      countStart(s);
+      const desks = s.agents.filter((a) => !a.isHuman && a.status !== 'off');
+      const made = Math.min(2, desks.length);
+      for (let i = 0; i < made; i++) {
+        const desk = pick(desks)!;
+        createGoalTicket(p, lead.id, { to: desk.name, title: `Next step toward the goal (${p.state.seq + 1})`, brief: `Sim: a step ${lead.name} planned toward the goal.` }, i);
+      }
+      recordGoalStatus(p, lead.id, 'on-track', `Planned ${made} more step${made === 1 ? '' : 's'}.`);
+    }
+  }
+
+  if (p.meta.autopilot) {
+    // Autopilot: free desks take their oldest To do ticket, as live ones do, within today's limits.
+    for (const pick of pickStarts(s, p.meta, 2)) {
+      if (autoGate(p)) break;
+      const next = s.items.find((i) => i.id === pick.itemId);
+      if (!next) continue;
+      next.status = 'in-progress';
+      next.history.push({ ts: now(), text: 'Started by Autopilot: it was next in To do' });
+      countStart(s);
+      const agent = s.agents.find((a) => a.id === pick.agentId);
+      if (agent) {
+        agent.currentTask = next.title;
+        agent.lastActive = now();
+      }
+      p.log(pick.agentId, `Autopilot started ${p.ticket(next)} "${next.title}"`);
+    }
+  } else if (Math.random() < 0.35) {
+    // Occasionally start a queued item.
     const next = s.items.find((i) => i.status === 'todo' && s.agents.find((a) => a.id === i.assignee)?.status !== 'off');
     if (next) {
       next.status = 'in-progress';

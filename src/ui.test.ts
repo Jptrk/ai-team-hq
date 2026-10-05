@@ -19,7 +19,7 @@ import { fitWithin, imageFiles } from './lib/images';
 import { cleanMarkdown, escapeTypedText, looksLikeDiffOrTerminal, looksLikeMarkdown, needsPlainEditor } from './lib/markdownPaste';
 import { attachmentUrl, isAttachmentUrl, isReportUrl, reportFileName, resolveReportHref } from './markdown/reportLinks';
 import { parseRoute, projectPath } from './route';
-import { awaitsSignoff, latestDecision, readableInk, effortLabel, runnerLabel, signoffVerdict, waitingSummary, waitingTitle } from './util';
+import { awaitsSignoff, latestDecision, readableInk, autoTodayText, effortLabel, goalLabel, holdText, pauseLabel, pauseText, runnerLabel, signoffVerdict, waitingSummary, waitingTitle } from './util';
 import { MCP_PRESETS, presetArgs, presetDefaults } from '../shared/mcpPresets';
 import { buildSpec, safeAuthUrl } from '../shared/mcpSpec';
 import type { ConnectionRow, SkillMeta } from '../shared/types';
@@ -662,6 +662,23 @@ test('header pill: sim, live with the model, and the effort only when set', () =
   assert.equal(effortLabel({ runner: 'sim', effort: 'high' }), '');
   assert.equal(effortLabel({ runner: 'claude', effort: null }), '');
   assert.equal(effortLabel({ runner: 'claude', effort: 'xhigh' }), ' · extra high effort');
+});
+
+test('pause and holds: what the header and a held ticket say', () => {
+  assert.equal(pauseLabel({ by: 'you' }), 'Paused');
+  assert.equal(pauseLabel({ by: 'account' }), 'Account problem');
+  assert.equal(pauseLabel({ by: 'usage' }), 'Usage limit');
+  assert.match(pauseLabel({ by: 'usage', until: '2026-10-06T07:00:00.000Z' }), /^Usage limit · until \d/);
+  assert.match(pauseText({ by: 'you' }), /^The team starts nothing on its own/);
+  assert.match(pauseText({ by: 'usage', reason: "Claude's 5-hour limit reached.", until: '2026-10-06T07:00:00.000Z' }), /^Claude's 5-hour limit reached\. .*carries on by itself at /);
+  assert.match(pauseText({ by: 'account', reason: 'Claude reported a billing problem.' }), /until you resume\.$/);
+  assert.equal(holdText({ reason: 'handoff', why: 'paused' }), 'The hand-off waits: HQ is paused. It starts by itself once that clears.');
+  assert.equal(holdText({ reason: 'qa', why: 'usd' }), "The QA check waits: this project's spend for today is used up. It starts by itself once that clears.");
+  assert.equal(goalLabel({ status: 'on-track', planning: true }), 'Planning…');
+  assert.equal(goalLabel({ status: 'reached', planning: false }), 'Reached?');
+  assert.equal(goalLabel({ status: 'stalled', planning: false }), 'Stalled');
+  assert.equal(autoTodayText({ runs: 6, maxRuns: 40, usd: 4.1, maxUsd: 25 }), 'Today 6/40 runs · $4.10 of $25');
+  assert.equal(holdText({ reason: 'auto', why: 'restart' }), "Autopilot's start was cut off by a server restart. It starts again by itself.");
 });
 
 console.log(`ui: ${passed} tests passed`);

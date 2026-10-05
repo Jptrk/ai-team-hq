@@ -4,7 +4,7 @@ import type { Agent, WorkItem } from '../../../shared/types';
 import { Avatar } from '../../ui/Avatar';
 import { StatusLozenge } from '../../ui/Lozenge';
 import { TypeIcon } from '../../ui/TypeIcon';
-import { ticketKey } from '../../util';
+import { holdText, ticketKey } from '../../util';
 
 interface Props {
   item: WorkItem;
@@ -39,6 +39,21 @@ export function BoardCard({ item, projectKey, owner, selected, dragging, onOpen,
         {/* Only statuses that share a column get a tag; sign-off has its own. */}
         {(item.status === 'held' || item.status === 'sent-back' || item.status === 'approved') && <StatusLozenge status={item.status} />}
         {item.status === 'sent-back' && item.qa?.result === 'fail' && <span className="chip qa-chip">QA failed</span>}
+        {item.origin === 'goal' && (
+          <span className="chip goal-chip" title="Planned by the lead toward the project goal">
+            Goal
+          </span>
+        )}
+        {item.autoHold && (
+          <span className="chip held-chip" title={holdText(item.autoHold)}>
+            Waiting
+          </span>
+        )}
+        {item.autoSkip && (
+          <span className="chip skip-chip" title={`Autopilot left this for you: ${item.autoSkip.why}`}>
+            Auto-skipped
+          </span>
+        )}
         <span className="bcard-spacer" />
         <span className="bcard-moves">
           {left && (

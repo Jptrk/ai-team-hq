@@ -663,8 +663,9 @@ a desk wakes it for a live run, which spends usage.
 - **Messages are async.** A desk posts and stops, and the reply wakes it later. Unread
   messages for a desk batch into one run. Nothing waits in a slot, so the queue can't deadlock.
 - **A cut-off reply is asked again.** If a desk's run dies before it replies (a server restart,
-  an error), what it was woken for counts as unread again. After a restart the thread pauses;
-  **Resume** wakes the desk with the same messages.
+  an error), what it was woken for counts as unread again. After a restart, a reply you asked for
+  pauses the thread, and **Resume** wakes the desk with the same messages; a reply a teammate asked
+  for starts again by itself, once (see [Pause](#pause)).
 - **Ownership.** A desk woken by a message can't finish someone else's ticket, and
   `raise_for_decision` opens a new ticket rather than taking over theirs. A ticket run that
   asked a teammate stays in progress until the reply.
@@ -746,6 +747,81 @@ refused, so the new note isn't lost. Copy your text, press **Cancel**, and edit 
 | `HQ_HUDDLES_PER_DAY` | 5 | Huddles a project can start per day. `0` turns huddles off |
 | `HQ_SIM_HUDDLE_MS` | 900 | Sim mode: about how long a canned huddle turn takes |
 
+## Autopilot, Goal mode and Pause
+
+The team can work on its own, and you can stop it with one button.
+
+### Autopilot
+
+Turn it on with the **Autopilot** switch on the board (it asks first), or in **Project settings**.
+Then a free desk starts its next To do ticket by itself, oldest first, and goes on to the next one
+when it is done. A desk counts as free when it is not off shift, has nothing queued or running,
+is not in a running huddle, is not on an active ticket, and has fewer than 2 decisions waiting on
+you. Autopilot only fills free run slots (`HQ_CONCURRENCY`), so it never takes a slot ahead of your
+own clicks (a click for a desk that is mid-run still waits for that run, as always).
+
+- **A failed Autopilot run** leaves its ticket for you: it shows **Auto-skipped** on the card and
+  under **Autopilot stopped** in Needs you, and the desk moves on. **Put … on it** takes it back,
+  and a run on it that goes fine clears the mark. A desk whose ticket's last run failed (one you
+  started) moves on too; that ticket waits for you.
+- **3 Autopilot failures in a row** stop Autopilot (picks and goal planning) in that project until
+  you press **Resume Autopilot** on the board. Hand-offs, chats and QA checks go on; when one of
+  those fails, it shows on its ticket or pauses its thread, as always.
+- **Your Stop** on an Autopilot run leaves the ticket for you too, without counting as a failure.
+
+### Goal mode
+
+Write a goal in **Project settings** and turn on **Goal** (it needs Autopilot). The lead desk then
+plans: a short planning run that reads the goal, the board and the team, makes up to 5 tickets
+straight into To do (tagged **Goal**, at most 8 open at once), and says where the goal stands.
+Autopilot works through the tickets.
+
+- The lead plans when the goal is new, when the team has run out of goal work (at most every
+  20 minutes), and every 6 hours besides, to add anything missing. Editing the goal starts over.
+- A planning run only reads: no writes, no web, nothing changed through connections. It has its
+  own limits (`HQ_PLAN_MAX_TURNS`, `HQ_PLAN_MAX_BUDGET_USD`).
+- When the lead says the goal is **reached** or **blocked**, a ticket comes to Needs you
+  (Approve marks it done) and planning waits for you. Marking "reached" done ends planning until you
+  change the goal; sending it back, or dealing with "blocked", lets the lead plan again. Two plans
+  in a row that add nothing while the team has nothing to do also come to you, as **stalled**.
+- While all open goal work waits on you (decisions, sign-off, on hold), the lead waits too. It
+  also never plans while it is in a huddle you started.
+- The board shows the goal with its status (On track, Planning…, Reached?, Blocked, Stalled),
+  how many goal tickets are open, and when the lead last planned.
+
+### Daily limits
+
+Each project has a limit on what the team starts on its own per day: **40 runs and $25** unless you
+change them in Project settings. They count every run the team starts itself (Autopilot, goal
+planning, hand-offs, chat replies between desks, QA checks); your own clicks never count. The $ is
+the SDK's estimate. Both reset at your local midnight. Past a limit, the team's own starts wait
+until midnight or until you raise it; the board shows "Today 6/40 runs · $4.10 of $25".
+
+### Pause
+
+**Pause** in the header stops everything the team starts on its own, in every project: Autopilot,
+goal planning, hand-offs, chat wakes between desks and QA checks. Your own clicks still run, and
+runs already going finish. While paused, the button turns into an amber **Paused** pill and a
+banner says so; **Resume** carries on where it stopped.
+
+- **Held, not lost.** A start that cannot run now waits on its ticket (**Waiting** on the card,
+  with the reason in the ticket) or, for a chat wake, in the thread ("Sam sees this once it clears").
+  It starts by itself once the reason clears. A start that no longer fits its ticket (you moved
+  it, or marked it done) is dropped, with a line in the ticket's history.
+- **Claude's usage limit** holds automatic work the same way, in every project, until the reset
+  time Claude reports (half an hour when it gives none). The pill says "Usage limit · until 15:00";
+  **Resume now** tries sooner. A login or billing problem waits for your Resume.
+- **Restarts.** A team-started run cut off by a server restart starts again by itself, once; a
+  second time it is left for you. Runs you started keep their old behaviour.
+- A minute sweep (`HQ_AUTO_SWEEP_MS`) clears a usage limit that has reset and starts what waits.
+  Run HQ with `npm start` for unattended work, so file changes never restart it.
+
+| Env | Default | What |
+| --- | ------- | ---- |
+| `HQ_AUTO_SWEEP_MS` | 60000 | How often HQ checks for held work, Autopilot picks and goal planning (live mode) |
+| `HQ_PLAN_MAX_TURNS` | 20 | Turns one goal planning run may take |
+| `HQ_PLAN_MAX_BUDGET_USD` | 1.5 | Estimated spend one goal planning run may take |
+
 ## Go live
 
 1. `copy .env.example .env`. It already says `HQ_RUNNER=claude`.
@@ -776,7 +852,8 @@ What happens on an instruction:
    - Skills turned on for the desk are listed in its system prompt, and their folders are added read-only.
      `run_skill_script` runs a skill's script where you allowed it (see [Skills](#skills)).
    - Session id is saved per desk and resumed next run, so a desk remembers earlier tasks.
-   - Caps: `HQ_MAX_BUDGET_USD` per run, `HQ_MAX_TURNS`, `HQ_RUN_TIMEOUT_MS`.
+   - Caps: `HQ_MAX_BUDGET_USD` per run, `HQ_MAX_TURNS`, and the time limits in
+     [How long a run may take](#how-long-a-run-may-take).
 4. The agent either finishes (`report_done`) or hands you a decision (`raise_for_decision`).
 5. Approve / Send back / Instruct each start a follow-up run with your note. Hold does nothing.
 
@@ -823,6 +900,30 @@ Code work reads a lot of files, so it costs more per run than email drafting. A 
 monorepo landed near $2.50 on the SDK's estimate. If code tasks hit "Reached maximum budget",
 raise `HQ_MAX_BUDGET_USD`. On a subscription the figure is an estimate, not a charge.
 
+### How long a run may take
+
+A run is stopped when it goes quiet, not for being busy. Every message from Claude starts the
+clock again, so a desk driving Blender for half an hour, one tool call a minute, keeps going.
+
+| Env | Default | What |
+| --- | ------- | ---- |
+| `HQ_RUN_IDLE_MS` | 480000 (8 min) | No message from Claude for this long: "Stopped: no progress for 8 minutes" |
+| `HQ_TOOL_IDLE_MS` | 1200000 (20 min) | The same while a tool call waits for its result (a long script, a slow app) |
+| `HQ_RUN_TIMEOUT_MS` | 2400000 (40 min) | The whole run, however busy. A fresh-session retry gets only what is left |
+| `HQ_MCP_TOOL_TIMEOUT_MS` | 900000 (15 min) | A connection's tool call that never answers fails, so the desk can carry on. Sets Claude Code's `MCP_TOOL_TIMEOUT` unless you set that yourself; 0 leaves it alone |
+| `HQ_DEBUG_SDK` | 0 | 1 logs every message from Claude with the gap since the one before, to tune the limits |
+
+Progress means anything Claude sends, including each streamed piece of a long reply, so writing a
+big file in one go counts. Claude Code's own "still running" heartbeat during a tool call does not:
+the tool window measures real silence.
+
+A run's error says why it stopped: one of the above, "Stopped by you", or Claude's usage limit
+("Claude's 5-hour limit reached. It resets at 15:00."), instead of "Operation aborted".
+
+`HQ_RUN_TIMEOUT_MS` used to be the only limit, at 10 minutes in the old `.env.example`. It now caps
+the whole run, so an old `600000` in your `.env` still cuts busy runs off at 10 minutes. HQ warns
+about that at startup; raise it or remove it.
+
 ### Sessions and the prompt cache
 
 Each desk keeps one Claude session and resumes it on every run, so it remembers its earlier work.
@@ -864,7 +965,7 @@ chat reply's whole budget ("Reached maximum budget ($1)").
 | `data/projects/<id>/attachments/` | Images you pasted, named by the server |
 | `workspaces/<id>/<agent>/` | One desk's `ROLE.md`, `memory.md`, `reports/` |
 | `data/skills/` | The skills library and the installed skills (see [Skills](#skills)) |
-| `data/settings.json` | Settings for all of HQ: the [effort](#effort) level |
+| `data/settings.json` | Settings for all of HQ: the [effort](#effort) level, [Pause](#pause), and a Claude usage-limit hold |
 | `data/archive/` | Removed projects |
 | `data/backup/` | The single-project `db.json` from before projects existed |
 
@@ -885,6 +986,8 @@ npm run test:office
 npm run test:activity
 npm run test:skills
 npm run test:settings
+npm run test:timeouts
+npm run test:auto
 ```
 
 - **`test:guard`** checks what an agent may read and write in its workspace and the linked folder. It also checks which MCP tools run freely, need approval, or are refused.
@@ -932,7 +1035,15 @@ npm run test:settings
   - the Skills section of the system prompt, the read-only fence around skill folders, and the API routes
 
   It fetches nothing: a stand-in builds a local fixture where git would clone.
-- **`test:settings`** checks the effort setting: the five levels, a hand-edited `data/settings.json`, saving and going back to the model default, and the `PATCH /api/settings` route. It writes only in a scratch folder.
+- **`test:auto`** checks what the team does on its own, with desks on a fake runner:
+  - Pause: team starts held on their tickets and chat wakes held in threads (counts unchanged), your own starts never held (also when they join a waiting team run), queued team runs held at once without blocking yours, Resume oldest first, stale holds dropped
+  - Claude's usage limit (held everywhere, cleared at the reset), account problems, and restarts (a team run starts again once; a hand-off and its QA check both cut off keep the QA check)
+  - the queue: your runs first come, first served, ahead of the team's
+  - daily limits: what counts, queued runs counted, your local day, the settings checks
+  - Autopilot: free desks, oldest first, free slots only, failures and the stop after 3, your Stop, the prompt
+  - Goal mode: when the lead plans, its tickets and caps, reached/blocked/stalled, planning first with the lead kept free, and the read-only fence and prompt of a planning run
+- **`test:timeouts`** checks when a run is stopped: the idle and tool windows, the overall cap (and what a retry gets), the stop and usage-limit wording (never words that trigger a fresh-session retry), and the MCP tool timeout.
+- **`test:settings`** checks the effort setting (the five levels, saving and going back to the model default), Pause and usage holds in a hand-edited `data/settings.json`, and the `PATCH /api/settings` route. It writes only in a scratch folder.
 - **`test:attachments`** checks image uploads: type sniffing, file names, picking ids, the startup sweep, and the image blocks sent to desks. It also checks desk images: screenshot capture from connected tools (held in memory, saved only when attached) and attaching image files by path, links included.
 
 To try the UI against a copy of your data, run the API from another folder and point Vite at it.
@@ -957,15 +1068,16 @@ Everything project-specific lives under `/api/projects/:pid`.
 
 | Method | Path | Body / query |
 | ------ | ---- | ------------ |
-| GET    | /api/meta | includes `effort`: the level every desk run uses, or null for the model default |
-| PATCH  | /api/settings | `{ effort }`: `low`, `medium`, `high`, `xhigh`, `max`, or null for the model default. For all of HQ; answers with the new meta |
+| GET    | /api/meta | includes `effort`: the level every desk run uses, or null for the model default; `paused`: why HQ holds automatic work (you, a usage limit, an account problem), or null; `held`: starts waiting |
+| PATCH  | /api/settings | `{ effort?, paused? }`: effort is `low`, `medium`, `high`, `xhigh`, `max`, or null for the model default; `paused: true` pauses everything the team starts on its own, `false` resumes (your Pause first, then a usage hold). For all of HQ; answers with the new meta |
 | GET    | /api/fs/check | `?path=<folder>&except=<pid>` |
 | GET    | /api/projects | |
 | POST   | /api/projects | `{ name, key?, path?, access?, template?, signoff? }`; `signoff` defaults to true |
 | GET    | /api/projects/:pid | |
-| PATCH  | /api/projects/:pid | `{ name?, key?, path?, access?, signoff? }`; `signoff` is true or false: finished tickets wait for your sign-off before Done (missing on older projects means on) |
+| PATCH  | /api/projects/:pid | `{ name?, key?, path?, access?, signoff?, autopilot?, goalMode?, goal?, autoLimits? }`; `signoff` is true or false: finished tickets wait for your sign-off before Done (missing on older projects means on); `goalMode` needs a `goal` and `autopilot`, and `autopilot: false` turns it off too; `autoLimits` is `{ runs: 1-500, usd: 1-1000 }` |
+| POST   | /api/projects/:pid/auto/resume | Autopilot stopped itself after 3 failed runs: start it again. Answers with the project's auto status |
 | DELETE | /api/projects/:pid | archives it |
-| GET    | /api/projects/:pid/state | includes `office`: what each desk is doing right now (activity, since, who with) |
+| GET    | /api/projects/:pid/state | includes `office`: what each desk is doing right now (activity, since, who with); `auto`: why the team's own work waits here, today's count against the limits, and the goal's status |
 | POST   | /api/projects/:pid/instructions | `{ text, attachments?, includeNotes? }` |
 | POST   | /api/projects/:pid/items/:id/decision | `{ decision, note?, attachments?, includeNotes? }` |
 | POST   | /api/projects/:pid/items/:id/comments | `{ text, attachments?, includeNotes? }`; wakes the owner |

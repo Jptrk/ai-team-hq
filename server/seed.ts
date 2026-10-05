@@ -1,7 +1,7 @@
 import { stampNeedsYou } from '../shared/activity';
 import { assignDeskNumbers } from '../shared/desks';
 import type { Agent, State, TeamTemplate, WorkItem } from '../shared/types';
-import { hasQa, MAX_TEAM } from '../shared/types';
+import { emptyAutoState, hasQa, MAX_TEAM } from '../shared/types';
 
 const day = (offset: number) => {
   const d = new Date();
@@ -321,6 +321,7 @@ export function seed(template: TeamTemplate, opts: SeedOptions): State {
     teamNotes: '',
     notesEveryRun: false,
     skillDesks: {},
+    auto: emptyAutoState(),
     // Dev-team projects start with their QA desk already picked (Ivy), so a restart after you stop QA never picks one again.
     ...(hasQa(template) ? { qaPicked: true } : {}),
     activity: demo

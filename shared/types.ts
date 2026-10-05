@@ -110,6 +110,85 @@ export interface WorkItem {
   changedFiles?: string[];
   /** When it went into Needs you, for the Office's waiting clock. Cleared when it leaves (see stampNeedsYou). */
   needsYouAt?: string;
+  /** A start the team made for this ticket (a hand-off, a QA check, Autopilot) that waits: HQ is paused or a limit was hit. It starts when that clears. */
+  autoHold?: AutoHold;
+  /** Autopilot gave up on it: its automatic run failed. It waits for you and no longer keeps its desk busy. */
+  autoSkip?: { at: string; why: string };
+  /** Made by the lead in Goal mode. */
+  origin?: 'goal';
+}
+
+/** Why automatic work can't start now. paused: you; usage / account: Claude refused; halted: Autopilot failed 3 times in a row; runs / usd: the project's daily limit. */
+export type HoldKind = 'paused' | 'usage' | 'account' | 'halted' | 'runs' | 'usd';
+
+export interface Hold {
+  kind: HoldKind;
+  /** In words, for the ticket's history and the page. */
+  text: string;
+  /** When it clears by itself (a usage limit's reset, tomorrow for a daily limit). */
+  until?: string;
+}
+
+/** A held start: what would have run, and why it waits. restart: a server restart cut the run off, and it starts again by itself. */
+export interface AutoHold {
+  reason: RunReason;
+  at: string;
+  why: HoldKind | 'restart';
+  /** Times a restart already cut this start off. A second time, it is skipped instead. */
+  restarts?: number;
+}
+
+/** A desk that would have been woken in a chat, held like a ticket start. */
+export interface HeldWake {
+  threadId: string;
+  agentId: string;
+  at: string;
+  why: HoldKind | 'restart';
+  restarts?: number;
+}
+
+/** What the team does on its own in one project, and today's count of it. */
+export interface AutoState {
+  /** Runs the team started on its own today (your local day), and their estimated cost. */
+  usage: { day: string; runs: number; usd: number };
+  /** Automatic runs that failed in a row. At 3, Autopilot stops in this project until you resume it. */
+  failStreak: number;
+  /** Autopilot stopped itself here, and why. */
+  halted?: { at: string; why: string };
+  /** Chat wakes waiting for HQ to resume, oldest first. */
+  heldWakes: HeldWake[];
+  /** Goal mode: where the current goal stands. A new goal (its text changed) starts over. */
+  goal?: GoalState;
+}
+
+/**
+ * on-track: the lead keeps planning. reached / blocked: the lead said so, and a ticket in Needs you waits for you.
+ * stalled: two plans in a row made nothing while the team had nothing to do.
+ */
+export type GoalStatus = 'on-track' | 'reached' | 'blocked' | 'stalled';
+
+export interface GoalState {
+  /** Fingerprint of the goal text this state belongs to. */
+  rev: string;
+  status: GoalStatus;
+  /** The lead's latest word on it. */
+  note?: string;
+  /** The Needs-you ticket saying it is reached, blocked or stalled. */
+  statusItemId?: string;
+  /** When the lead last planned (set as the planning run is queued). */
+  lastPlanAt?: string;
+  /** Plans in a row that made no ticket while the team had nothing to do. */
+  emptyPlans: number;
+}
+
+/** Today on this machine's clock, as YYYY-MM-DD. HQ runs on your PC, so its daily limits reset at your midnight. */
+export function localDay(d = new Date()): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+export function emptyAutoState(day = localDay()): AutoState {
+  return { usage: { day, runs: 0, usd: 0 }, failStreak: 0, heldWakes: [] };
 }
 
 export interface QaState {
@@ -151,7 +230,8 @@ export interface Activity {
   text: string;
 }
 
-export type RunReason = 'instruction' | 'send-back' | 'instruct' | 'approved' | 'manual' | 'message' | 'handoff' | 'comment' | 'huddle' | 'qa' | 'qa-fail';
+/** auto: Autopilot started the desk's next To do ticket. plan: the lead plans tickets for the project goal. */
+export type RunReason = 'instruction' | 'send-back' | 'instruct' | 'approved' | 'manual' | 'message' | 'handoff' | 'comment' | 'huddle' | 'qa' | 'qa-fail' | 'auto' | 'plan';
 export type RunStatus = 'queued' | 'running' | 'done' | 'failed';
 
 /** One invocation of an agent: on a ticket, or woken by a chat message. */
@@ -178,6 +258,10 @@ export interface Run {
   huddleId?: string;
   /** The team notes went into this run's prompt. */
   notes?: boolean;
+  /** The team started it, not you: a hand-off, a chat wake, a QA check, Autopilot, goal planning. Held while HQ is paused. */
+  auto?: true;
+  /** Times a restart cut this start off before. */
+  restarts?: number;
 }
 
 export interface Company {
@@ -357,6 +441,8 @@ export interface State {
   qaPicked?: boolean;
   /** Skills from HQ's library turned on in this project: skill id -> desk ids. */
   skillDesks: Record<string, string[]>;
+  /** What the team does on its own here: today's count, held chat wakes, Autopilot's failure streak. */
+  auto: AutoState;
 }
 
 /** Where an installed skill came from: a folder in a GitHub repo. */
@@ -532,6 +618,40 @@ export interface ProjectMeta {
   createdAt: string;
   /** Finished tickets wait for your sign-off before Done. Missing means on, so older projects have it. Read it with signoffOn. */
   signoff?: boolean;
+  /** Free desks start their next To do ticket on their own. Off unless you turn it on. */
+  autopilot?: boolean;
+  /** The lead turns the goal into tickets for Autopilot to work through. Needs the goal and Autopilot. */
+  goalMode?: boolean;
+  /** What the team works toward in Goal mode, in plain words. */
+  goal?: string;
+  /** Most the team may start on its own here per day. Read it with autoLimitsOf. */
+  autoLimits?: AutoLimits;
+}
+
+export interface AutoLimits {
+  runs: number;
+  usd: number;
+}
+
+export const AUTO_LIMIT_DEFAULTS: AutoLimits = { runs: 40, usd: 25 };
+export const MAX_GOAL = 2000;
+
+export function autoLimitsOf(meta: Pick<ProjectMeta, 'autoLimits'>): AutoLimits {
+  return { runs: meta.autoLimits?.runs ?? AUTO_LIMIT_DEFAULTS.runs, usd: meta.autoLimits?.usd ?? AUTO_LIMIT_DEFAULTS.usd };
+}
+
+/** What the team does on its own in a project right now, for the board. */
+export interface AutoStatus {
+  /** Why nothing automatic starts here now, or null. */
+  hold: Hold | null;
+  /** Today's (your local day) automatic runs and estimated spend, against the limits. resetsAt: your next midnight. */
+  today: { day: string; runs: number; usd: number; maxRuns: number; maxUsd: number; resetsAt: string };
+  /** Starts and chat wakes waiting here. */
+  held: number;
+  /** Tickets Autopilot left for you. */
+  skipped: number;
+  /** Goal mode on: where the goal stands, for the board's goal strip. */
+  goal?: { status: GoalStatus; planning: boolean; note?: string; lastPlanAt?: string; open: number; cap: number };
 }
 
 /** Finished tickets wait for your sign-off before Done, unless you turned it off for the project. */
@@ -546,6 +666,8 @@ export interface ProjectSummary extends ProjectMeta {
   running: number;
   /** False when the linked folder no longer exists. */
   pathOk: boolean;
+  /** Why the team's own work waits here (paused, a limit, Autopilot stopped), or null. */
+  autoHold: HoldKind | null;
 }
 
 export interface PathCheck {
@@ -571,12 +693,24 @@ export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 export type EffortLevel = (typeof EFFORT_LEVELS)[number];
 export const isEffortLevel = (v: unknown): v is EffortLevel => typeof v === 'string' && (EFFORT_LEVELS as readonly string[]).includes(v);
 
+/** Why HQ holds automatic work. by: you pressed Pause; usage: Claude's usage limit (clears by itself at until); account: a login or billing problem. */
+export interface PauseInfo {
+  by: 'you' | 'usage' | 'account';
+  at: string;
+  reason?: string;
+  until?: string;
+}
+
 /** Server-side facts the UI needs that are not persisted. */
 export interface Meta {
   runner: RunnerName;
   model: string;
   /** The effort every desk run uses, one setting for all of HQ. Null: the model's own default. */
   effort: EffortLevel | null;
+  /** Nothing the team starts on its own runs, in any project: you paused HQ, or Claude refused (usage limit, account). */
+  paused: PauseInfo | null;
+  /** Starts and chat wakes waiting for HQ to resume or a limit to clear, across all projects. */
+  held: number;
   /** True when some credential exists, so live mode can actually run. */
   liveReady: boolean;
   /** Which credential the Agent SDK will use. */
@@ -584,7 +718,7 @@ export interface Meta {
 }
 
 /** The polled state leaves out messages; a thread's messages load when it opens. */
-export interface StateResponse extends Omit<State, 'messages' | 'huddles'> {
+export interface StateResponse extends Omit<State, 'messages' | 'huddles' | 'auto'> {
   huddles: HuddleSummary[];
   /** What each desk is doing right now, for the Office view. Derived, never stored. */
   office: Record<string, AgentActivity>;
@@ -592,6 +726,8 @@ export interface StateResponse extends Omit<State, 'messages' | 'huddles'> {
   huddleLimit: number;
   meta: Meta;
   project: ProjectMeta;
+  /** What the team does on its own here: why it waits, and today's count against the limits. */
+  auto: AutoStatus;
 }
 
 export type Decision = 'approve' | 'hold' | 'send-back' | 'instruct';

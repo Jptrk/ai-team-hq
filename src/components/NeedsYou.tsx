@@ -23,6 +23,8 @@ interface Props {
   onOpenThread: (id: string) => void;
   onResumeThread: (id: string) => Promise<void>;
   onCreate: () => void;
+  /** Put a ticket's owner on it again. Live only. */
+  onRun?: (id: string) => Promise<void>;
 }
 
 function Row({ item, agents, projectKey, onOpen, onDecide, onOpenAgent }: { item: WorkItem } & Pick<Props, 'agents' | 'projectKey' | 'onOpen' | 'onDecide' | 'onOpenAgent'>) {
@@ -67,8 +69,10 @@ export function NeedsYou(p: Props) {
   const held = p.items.filter((i) => i.status === 'held');
   const signoff = p.items.filter((i) => i.status === 'signoff').sort((a, b) => (b.number ?? 0) - (a.number ?? 0));
   const proposals = p.huddles.flatMap((h) => h.proposals.filter((x) => x.status === 'pending').map((x) => ({ h, x })));
+  // Autopilot left these for you: their automatic run failed (or you stopped it). Ones already listed above are not repeated.
+  const skipped = p.items.filter((i) => i.autoSkip && !['done', 'needs-you', 'signoff', 'held'].includes(i.status)).sort((a, b) => (a.number ?? 0) - (b.number ?? 0));
 
-  if (!decide.length && !held.length && !p.paused.length && !proposals.length && !signoff.length) {
+  if (!decide.length && !held.length && !p.paused.length && !proposals.length && !signoff.length && !skipped.length) {
     return (
       <div className="empty inbox-empty">
         <p className="empty-title">Inbox zero.</p>
@@ -126,6 +130,49 @@ export function NeedsYou(p: Props) {
                 source={{ label: `${HUDDLE_KIND_LABEL[h.kind]} #${h.number}`, onOpen: () => p.onOpenHuddle(h.id) }}
               />
             ))}
+          </ul>
+        </section>
+      )}
+      {skipped.length > 0 && (
+        <section className="inbox-group">
+          <h2 className="inbox-heading">
+            Autopilot stopped <span className="badge amber">{skipped.length}</span>
+          </h2>
+          <ul className="inbox-list">
+            {skipped.map((i) => {
+              // In QA, the QA desk is the one a run starts for.
+              const owner = i.status === 'qa' ? p.agents.find((a) => a.qa && !a.isHuman) : agentById(p.agents, i.assignee);
+              const key = ticketKey(i, p.projectKey);
+              return (
+                <li key={i.id} className="inbox-row">
+                  <div className="inbox-main">
+                    <div className="inbox-line">
+                      <TypeIcon kind={i.kind} />
+                      <span className="ticket-key">{key}</span>
+                      <button type="button" className="inbox-title" onClick={() => p.onOpen(key)}>
+                        {i.title}
+                      </button>
+                    </div>
+                    <p className="inbox-summary">{i.autoSkip!.why}</p>
+                    <div className="inbox-meta">
+                      <span>Autopilot left it for you{owner ? `; ${owner.name} has moved on` : ''}</span>
+                    </div>
+                  </div>
+                  <div className="inbox-actions">
+                    <div className="decision-row">
+                      {p.onRun && owner && !owner.isHuman && (
+                        <button type="button" className="btn btn-primary btn-sm" disabled={owner.running} onClick={() => void p.onRun!(i.id)}>
+                          <Play size={13} aria-hidden /> Put {owner.name} on it
+                        </button>
+                      )}
+                      <button type="button" className="btn btn-outline btn-sm" onClick={() => p.onOpen(key)}>
+                        Open
+                      </button>
+                    </div>
+                  </div>
+                </li>
+              );
+            })}
           </ul>
         </section>
       )}
