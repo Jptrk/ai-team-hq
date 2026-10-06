@@ -1,18 +1,20 @@
 ---
 name: verify-without-servers
-description: How to verify fixes in ai-team-hq without starting servers, calling MCP tools, or spending model usage
+description: How to verify fixes in ai-team-hq without starting servers, calling MCP tools, or spending model usage; when editing server/ is safe while 4747 listens
 metadata:
   type: feedback
 ---
 
-When fixing review findings in ai-team-hq, never start the dev/API servers, never call MCP tools, and never run anything that reaches a model. Verify with `npx tsc --noEmit`, `npm run test:attachments`, `npm run test:chat`, `npm run test:guard`, `npm run test:ui`, and `npm run build`; for extra checks, write throwaway tsx scripts in the session scratchpad that import pure helpers.
+When fixing review findings in ai-team-hq, never start the dev/API servers, never call MCP tools, and never run anything that reaches a model. Verify with `npx tsc --noEmit -p .` and the `npm run test:*` suites (account, settings, timeouts, ui, mcp, guard, auto, chat, attachments); for extra checks, write throwaway tsx scripts in the session scratchpad that import pure helpers.
 
 **Why:** agent runs spend the founder's Claude subscription usage (see [[no-api-billing-subscription-only]]), and MCP actions post as the founder's own accounts.
 
-**How to apply:** for logic that lives inside SDK tool handlers (e.g. report_done), pull the decision into a small exported pure function and test that from server/guard.test.ts, which already imports server/runner/claude.ts. Logic inside runner/index.ts execute() (calls the real runner) is tested the same way, via a helper in server/chat.ts tested from chat.test.ts. There is no git repo, so report changes by file:line.
+**How to apply:** for logic that lives inside SDK tool handlers (e.g. report_done), pull the decision into a small exported pure function and test that from server/guard.test.ts, which already imports server/runner/claude.ts. Logic inside runner/index.ts execute() (calls the real runner) is tested the same way, via a helper in server/chat.ts tested from chat.test.ts. The repo is a git repo now (2026-10-06): report changes with `git status`/`git diff`.
 
-Before editing anything under server/ or shared/, run `powershell -NoProfile -Command "Get-NetTCPConnection -LocalPort 4747 -State Listen -ErrorAction SilentlyContinue"`. If it prints a listener, stop and report: the dev API runs under `node --watch` on server/ and shared/, and a restart kills live agent runs. Exit code 1 with no output means nothing is listening. Scratch scripts never go under server/ or shared/ for the same reason.
+Before editing anything under server/ or shared/, check what listens on 4747 (`Get-NetTCPConnection -LocalPort 4747 -State Listen`). The danger is `npm run dev` (`node --watch` on server/ and shared/): an edit restarts it and kills live agent runs, so stop and report. `npm start` (tsx, no --watch) does not restart on edits, so editing is safe then, but never run `npm run build`: it rewrites dist/, which `npm start` serves. On 2026-10-06 the coordinator confirmed the listener was `npm start` and allowed edits. Scratch scripts never go under server/ or shared/.
 
-When the server is live, the coordinator may instead hand over a staging copy (scratchpad `hq-stage`, node_modules a junction to the real repo). Work only there, and report an exact created/changed/deleted list for a batch copy. The staging `.git` is stale, so md5-snapshot the files before editing and diff afterwards. `npm run build` briefly writes `node_modules/.vite-temp` (Vite's bundled config); it empties again, so mention it rather than avoid it. Delete `dist/` afterwards.
+Parallel agents may edit the same tree (seen 2026-10-06: an MCP-guard fixer touched server/mcp.ts and README while I worked). Use exact-string edits, never whole-file rewrites of shared files, and re-check `git status` before reporting.
 
-An Express route can be checked without a listener: a probe in the scratchpad chdirs to a temp dir, imports `server/store.ts` and `server/routes.ts` through `pathToFileURL(...).href` (plain Windows paths fail as ESM specifiers), creates a project, then calls `router(req, res, next)` with a mock `{ method, url }` request and a `res` that has `locals`, `status()` and `json()`.
+When the server is live, the coordinator may instead hand over a staging copy (scratchpad `hq-stage`, node_modules a junction to the real repo). Work only there, and report an exact created/changed/deleted list for a batch copy. `npm run build` briefly writes `node_modules/.vite-temp`; delete `dist/` afterwards.
+
+An Express route can be checked without a listener: import `server/routes.ts` after chdir to a temp dir and call `router(req, res, next)` with a mock `{ method, url, headers, query, get }` request and a `res` with `locals`, `status()` and `json()` (server/account.test.ts has an `api()` helper that does this, with a headers argument).

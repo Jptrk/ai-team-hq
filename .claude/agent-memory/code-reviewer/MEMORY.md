@@ -3,4 +3,6 @@
 - [SDK/CLI internals offline](sdk-cli-internals.md) — grep sdk.mjs and claude.exe: stream shapes, tool ordering, mcp_authenticate shape, wt `;` splitting
 - [UI dialog review checks](ui-dialog-review-checks.md) — top-layer/inert flags, nested-dialog CSS leaks, Android close requests, stale caches
 - [Huddle engine review checks](huddle-engine-review-checks.md) — resume/stop races in the drive loop, blind note approval, .mts probe pattern
+- [Account sign-in review checks](account-signin-review-checks.md) — status cache vs forced re-check, vanishing page errors, frozen runner on macOS, creds file unreadable
 - [Desk identity review checks](desk-identity-review-checks.md) — ids reused after reset/rename inherit stale workspace ROLE.md/memory.md; founder-name clashes
+- [MCP guard review checks](mcp-guard-review-checks.md) — deny-side key heuristics reused for allow decisions, CODE_DELETES gaps, which deny reason a test hits

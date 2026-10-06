@@ -1,2 +1,3 @@
-- [Verify without servers](feedback_verify_without_servers.md) — check port 4747 before editing server/; staging-copy workflow; in-process route probe; no servers/MCP/models
-- [Write probes with Write tool](feedback_write_probes_with_write_tool.md) — Bash heredocs collapse `\\`; probes needing packages go in a temp src/__probe/
+- [Verify without servers](feedback_verify_without_servers.md) — 4747 under --watch: stop; npm start: edit ok, no build; parallel agents; in-process route probe
+- [Write probes with Write tool](feedback_write_probes_with_write_tool.md) — Bash heredocs collapse `\\`; Python text edits turn CRLF files to LF; probes in src/__probe/
+- [claude auth status methods](reference_claude_auth_status.md) — authMethod values in the bundled CLI; a Console /login reports "claude.ai"
