@@ -28,7 +28,7 @@ import {
 import { addComment } from '../comments';
 import { findHuddle, huddlePromptText, recordContribution, recordSummary, type ContributionArgs, type SummaryArgs } from '../huddle-core';
 import { runtimeServers, type AllowedServer } from '../connections';
-import { inputSaysDelete, isDestructiveTool, isReadOnlyTool } from '../mcp';
+import { autoDelete, isReadOnlyTool } from '../mcp';
 import { changedAfterQa, clearSignoff, finishWork, noteChangedFiles, QA_MAX_FIXES, qaDeskOf, recordQaResult, verdictProblem } from '../qa';
 import { claudeEnv, folderExists, HQ_ROOT, instructionsFileIn, isInside } from '../paths';
 import { settings } from '../settings';
@@ -1534,8 +1534,9 @@ const STRICTNESS: Record<ConnectionMode, number> = { auto: 0, ask: 1, read: 2 };
  *   changes, read-only mode              -> never
  *   changes, ask mode                    -> only in the run that follows the founder's approval
  *   changes, auto mode                   -> yes, each one logged in the activity feed once it worked
- *   deletes, auto mode                   -> as on ask. A delete is one the tool's name or the server's hint
- *                                           says, or one its input asks for (best effort, see inputSaysDelete)
+ *   deletes, auto mode                   -> as on ask. A delete is one the tool's name says, one its input
+ *                                           asks for, or one the server's hint says unless a scan of the
+ *                                           script can stand in for it (best effort, see autoDelete)
  * The connection is read again on every call: turned off or this desk dropped means no, and the mode is the
  * stricter of the one the run started with and the one saved now (read, then ask, then auto).
  */
@@ -1559,7 +1560,7 @@ function mcpDecision(ctx: GuardContext, toolName: string, input: Record<string, 
     return { behavior: 'deny', message: `${server.name} is read only in this project. ${tool} would change something, so it is never allowed.` };
   }
   // Auto: changes run without approval, except anything that deletes or removes. Each one goes in the activity feed.
-  const deletes = mode === 'auto' ? (isDestructiveTool(tool, server.tools[tool]) ? 'name' : inputSaysDelete(input) ? 'input' : null) : null;
+  const deletes = mode === 'auto' ? autoDelete(tool, server.tools[tool], input) : null;
   if (mode === 'auto' && !deletes) {
     if (toolUseID) ctx.autoChanges?.set(toolUseID, { server: server.name, tool, target: targetOf(input) });
     ctx.autoAllowed?.push(server.name);
@@ -1567,10 +1568,15 @@ function mcpDecision(ctx: GuardContext, toolName: string, input: Record<string, 
   }
   if (ctx.reason === 'approved') return { behavior: 'allow', updatedInput: input };
   if (deletes) {
-    const what = deletes === 'name' ? `${tool} deletes or removes something` : `This ${tool} call asks to delete or remove something`;
+    const what =
+      deletes === 'name'
+        ? `${tool} deletes or removes something on ${server.name}.`
+        : deletes === 'input'
+          ? `This ${tool} call asks to delete or remove something on ${server.name}.`
+          : `${server.name} marks ${tool} as able to overwrite or delete, and HQ can't see what this call will do.`;
     return {
       behavior: 'deny',
-      message: `${what} on ${server.name}. Even on auto, that needs the founder's approval first. Write exactly what you will delete and why in a report under reports/, call raise_for_decision, and stop. Once approved you will get a run where this is allowed.`,
+      message: `${what} Even on auto, that needs the founder's approval first. Write exactly ${deletes === 'hint' ? 'what you will do' : 'what you will delete and why'} in a report under reports/, call raise_for_decision, and stop. Once approved you will get a run where this is allowed.`,
     };
   }
   return {

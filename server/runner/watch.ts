@@ -135,7 +135,7 @@ const LIMIT_NAMES: Record<string, string> = {
 };
 
 const ACCOUNT_ERRORS: Record<string, string> = {
-  authentication_failed: 'Claude login failed. Sign in to Claude Code again on this machine.',
+  authentication_failed: "Claude login failed. Sign in again on HQ's Claude account page, then press Resume.",
   oauth_org_not_allowed: "This Claude login's organization is not allowed here.",
   account_on_hold: 'The Claude account is on hold.',
   verification_required: 'The Claude account needs verifying.',

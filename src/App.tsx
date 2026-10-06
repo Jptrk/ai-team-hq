@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { AccountPage } from './components/AccountPage';
 import { AgentPanel } from './components/AgentPanel';
 import { Board } from './components/Board';
 import { ThreadList } from './components/Chat';
@@ -37,7 +38,7 @@ import { PageHeader } from './shell/PageHeader';
 import { Sidebar, type SidebarMode } from './shell/Sidebar';
 import { TopBar } from './shell/TopBar';
 import type { SearchHandle } from './shell/TopBarSearch';
-import { agentById, pauseLabel, pauseText, ticketKey } from './util';
+import { agentById, goLiveHint, pauseLabel, pauseText, ticketKey } from './util';
 import { api } from './api';
 import { AutoBar } from './components/AutoBar';
 
@@ -47,6 +48,10 @@ export function App() {
   const [route, navigate] = useHashRoute();
   const pid = route.kind === 'project' || route.kind === 'settings' || route.kind === 'connections' || route.kind === 'skills' ? route.pid : null;
   const { meta, setMeta, projects, state, error, after, loadProjects, setPollPaused } = useHqData(pid);
+  // Signing in or out, or the Account page's switch, changes what the header and banners say.
+  const reloadMeta = useCallback(() => {
+    void api.meta().then(setMeta, () => undefined);
+  }, [setMeta]);
   const { theme, pref, setPref, toggle } = useTheme();
   const { flags, notify, dismiss } = useFlags();
   const [resuming, setResuming] = useState(false);
@@ -200,7 +205,9 @@ export function App() {
   const pageName =
     route.kind === 'projects'
       ? 'Projects'
-      : route.kind === 'new'
+      : route.kind === 'account'
+        ? 'Claude account'
+        : route.kind === 'new'
         ? 'Create project'
         : route.kind === 'settings'
           ? 'Project settings'
@@ -236,6 +243,8 @@ export function App() {
   let mainClass = 'main';
   if (route.kind === 'projects') {
     body = <ProjectsPage projects={projects} currentId={storage.get(KEYS.lastProject) ?? undefined} onNavigate={navigate} />;
+  } else if (route.kind === 'account') {
+    body = <AccountPage notify={notify} meta={meta} onChanged={reloadMeta} />;
   } else if (route.kind === 'new') {
     body = (
       <ProjectForm
@@ -556,6 +565,7 @@ export function App() {
           createLabel={pid ? 'Create' : 'Create project'}
           onOpenTicket={openTicket}
           onAllProjects={() => navigate('/projects')}
+          onAccount={() => navigate('/account')}
           theme={theme}
           themePref={pref}
           onThemePref={setPref}
@@ -576,6 +586,12 @@ export function App() {
               <span>
                 <strong>{pauseLabel(meta.paused)}.</strong> {pauseText(meta.paused)}
               </span>
+              {/* A lost login is fixed on the Claude account page, then Resume. */}
+              {meta.paused.by === 'account' && route.kind !== 'account' && (
+                <a className="btn btn-outline btn-sm" href="#/account">
+                  Claude account
+                </a>
+              )}
               <button
                 type="button"
                 className="btn btn-outline btn-sm"
@@ -592,7 +608,38 @@ export function App() {
               </button>
             </div>
           )}
-          {!live && meta && route.kind === 'project' && view === 'needs-you' && <p className="sim-note muted small">Sim mode: fake activity, no Claude calls.</p>}
+          {/* Live, but the login went away (signed out here or in a terminal): every desk run fails. */}
+          {meta?.runner === 'claude' && !meta.liveReady && route.kind !== 'account' && (
+            <div className="banner danger main-error" role="alert">
+              <span className="grow">
+                <strong>No Claude login.</strong> HQ is live, but desk runs fail until you sign in again, or restart HQ to go back to sim.
+              </span>
+              <a className="btn btn-outline btn-sm" href="#/account">
+                Claude account
+              </a>
+            </div>
+          )}
+          {meta?.restartToGoLive && route.kind !== 'account' && (
+            <div className="banner accent main-error" role="status">
+              <span className="grow">
+                <strong>Restart HQ to go live:</strong> stop it in its terminal (Ctrl+C) and start it again (npm start or npm run dev).
+              </span>
+              <a className="btn btn-outline btn-sm" href="#/account">
+                Claude account
+              </a>
+            </div>
+          )}
+          {!live && meta && !meta.restartToGoLive && route.kind === 'project' && view === 'needs-you' && (
+            <p className="sim-note muted small">
+              Sim mode: fake activity, no Claude calls. {goLiveHint(meta)}
+              {!meta.simByEnv && (
+                <>
+                  {' '}
+                  <a href="#/account">Claude account</a>
+                </>
+              )}
+            </p>
+          )}
           {body}
         </main>
         <PanelModal open={panelOpen} subjectKey={panelKey} label={panelLabel} onClose={closePanel} returnFocus={returnFocus}>

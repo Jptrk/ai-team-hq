@@ -56,6 +56,14 @@ export function runnerLabel(meta: Pick<Meta, 'runner' | 'model'>): string {
   return meta.runner === 'claude' ? `Live · ${meta.model}` : 'Sim';
 }
 
+/** In sim: the one step that takes HQ live from here. */
+export function goLiveHint(meta: Pick<Meta, 'simByEnv' | 'restartToGoLive' | 'auth' | 'optedIn'>): string {
+  if (meta.simByEnv) return 'HQ_RUNNER=sim in .env keeps HQ in sim.';
+  if (meta.restartToGoLive) return 'Desks may run on your Claude login now: restart HQ to go live.';
+  if (meta.auth === 'claude-login' && !meta.optedIn) return 'Turn on Run desks on my Claude login to go live.';
+  return 'Sign in with your Claude account to go live.';
+}
+
 /** The pill's effort part, live with a level set; wide windows only. */
 export function effortLabel(meta: Pick<Meta, 'runner' | 'effort'>): string {
   return meta.runner === 'claude' && meta.effort ? ` · ${EFFORT_LABEL[meta.effort].toLowerCase()} effort` : '';

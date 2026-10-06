@@ -73,6 +73,13 @@ test('file: Pause and a usage hold survive a hand edit only when well formed', (
   for (const bad of [{ ...hold, kind: 'quota' }, { ...hold, text: 3 }, { ...hold, at: undefined }, 'usage']) assert.deepEqual(parseSettings({ usageHold: bad }), {}, JSON.stringify(bad));
 });
 
+test('file: the Claude login yes survives a hand edit only with a time', () => {
+  const at = '2026-10-06T08:00:00.000Z';
+  assert.deepEqual(parseSettings({ claudeLogin: { at } }), { claudeLogin: { at } });
+  assert.deepEqual(parseSettings({ claudeLogin: { at, token: 'x' } }), { claudeLogin: { at } }, 'nothing else is kept');
+  for (const bad of [true, 'yes', { at: 'soon' }, {}, null]) assert.deepEqual(parseSettings({ claudeLogin: bad }), {}, JSON.stringify(bad));
+});
+
 test('save: a level is written, read back and shown in meta; null goes back to the default', () => {
   setEffort('low');
   assert.deepEqual(JSON.parse(fs.readFileSync(FILE, 'utf8')), { effort: 'low' });

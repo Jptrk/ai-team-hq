@@ -13,8 +13,8 @@ interface Props {
   busy?: boolean;
 }
 
-/** Give focus back to `el` once it can take it (a switch stays disabled while its change is saving). */
-function refocus(el: Element | null): void {
+/** Give focus back to `el` once it can take it (a switch stays disabled while its change is saving). Also used by AccountPage. */
+export function refocus(el: Element | null): void {
   if (!(el instanceof HTMLElement)) return;
   let tries = 0;
   const attempt = () => {

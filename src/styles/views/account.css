@@ -1,0 +1,110 @@
+@layer views {
+  /* ---------- Claude account ---------- */
+  .account-error {
+    margin-bottom: var(--space-3);
+  }
+  .account-card {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding: 16px;
+  }
+  .account-heading {
+    margin: 24px 0 8px;
+    font-size: var(--fs-lg);
+    font-weight: 650;
+  }
+  .account-who {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    min-width: 0;
+  }
+  .account-icon {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: var(--surface-sunken);
+    color: var(--text-subtle);
+  }
+  .account-icon.on {
+    background: var(--success-subtle);
+    color: var(--success-text);
+  }
+  .account-who-text {
+    min-width: 0;
+  }
+  .account-who-text p {
+    margin: 0;
+  }
+  .account-name {
+    font-weight: 650;
+    overflow-wrap: anywhere;
+  }
+  .account-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+  }
+  .account-manual summary {
+    cursor: pointer;
+    font-size: var(--fs-sm);
+    color: var(--text-subtle);
+  }
+  .account-manual[open] {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .account-manual a {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+  }
+  .account-manual-link {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+  }
+  .account-manual-link > span {
+    flex: 1;
+    min-width: 200px;
+  }
+  .account-code {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+  .account-code .input {
+    flex: 1;
+    min-width: 200px;
+  }
+  .account-use {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-3);
+    cursor: pointer;
+  }
+  .account-use .switch {
+    margin-top: 1px;
+  }
+  .account-use-label {
+    display: block;
+    font-weight: 600;
+  }
+  .account-use-hint {
+    display: block;
+    margin-top: 2px;
+  }
+  .account-card .banner {
+    margin: 0;
+  }
+  .account-card .banner svg {
+    flex: none;
+  }
+}

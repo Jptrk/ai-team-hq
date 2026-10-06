@@ -82,9 +82,9 @@ let queue: Promise<unknown> = Promise.resolve();
  * Run one `claude` command. Calls are queued, so two never write Claude Code's config at once.
  * Errors come back as a result, never as a throw carrying the command line. It always settles:
  * on close, shortly after the program exits, or shortly after a timeout kills it, even if a
- * leftover child still holds its output open. `bin` is for tests.
+ * leftover child still holds its output open. `bin` is for tests. `env` replaces the usual environment.
  */
-export function runCli(args: string[], opts: { cwd: string; secrets?: string[]; timeoutMs?: number; bin?: string }): Promise<CliResult> {
+export function runCli(args: string[], opts: { cwd: string; secrets?: string[]; timeoutMs?: number; bin?: string; env?: NodeJS.ProcessEnv }): Promise<CliResult> {
   const secrets = opts.secrets ?? [];
   const run = () =>
     new Promise<CliResult>((resolve) => {
@@ -109,7 +109,7 @@ export function runCli(args: string[], opts: { cwd: string; secrets?: string[]; 
           shell: false,
           windowsHide: true,
           stdio: ['ignore', 'pipe', 'pipe'],
-          env: claudeEnv({ DISABLE_AUTOUPDATER: '1' }),
+          env: opts.env ?? claudeEnv({ DISABLE_AUTOUPDATER: '1' }),
         });
       } catch {
         resolve({ code: null, out: '', err: 'Could not start Claude Code.', timedOut: false });

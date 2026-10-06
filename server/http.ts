@@ -77,12 +77,17 @@ export function requestGuard(req: Request, res: Response, next: NextFunction): v
   next();
 }
 
+/** The request says it is JSON. Another site's page can't send that without asking first (see jsonOnly). */
+export function sentJson(req: Pick<Request, 'get'>): boolean {
+  return (req.get('content-type') ?? '').toLowerCase().startsWith('application/json');
+}
+
 /**
  * JSON only. A form or a plain fetch from another page cannot send this type without asking
  * first, and HQ never says yes, so routes that run programs can only be called from HQ itself.
  */
 export function jsonOnly(req: Request, res: Response, next: NextFunction): void {
-  if ((req.get('content-type') ?? '').toLowerCase().startsWith('application/json')) {
+  if (sentJson(req)) {
     next();
     return;
   }

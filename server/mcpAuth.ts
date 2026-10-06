@@ -63,9 +63,9 @@ export class LoginError extends Error {
 }
 
 /** A wait ran past its deadline. */
-class TimedOut extends Error {}
+export class TimedOut extends Error {}
 /** The sign-in was cancelled while waiting. */
-class Stopped extends Error {}
+export class Stopped extends Error {}
 
 export interface LoginHooks {
   /** The server reports connected: record its tools. */
@@ -136,8 +136,8 @@ export function startLogin(p: Project, name: string, config: McpServerConfig, ho
   void run(job, hooks);
 }
 
-/** `promise`, unless the time `by` passes (TimedOut) or the sign-in is cancelled (Stopped) first. */
-async function before<T>(job: Job, by: number, promise: Promise<T>): Promise<T> {
+/** `promise`, unless the time `by` passes (TimedOut) or the sign-in is cancelled (Stopped) first. Also used by claudeAuth.ts. */
+export async function before<T>(job: { stopped: Promise<void> }, by: number, promise: Promise<T>): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const late = new Promise<never>((_, reject) => (timer = setTimeout(() => reject(new TimedOut()), Math.max(0, by - Date.now()))));
   const stopped = job.stopped.then(() => Promise.reject(new Stopped()));

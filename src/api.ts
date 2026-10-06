@@ -1,5 +1,6 @@
 import type { AddRequest } from '../shared/mcpSpec';
 import type {
+  AccountResponse,
   AddPreview,
   AutoStatus,
   Agent,
@@ -83,6 +84,17 @@ export const api = {
   meta: () => request<Meta & { owner: string }>('/api/meta'),
   /** Settings for all of HQ. Answers with the new meta. */
   setSettings: (body: { effort?: EffortLevel | null; paused?: boolean }) => request<Meta & { owner: string }>('/api/settings', json('PATCH', body)),
+  /** Your Claude account: who is signed in on this PC, and any sign-in running. `check` asks Claude Code again. */
+  account: (check = false) => request<AccountResponse>(`/api/account${check ? '?check=1' : ''}`),
+  /** Starts signing in to your Claude account. The answer carries the sign-in page once Claude Code has it. */
+  startAccountLogin: () => request<AccountResponse>('/api/account/login', json('POST', {})),
+  /** The code the sign-in page showed, for when the browser could not come back to this PC. */
+  sendAccountCode: (code: string) => request<AccountResponse>('/api/account/login/code', json('POST', { code })),
+  cancelAccountLogin: () => request<AccountResponse>('/api/account/login', json('DELETE')),
+  /** May desks run on the Claude login on this PC? From HQ's next start. */
+  useClaudeLogin: (on: boolean) => request<AccountResponse>('/api/account/use', json('PUT', { on })),
+  /** Signs out of Claude for every Claude Code on this PC. */
+  signOutAccount: () => request<AccountResponse>('/api/account/logout', json('POST', {})),
   projects: () => request<ProjectSummary[]>('/api/projects'),
   createProject: (body: ProjectBody) => request<ProjectSummary>('/api/projects', json('POST', body)),
   updateProject: (pid: string, body: ProjectBody) => request<ProjectSummary>(pp(pid), json('PATCH', body)),

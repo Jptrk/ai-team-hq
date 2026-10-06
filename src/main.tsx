@@ -20,6 +20,7 @@ import './styles/views/attachments.css';
 import './styles/views/editor.css';
 import './styles/views/huddles.css';
 import './styles/views/skills.css';
+import './styles/views/account.css';
 import { App } from './App';
 
 // Load the rich text editor in the background, so the first text box you open is ready.

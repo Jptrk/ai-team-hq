@@ -715,6 +715,58 @@ export interface Meta {
   liveReady: boolean;
   /** Which credential the Agent SDK will use. */
   auth: 'api-key' | 'claude-login' | 'none';
+  /** You signed in to your Claude account from HQ while it runs in sim: a restart makes it live. */
+  restartToGoLive: boolean;
+  /** HQ_RUNNER=sim in .env: HQ stays in sim whatever you sign in to. */
+  simByEnv: boolean;
+  /** Desks may run on the Claude login: you said so on the Claude account page, or HQ_RUNNER=claude is set. */
+  optedIn: boolean;
+}
+
+/** Your Claude account as Claude Code on this PC sees it (`claude auth status`). Never a token. */
+export interface ClaudeAccount {
+  loggedIn: boolean;
+  /** How Claude Code is signed in: claude.ai is a Claude subscription. */
+  method?: string;
+  email?: string;
+  org?: string;
+  /** The subscription: pro, max, team, enterprise. */
+  plan?: string;
+}
+
+/**
+ * Signing in to your Claude account from HQ. starting: asking Claude Code for the page; waiting: you sign in
+ * in your browser; failed: shown for a minute. One at a time, for all of HQ.
+ */
+export interface AccountLogin {
+  state: 'starting' | 'waiting' | 'failed';
+  /** The sign-in page. Claude Code takes the browser's answer back by itself. */
+  authUrl?: string;
+  /** The same sign-in, ending on a page with a code to paste into HQ: for when the browser can't get back. */
+  manualUrl?: string;
+  expiresAt: string;
+  error?: string;
+}
+
+export interface AccountResponse {
+  /** Null: Claude Code did not answer. */
+  account: ClaudeAccount | null;
+  checkedAt?: string;
+  login?: AccountLogin;
+  /** When the last sign-in from HQ worked, since HQ started. A new one means a sign-in just finished. */
+  signedInAt?: string;
+  /** ANTHROPIC_API_KEY is set: desks use the key, not this login. */
+  apiKey: boolean;
+  /** CLAUDE_CODE_OAUTH_TOKEN is set: Claude Code uses that token, and signing out here can't remove it. */
+  envToken: boolean;
+  /** You said desks may run on this login (signing in from HQ says so too), or HQ_RUNNER=claude is set: they do once HQ is live. */
+  optedIn: boolean;
+  /** HQ_RUNNER=claude in .env: the yes comes from there, so HQ can't take it back. */
+  optInByEnv: boolean;
+  runner: RunnerName;
+  restartToGoLive: boolean;
+  /** HQ_RUNNER=sim in .env: HQ stays in sim whatever you sign in to. */
+  simByEnv: boolean;
 }
 
 /** The polled state leaves out messages; a thread's messages load when it opens. */

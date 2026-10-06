@@ -1,6 +1,6 @@
 import express, { Router, type Response } from 'express';
 import fs from 'node:fs';
-import type { Attachment, Decision, EffortLevel, ItemStatus, ProjectAccess, ProjectMeta, ProjectSummary, ReportInfo, StateResponse, TeamTemplate, ThreadResponse, WorkItem } from '../shared/types';
+import type { AccountResponse, Attachment, Decision, EffortLevel, ItemStatus, ProjectAccess, ProjectMeta, ProjectSummary, ReportInfo, StateResponse, TeamTemplate, ThreadResponse, WorkItem } from '../shared/types';
 import { canEditDescription, EFFORT_LEVELS, hasQa, isEffortLevel, MAX_ATTACHMENTS, MAX_GOAL, MAX_DESCRIPTION, signoffOn } from '../shared/types';
 import { acceptInstruction, addAgent, parseSkills, refreshStatuses, removeAgent, settleInstructions } from './agents';
 import { AttachmentError, pickAttachments, resolveAttachment, saveUpload } from './attachments';
@@ -18,6 +18,7 @@ import {
 } from './chat';
 import { titleFrom } from '../shared/plainText';
 import { parseReportUrl, reportTitleFrom, type ReportUrlParts } from '../shared/reportUrl';
+import { AccountError, accountCached, accountLogin, cancelAccountLogin, checkAccount, lastSignIn, signOutAccount, startAccountLogin, submitAccountCode, useClaudeLogin } from './claudeAuth';
 import { addComment } from './comments';
 import {
   addConnection,
@@ -33,7 +34,7 @@ import {
   updateConnection,
   type ConnectionPatch,
 } from './connections';
-import { jsonOnly } from './http';
+import { jsonOnly, sentJson } from './http';
 import { parseAddRequest } from '../shared/mcpSpec';
 import { MAX_STEER } from '../shared/huddle';
 import { addSteer, decideProposal, findHuddle, HUDDLES_PER_DAY, MAX_NOTES, notesConflict, pendingProposals, stripHuddle } from './huddle-core';
@@ -45,7 +46,7 @@ import { autoGate, autoStatus, haltedHold, resumeProject } from './autopilot';
 import { setEffort } from './settings';
 import { cancelPreview, changeSkillDesks, installSkills, listLibrary, previewSkills, projectSkills, removeSkill, setScriptsAllowed, setSkillDesks, SkillError } from './skills';
 import { officeState } from './office';
-import { autoTick, cancelRun, deliver, isLive, kickoff, meta, mootRun, pauseAll, resumeAll } from './runner';
+import { autoTick, cancelRun, deliver, isLive, kickoff, loginOptIn, meta, mootRun, pauseAll, restartToGoLive, resumeAll } from './runner';
 import {
   allProjects,
   archiveProject,
@@ -208,6 +209,94 @@ router.patch('/settings', jsonOnly, (req, res) => {
     return res.status(500).json({ error: 'Could not save the setting.' });
   }
   res.json({ ...meta(), owner: ownerName() });
+});
+
+// ---------- your Claude account ----------
+
+/** Who is signed in to Claude on this PC, the sign-in running, and what HQ runs on. Never a token. */
+function accountResponse(): AccountResponse {
+  const { account, checkedAt } = accountCached();
+  const login = accountLogin();
+  const signedInAt = lastSignIn();
+  return {
+    account,
+    ...(checkedAt ? { checkedAt } : {}),
+    ...(login ? { login } : {}),
+    ...(signedInAt ? { signedInAt } : {}),
+    apiKey: Boolean(process.env.ANTHROPIC_API_KEY),
+    envToken: Boolean(process.env.CLAUDE_CODE_OAUTH_TOKEN),
+    optedIn: loginOptIn(),
+    optInByEnv: process.env.HQ_RUNNER === 'claude',
+    runner: meta().runner,
+    restartToGoLive: restartToGoLive(),
+    simByEnv: process.env.HQ_RUNNER === 'sim',
+  };
+}
+
+function accountFailed(res: Response, e: unknown, fallback: string) {
+  if (e instanceof AccountError) return res.status(e.status).json({ error: e.message });
+  console.error('[hq] account:', e instanceof Error ? e.name : 'error');
+  return res.status(500).json({ error: fallback });
+}
+
+/** ?check=1 asks Claude Code again; otherwise the check already running, or an answer from the last half minute, is used. */
+router.get('/account', async (req, res) => {
+  // Asking again runs Claude Code. Any site can send a GET (an <img> needs no yes), so only HQ's own page,
+  // which sends a JSON content type, may ask; anything else gets the usual answer.
+  const force = req.query.check === '1' && sentJson(req);
+  try {
+    await checkAccount(force);
+  } catch (e) {
+    console.error('[hq] account:', e instanceof Error ? e.name : 'error');
+  }
+  res.json(accountResponse());
+});
+
+/** Start signing in to your Claude account. The page shows the sign-in page to open; you sign in in your own browser. */
+router.post('/account/login', jsonOnly, (_req, res) => {
+  try {
+    startAccountLogin();
+    res.status(202).json(accountResponse());
+  } catch (e) {
+    accountFailed(res, e, 'Could not start signing in');
+  }
+});
+
+/** The browser could not come back to this PC: `{ code }` is what the sign-in page showed. */
+router.post('/account/login/code', jsonOnly, async (req, res) => {
+  try {
+    await submitAccountCode((req.body as { code?: unknown } | undefined)?.code);
+    res.json(accountResponse());
+  } catch (e) {
+    accountFailed(res, e, 'Could not finish signing in');
+  }
+});
+
+router.delete('/account/login', jsonOnly, (_req, res) => {
+  if (!cancelAccountLogin()) return res.status(404).json({ error: 'No sign-in is running.' });
+  res.json(accountResponse());
+});
+
+/** `{ on }`: may desks run on the Claude login already on this PC? Takes effect when HQ next starts. */
+router.put('/account/use', jsonOnly, (req, res) => {
+  const on = (req.body as { on?: unknown } | undefined)?.on;
+  if (typeof on !== 'boolean') return res.status(400).json({ error: 'on must be true or false' });
+  try {
+    useClaudeLogin(on);
+    res.json(accountResponse());
+  } catch (e) {
+    accountFailed(res, e, 'Could not save the setting');
+  }
+});
+
+/** Sign out of Claude for every Claude Code on this PC, and stop desks running on the login. */
+router.post('/account/logout', jsonOnly, async (_req, res) => {
+  try {
+    await signOutAccount();
+    res.json(accountResponse());
+  } catch (e) {
+    accountFailed(res, e, 'Could not sign out');
+  }
 });
 
 /** Live check for the "project folder" field. */
@@ -745,7 +834,7 @@ project.post('/items/:id/attachments', (req, res) => {
 /** Put the assignee on a ticket right now (live mode only). */
 project.post('/items/:id/run', (req, res) => {
   const p = P(res);
-  if (!isLive()) return res.status(409).json({ error: 'Live runner is off. Set HQ_RUNNER=claude in .env to enable it.' });
+  if (!isLive()) return res.status(409).json({ error: "Live runner is off. Go live from HQ's Claude account page." });
   const item = p.state.items.find((i) => i.id === req.params.id);
   if (!item) return res.status(404).json({ error: 'item not found' });
   // A ticket in QA gets its check again; anything else goes to its owner.

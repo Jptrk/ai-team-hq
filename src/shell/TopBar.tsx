@@ -1,11 +1,11 @@
-import { CirclePause, Keyboard, Menu, Monitor, Moon, PanelLeftClose, PanelLeftOpen, Pause, Play, Plus, Sun } from 'lucide-react';
+import { CirclePause, Keyboard, Menu, Monitor, Moon, PanelLeftClose, PanelLeftOpen, Pause, Play, Plus, Sun, UserRound } from 'lucide-react';
 import { forwardRef, useEffect, useRef, useState } from 'react';
 import type { Agent, EffortLevel, Meta, WorkItem } from '../../shared/types';
 import { api } from '../api';
 import { usePopover } from '../hooks/usePopover';
 import type { Theme, ThemePref } from '../hooks/useTheme';
 import { Avatar } from '../ui/Avatar';
-import { clockTime, EFFORT_LABEL, effortLabel, pauseLabel, pauseText, runnerLabel } from '../util';
+import { clockTime, EFFORT_LABEL, effortLabel, goLiveHint, pauseLabel, pauseText, runnerLabel } from '../util';
 import { TopBarSearch, type SearchHandle } from './TopBarSearch';
 
 interface Props {
@@ -24,6 +24,7 @@ interface Props {
   createLabel: string;
   onOpenTicket: (key: string) => void;
   onAllProjects: () => void;
+  onAccount: () => void;
   theme: Theme;
   themePref: ThemePref;
   onThemePref: (p: ThemePref) => void;
@@ -189,7 +190,7 @@ function AutoControl({ meta, onMeta }: { meta: Meta; onMeta: (meta: Meta) => voi
   );
 }
 
-function StatusPill({ meta, onMeta }: { meta: Meta | null; onMeta: (meta: Meta) => void }) {
+function StatusPill({ meta, onMeta, onAccount }: { meta: Meta | null; onMeta: (meta: Meta) => void; onAccount: () => void }) {
   const pop = usePopover<HTMLDivElement>();
   if (!meta) return null;
   const live = meta.runner === 'claude';
@@ -207,9 +208,21 @@ function StatusPill({ meta, onMeta }: { meta: Meta | null; onMeta: (meta: Meta) 
           <p className="popover-title">{live ? 'Live agents' : 'Sim mode'}</p>
           <p className="muted small">
             {live
-              ? `Each instruction starts a real Claude run on ${meta.auth === 'api-key' ? 'your API key' : 'your Claude login'}. Nothing leaves the building without your approval, except changes on a connection you set to Auto.`
-              : 'Fake activity, no Claude calls. Set HQ_RUNNER=claude in .env to go live.'}
+              ? meta.auth === 'none'
+                ? 'HQ is live, but there is no Claude login on this PC, so desk runs fail. Sign in again on the Claude account page.'
+                : `Each instruction starts a real Claude run on ${meta.auth === 'api-key' ? 'your API key' : 'your Claude login'}. Nothing leaves the building without your approval, except changes on a connection you set to Auto.`
+              : `Fake activity, no Claude calls. ${goLiveHint(meta)}`}
           </p>
+          <button
+            type="button"
+            className="menu-row"
+            onClick={() => {
+              pop.setOpen(false);
+              onAccount();
+            }}
+          >
+            <UserRound size={15} aria-hidden /> Claude account
+          </button>
           <div className="menu-sep" />
           <EffortPicker meta={meta} onMeta={onMeta} />
         </div>
@@ -218,7 +231,21 @@ function StatusPill({ meta, onMeta }: { meta: Meta | null; onMeta: (meta: Meta) 
   );
 }
 
-function FounderMenu({ ownerName, ownerColor, themePref, onThemePref, onAllProjects }: { ownerName: string; ownerColor?: string; themePref: ThemePref; onThemePref: (p: ThemePref) => void; onAllProjects: () => void }) {
+function FounderMenu({
+  ownerName,
+  ownerColor,
+  themePref,
+  onThemePref,
+  onAllProjects,
+  onAccount,
+}: {
+  ownerName: string;
+  ownerColor?: string;
+  themePref: ThemePref;
+  onThemePref: (p: ThemePref) => void;
+  onAllProjects: () => void;
+  onAccount: () => void;
+}) {
   const pop = usePopover<HTMLDivElement>();
   const THEMES: { id: ThemePref; label: string; Icon: typeof Sun }[] = [
     { id: 'light', label: 'Light', Icon: Sun },
@@ -269,6 +296,17 @@ function FounderMenu({ ownerName, ownerColor, themePref, onThemePref, onAllProje
           >
             All projects
           </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="menu-row"
+            onClick={() => {
+              pop.setOpen(false);
+              onAccount();
+            }}
+          >
+            Claude account
+          </button>
         </div>
       )}
     </div>
@@ -297,11 +335,11 @@ export const TopBar = forwardRef<SearchHandle, Props>(function TopBar(p, searchR
           <span className="topbar-create-text">{p.createLabel}</span>
         </button>
         {p.meta && <AutoControl meta={p.meta} onMeta={p.onMeta} />}
-        <StatusPill meta={p.meta} onMeta={p.onMeta} />
+        <StatusPill meta={p.meta} onMeta={p.onMeta} onAccount={p.onAccount} />
         <button type="button" className="icon-btn topbar-btn" onClick={p.onToggleTheme} aria-label={p.theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'} title={p.theme === 'dark' ? 'Light theme' : 'Dark theme'}>
           {p.theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
         </button>
-        <FounderMenu ownerName={p.ownerName} ownerColor={p.ownerColor} themePref={p.themePref} onThemePref={p.onThemePref} onAllProjects={p.onAllProjects} />
+        <FounderMenu ownerName={p.ownerName} ownerColor={p.ownerColor} themePref={p.themePref} onThemePref={p.onThemePref} onAllProjects={p.onAllProjects} onAccount={p.onAccount} />
       </div>
     </header>
   );

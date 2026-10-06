@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
  *
  *   #/projects                    all projects
  *   #/projects/new                create a project
+ *   #/account                     your Claude account: sign in, and whether desks run on it
  *   #/p/<pid>                     Needs you
  *   #/p/<pid>/<view>              chat | board | huddles | team | office | notes
  *   #/p/<pid>/chat/<threadId>     one thread
@@ -29,6 +30,7 @@ export type Route =
   | { kind: 'home' }
   | { kind: 'projects' }
   | { kind: 'new' }
+  | { kind: 'account' }
   | ({ kind: 'project'; pid: string; view: ViewId; threadId?: string; huddleId?: string } & PanelRef)
   | { kind: 'settings'; pid: string }
   | { kind: 'connections'; pid: string }
@@ -51,6 +53,7 @@ export function parseRoute(hash: string): Route {
     });
 
   if (parts[0] === 'projects') return parts[1] === 'new' ? { kind: 'new' } : { kind: 'projects' };
+  if (parts[0] === 'account') return { kind: 'account' };
   if (parts[0] === 'p' && parts[1]) {
     const pid = parts[1];
     const sub = parts[2];

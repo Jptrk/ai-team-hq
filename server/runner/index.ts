@@ -1,12 +1,9 @@
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
 import type { Agent, Attachment, ItemStatus, Meta, Run, RunReason, RunnerName } from '../../shared/types';
 import { refreshStatuses, settleInstructions } from '../agents';
 import { clearWaiting, findThread, markRead, needsWake, note, pauseForFailure, unreadFor } from '../chat';
 import { rewindCursor } from '../cursor';
 import { unansweredImages } from '../comments';
-import { claudeConfigDir } from '../mcpCli';
+import { hasClaudeLogin } from '../claudeAuth';
 import { autoGate, countCost, countStart, heldCount, holdItem, holdWake, holdWords, noteAutoFailure, noteAutoSuccess, pauseInfo, pickStarts, queuedAuto, usageHoldExpired, usageHoldFrom } from '../autopilot';
 import { clearSignoff, qaDeskOf, queuedQaRun, rerouteQa } from '../qa';
 import { setPaused, settings, setUsageHold } from '../settings';
@@ -27,40 +24,52 @@ import type { UsageLimit } from './watch';
  */
 
 const hasKey = Boolean(process.env.ANTHROPIC_API_KEY);
-const hasLogin = fs.existsSync(path.join(claudeConfigDir(), '.credentials.json'));
 const explicit = process.env.HQ_RUNNER;
-let warned = false;
 
-/** Which credential the Agent SDK will end up using. */
+/** Which credential the Agent SDK will end up using. Checked each time: you can sign in or out while HQ runs. */
 export function authSource(): 'api-key' | 'claude-login' | 'none' {
   if (hasKey) return 'api-key';
-  if (hasLogin) return 'claude-login';
+  if (hasClaudeLogin()) return 'claude-login';
   return 'none';
 }
 
+/** Desks may run on the Claude login: HQ_RUNNER=claude in .env, or you signed in from HQ's Account page. */
+export function loginOptIn(): boolean {
+  return explicit === 'claude' || Boolean(settings().claudeLogin);
+}
+
 /**
- * sim unless a key is present or HQ_RUNNER=claude is set explicitly.
+ * sim unless a key is present, or you opted in to the Claude login (loginOptIn) and there is one.
  * Without a key the Agent SDK uses the Claude Code login on this machine (~/.claude),
- * which spends that subscription's usage. Their account, their call, so it needs the
- * explicit flag rather than happening by default.
+ * which spends that subscription's usage. Their account, their call, so it needs an
+ * explicit yes rather than happening by default. HQ_RUNNER=sim always wins. Pure: exported for tests.
  */
+export function pickRunner(o: { explicit?: string; hasKey: boolean; optIn: boolean; auth: ReturnType<typeof authSource> }): RunnerName {
+  if (o.explicit === 'sim') return 'sim';
+  if (o.hasKey) return 'claude';
+  return (o.optIn || o.explicit === 'claude') && o.auth !== 'none' ? 'claude' : 'sim';
+}
+
+let chosen: RunnerName | null = null;
+
+/** Picked once, at the first ask (boot): the sim, the demo seed and Autopilot's sweep are set up for one mode. */
 export function runnerName(): RunnerName {
-  if (explicit === 'sim') return 'sim';
-  if (explicit === 'claude') {
-    if (authSource() === 'none') {
-      if (!warned) {
-        warned = true;
-        console.warn('[hq] HQ_RUNNER=claude but no ANTHROPIC_API_KEY and no Claude Code login found. Falling back to sim.');
-      }
-      return 'sim';
-    }
-    if (authSource() === 'claude-login' && !warned) {
-      warned = true;
-      console.warn('[hq] No ANTHROPIC_API_KEY. Agents will run on the Claude Code login on this machine and spend that subscription’s usage.');
-    }
-    return 'claude';
+  if (chosen) return chosen;
+  const optIn = loginOptIn();
+  chosen = pickRunner({ explicit, hasKey, optIn, auth: authSource() });
+  if (explicit !== 'sim' && !hasKey && optIn) {
+    console.warn(
+      chosen === 'claude'
+        ? '[hq] No ANTHROPIC_API_KEY. Agents will run on the Claude login on this machine and spend that subscription’s usage.'
+        : "[hq] Live mode is on but there is no ANTHROPIC_API_KEY and no Claude login. Falling back to sim. Sign in from HQ's Claude account page.",
+    );
   }
-  return hasKey ? 'claude' : 'sim';
+  return chosen;
+}
+
+/** You signed in from HQ while it runs in sim: the next start is live. */
+export function restartToGoLive(): boolean {
+  return !testRunner && runnerName() === 'sim' && explicit !== 'sim' && loginOptIn() && authSource() !== 'none';
 }
 
 /** Tests only: desks run on this instead of Claude, and HQ acts as live. */
@@ -82,6 +91,9 @@ export function meta(): Meta {
     held: allProjects().reduce((n, p) => n + heldCount(p), 0),
     liveReady: authSource() !== 'none',
     auth: authSource(),
+    restartToGoLive: restartToGoLive(),
+    simByEnv: explicit === 'sim',
+    optedIn: loginOptIn(),
   };
 }
 

@@ -23,6 +23,7 @@
     "test:settings": "tsx server/settings.test.ts",
     "test:timeouts": "tsx server/timeouts.test.ts",
     "test:auto": "tsx server/autopilot.test.ts",
+    "test:account": "tsx server/account.test.ts",
     "office:sync": "node scripts/office-sync.mjs"
   },
   "dependencies": {

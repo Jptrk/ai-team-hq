@@ -19,7 +19,7 @@ import { fitWithin, imageFiles } from './lib/images';
 import { cleanMarkdown, escapeTypedText, looksLikeDiffOrTerminal, looksLikeMarkdown, needsPlainEditor } from './lib/markdownPaste';
 import { attachmentUrl, isAttachmentUrl, isReportUrl, reportFileName, resolveReportHref } from './markdown/reportLinks';
 import { parseRoute, projectPath } from './route';
-import { awaitsSignoff, latestDecision, readableInk, autoTodayText, effortLabel, goalLabel, holdText, pauseLabel, pauseText, runnerLabel, signoffVerdict, waitingSummary, waitingTitle } from './util';
+import { awaitsSignoff, latestDecision, readableInk, autoTodayText, effortLabel, goalLabel, goLiveHint, holdText, pauseLabel, pauseText, runnerLabel, signoffVerdict, waitingSummary, waitingTitle } from './util';
 import { MCP_PRESETS, presetArgs, presetDefaults } from '../shared/mcpPresets';
 import { buildSpec, safeAuthUrl } from '../shared/mcpSpec';
 import type { ConnectionRow, SkillMeta } from '../shared/types';
@@ -114,10 +114,12 @@ test('titleFrom: threads take all the text', () => {
 });
 
 // ---------- routes ----------
-test('parseRoute: home, projects, new', () => {
+test('parseRoute: home, projects, new, account', () => {
   assert.deepEqual(parseRoute(''), { kind: 'home' });
   assert.deepEqual(parseRoute('#/projects'), { kind: 'projects' });
   assert.deepEqual(parseRoute('#/projects/new'), { kind: 'new' });
+  assert.deepEqual(parseRoute('#/account'), { kind: 'account' });
+  assert.deepEqual(parseRoute('#/account/anything'), { kind: 'account' });
 });
 test('parseRoute: project views default to needs-you', () => {
   assert.deepEqual(parseRoute('#/p/gecom-apps'), { kind: 'project', pid: 'gecom-apps', view: 'needs-you', threadId: undefined, ticket: undefined, agent: undefined });
@@ -662,6 +664,15 @@ test('header pill: sim, live with the model, and the effort only when set', () =
   assert.equal(effortLabel({ runner: 'sim', effort: 'high' }), '');
   assert.equal(effortLabel({ runner: 'claude', effort: null }), '');
   assert.equal(effortLabel({ runner: 'claude', effort: 'xhigh' }), ' · extra high effort');
+});
+
+test('go live hint: the one step from sim, per state', () => {
+  const base = { simByEnv: false, restartToGoLive: false, auth: 'none' as const, optedIn: false };
+  assert.equal(goLiveHint({ ...base, simByEnv: true, auth: 'claude-login', optedIn: true }), 'HQ_RUNNER=sim in .env keeps HQ in sim.');
+  assert.match(goLiveHint({ ...base, restartToGoLive: true, auth: 'claude-login', optedIn: true }), /restart HQ to go live/);
+  assert.equal(goLiveHint({ ...base, auth: 'claude-login' }), 'Turn on Run desks on my Claude login to go live.');
+  assert.equal(goLiveHint(base), 'Sign in with your Claude account to go live.');
+  assert.equal(goLiveHint({ ...base, optedIn: true }), 'Sign in with your Claude account to go live.', 'a yes without a login still needs a sign-in');
 });
 
 test('pause and holds: what the header and a held ticket say', () => {

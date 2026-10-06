@@ -13,6 +13,8 @@ export interface HqSettings {
   paused?: { at: string };
   /** Claude refused a run: a usage limit (clears by itself at until) or an account problem (waits for Resume). */
   usageHold?: UsageHold;
+  /** You signed in to your Claude account from HQ: desks run live on it from the next start, without HQ_RUNNER in .env. */
+  claudeLogin?: { at: string };
 }
 
 export interface UsageHold {
@@ -39,6 +41,8 @@ export function parseSettings(raw: unknown): HqSettings {
   if (hold && typeof hold === 'object' && (hold.kind === 'usage' || hold.kind === 'account') && isTime(hold.at) && typeof hold.text === 'string') {
     out.usageHold = { kind: hold.kind, at: hold.at, text: hold.text.slice(0, 300), ...(isTime(hold.until) ? { until: hold.until } : {}) };
   }
+  const login = r.claudeLogin as { at?: unknown } | undefined;
+  if (login && typeof login === 'object' && isTime(login.at)) out.claudeLogin = { at: login.at };
   return out;
 }
 
@@ -76,6 +80,14 @@ export function setPaused(on: boolean, at = new Date().toISOString()): HqSetting
   const next: HqSettings = { ...settings() };
   if (on) next.paused = settings().paused ?? { at };
   else delete next.paused;
+  return save(next);
+}
+
+/** You signed in to your Claude account from HQ (on), or signed out of it (off). */
+export function setClaudeLogin(on: boolean, at = new Date().toISOString()): HqSettings {
+  const next: HqSettings = { ...settings() };
+  if (on) next.claudeLogin = { at };
+  else delete next.claudeLogin;
   return save(next);
 }
 

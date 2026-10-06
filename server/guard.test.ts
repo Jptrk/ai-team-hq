@@ -36,7 +36,7 @@ import {
   type TurnUsage,
 } from './runner/claude';
 import { charge } from './runner/index';
-import { inputSaysDelete, isDestructiveTool, isReadOnlyTool } from './mcp';
+import { autoDelete, inputSaysDelete, isReadOnlyTool } from './mcp';
 import type { Project } from './store';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hq-guard-'));
@@ -159,6 +159,11 @@ const figma: AllowedServer = {
     get_file: { name: 'get_file', readOnly: true, reads: true },
     post_comment: { name: 'post_comment', reads: false },
     archive_file: { name: 'archive_file', destructive: true, reads: false },
+    // As Figma's server marks them: use_figma runs any plugin script.
+    use_figma: { name: 'use_figma', destructive: true, reads: false },
+    generate_figma_design: { name: 'generate_figma_design', destructive: true, reads: false },
+    // A marked tool that also runs code, but one HQ does not know.
+    run_code: { name: 'run_code', destructive: true, reads: false },
   },
 };
 
@@ -192,6 +197,7 @@ const mcpCases: [string, string, 'instruction' | 'approved' | 'message' | 'hando
   ['auto: a delete still needs approval', 'mcp__figma__delete_node', 'instruction', [figma], 'deny'],
   ['auto: camelCase remove still needs approval', 'mcp__figma__removeComment', 'message', [figma], 'deny'],
   ['auto: a tool the server marks destructive still needs approval', 'mcp__figma__archive_file', 'instruction', [figma], 'deny'],
+  ['auto: marked destructive, with no code to read, still needs approval', 'mcp__figma__generate_figma_design', 'instruction', [figma], 'deny'],
   ['auto: a delete after approval', 'mcp__figma__delete_node', 'approved', [figma], 'allow'],
   ['auto on one server does not open another', 'mcp__github__add_issue_comment', 'instruction', [github, figma], 'deny'],
 ];
@@ -235,6 +241,18 @@ const inputCases: [string, string, 'instruction' | 'approved', Record<string, un
   ['code that only creates', 'mcp__figma__use_figma', 'instruction', { code: 'const f = figma.createFrame(); f.name = "Hero"; f.resize(1440, 900);' }, 'allow'],
   ['SQL that updates', 'mcp__figma__execute_sql', 'instruction', { query: "UPDATE users SET name = 'Ana' WHERE id = 1" }, 'allow'],
   ['a long action value is not an action', 'mcp__figma__post_comment', 'instruction', { type: 'Notes on what to remove from the plan next week' }, 'allow'],
+  // use_figma is marked destructive: the scan of its script decides, when the input is just the script and labels.
+  ['use_figma, a script that only reads', 'mcp__figma__use_figma', 'instruction', { fileKey: 'abc', code: 'return figma.root.children.map((p) => p.name);', description: 'List pages' }, 'allow'],
+  ['use_figma, a script that creates a page', 'mcp__figma__use_figma', 'instruction', { fileKey: 'abc', code: 'const p = figma.createPage(); p.name = "02 Moodboard";', skillNames: 'figma-use' }, 'allow'],
+  ['use_figma, a script that deletes text', 'mcp__figma__use_figma', 'instruction', { fileKey: 'abc', code: 'node.deleteCharacters(0, 5)' }, 'deny'],
+  ['use_figma, no script', 'mcp__figma__use_figma', 'instruction', { fileKey: 'abc' }, 'deny'],
+  ['use_figma, a blank script', 'mcp__figma__use_figma', 'instruction', { fileKey: 'abc', code: '  ' }, 'deny'],
+  ['use_figma, more than its script and labels', 'mcp__figma__use_figma', 'instruction', { fileKey: 'abc', code: 'figma.createPage()', options: { layout: 'grid' } }, 'deny'],
+  ['use_figma, too many values to scan whole', 'mcp__figma__use_figma', 'instruction', { ...Object.fromEntries(Array.from({ length: 600 }, (_, i) => [`k${i}`, i])), code: 'figma.getNodeById("1:2").remove()' }, 'deny'],
+  ['use_figma, a script that removes, after approval', 'mcp__figma__use_figma', 'approved', { code: 'figma.getNodeById("1:2").remove()' }, 'allow'],
+  // Any other marked tool waits, code or not: a harmless string under a code key says nothing about the rest.
+  ['a marked tool HQ does not know runs code', 'mcp__figma__run_code', 'instruction', { code: 'build()' }, 'deny'],
+  ['a marked tool with a harmless query beside the real change', 'mcp__figma__run_code', 'instruction', { query: 'SELECT 1', write_disposition: 'WRITE_TRUNCATE' }, 'deny'],
 ];
 for (const [label, tool, reason, input, want] of inputCases) {
   const got = await mcp(tool, reason, [figma], input);
@@ -250,6 +268,36 @@ extra += inputCases.length;
   const ok = inputSaysDelete({ a: { b: { method: 'delete' } } }) && !inputSaysDelete(deep) && !inputSaysDelete(many);
   if (!ok) failed++;
   console.log(`${ok ? 'ok  ' : 'FAIL'} mcp input: looks 4 levels deep and at 500 values at most`);
+  extra += 1;
+}
+// Why a change waits on Auto: a mark the scan can't stand in for says 'hint', not 'input' or 'name'.
+const manyValues = { ...Object.fromEntries(Array.from({ length: 600 }, (_, i) => [`k${i}`, i])), code: 'node.remove()' };
+const reasonCases: [string, string, boolean, Record<string, unknown>, ReturnType<typeof autoDelete>][] = [
+  ['use_figma, a script that creates', 'use_figma', true, { fileKey: 'abc', code: 'figma.createPage()', description: 'New page' }, null],
+  ['use_figma, a script that removes', 'use_figma', true, { fileKey: 'abc', code: 'node.remove()' }, 'input'],
+  ['use_figma, no script', 'use_figma', true, { fileKey: 'abc' }, 'hint'],
+  ['use_figma, more than its script and labels', 'use_figma', true, { fileKey: 'abc', code: 'figma.createPage()', options: { layout: 'grid' } }, 'hint'],
+  ['use_figma, too many values to scan whole', 'use_figma', true, manyValues, 'hint'],
+  ['use_figma, not marked', 'use_figma', false, { fileKey: 'abc' }, null],
+  ['a marked tool HQ does not know runs code', 'run_code', true, { code: 'build()' }, 'hint'],
+  ['a harmless query beside the real change', 'execute_sql', true, { query: 'SELECT 1', write_disposition: 'WRITE_TRUNCATE' }, 'hint'],
+  ['a harmless source path on a marked tool', 'add_code_connect_map', true, { nodeId: '1:2', source: 'src/Button.tsx' }, 'hint'],
+  ['a name that deletes', 'delete_node', false, { id: '1:2' }, 'name'],
+];
+for (const [label, tool, marked, input, want] of reasonCases) {
+  const got = autoDelete(tool, marked ? { destructive: true } : undefined, input);
+  const ok = got === want;
+  if (!ok) failed++;
+  console.log(`${ok ? 'ok  ' : 'FAIL'} auto delete reason: ${label}: ${got}${ok ? '' : ` (wanted ${want})`}`);
+}
+extra += reasonCases.length;
+{
+  // A server's mark is not a delete: the refusal says what HQ knows, and asks for the plan, not a delete list.
+  const r = await guard({ project: fakeProject('read', saved([figma])), dir: ws, agent: leo, reason: 'instruction', connections: [figma] })('mcp__figma__use_figma', { fileKey: 'abc' });
+  const message = r.behavior === 'deny' ? r.message : '';
+  const ok = /figma marks use_figma as able to overwrite or delete/.test(message) && /Write exactly what you will do in a report/.test(message);
+  if (!ok) failed++;
+  console.log(`${ok ? 'ok  ' : 'FAIL'} mcp input: a marked tool's refusal names the mark${ok ? '' : `: ${message}`}`);
   extra += 1;
 }
 
@@ -300,7 +348,7 @@ const destructiveCases: [string, boolean][] = [
   ['getJiraIssueRemoteIssueLinks', false],
 ];
 for (const [tool, want] of destructiveCases) {
-  const ok = isDestructiveTool(tool) === want;
+  const ok = (autoDelete(tool, undefined, {}) === 'name') === want;
   if (!ok) failed++;
   console.log(`${ok ? 'ok  ' : 'FAIL'} delete check: ${tool}: ${!want ? 'not ' : ''}a delete`);
 }

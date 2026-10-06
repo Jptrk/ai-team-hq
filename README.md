@@ -10,7 +10,7 @@ Two modes:
 | Mode | What runs | Needs |
 | ---- | --------- | ----- |
 | **sim** (default) | Fake activity on a timer. Good for looking at the UI. | nothing |
-| **live** | Each desk is a real Claude agent (Claude Agent SDK) with its own workspace folder. | an API key or a Claude Code login |
+| **live** | Each desk is a real Claude agent (Claude Agent SDK) with its own workspace folder. | your Claude account (sign in from HQ) or an API key |
 
 ## Run it
 
@@ -305,7 +305,8 @@ settings. That's the same order Claude Code uses.
 - **Changes count at once.** A run checks your saved choice on every tool call: turn a server off,
   drop a desk, or pick a stricter mode, and a desk that is already working follows it straight
   away. A looser mode waits for its next run.
-- **Deletes**: a tool counts as a delete when the server marks it destructive, or when its name
+- **Deletes**: a tool counts as a delete when the server marks it destructive (with one exception
+  for scripts, below), or when its name
   says delete, remove, destroy, drop, purge, erase, wipe, trash, revoke, unpublish, uninstall,
   truncate, clear, rm, del, unlink, detach, disconnect, archive, discard, prune, flush, kill,
   terminate, reset, overwrite or force (`force_push`), plural too. Run-together names count
@@ -315,6 +316,12 @@ settings. That's the same order Claude Code uses.
   - On Auto, HQ also looks inside a tool's input: an action like `method: "remove"` or
     `op: "delete"` (GitHub's `*_write` tools, batches), a key like `deleteContentRange` or
     `force: true`, and common deletes in code or SQL (`DELETE FROM`, `DROP TABLE`, `.remove()`).
+  - A server marks a tool destructive when it *may* overwrite or delete. Figma marks `use_figma`
+    that way because it runs any plugin script. For `use_figma` only, the scan of its script
+    decides instead: a script that only creates or reads runs on Auto, and one that calls
+    `.remove()` or `deleteCharacters()` waits. The mark still counts when the call has no script,
+    carries anything besides the script and plain labels, or is too big to scan whole. Every
+    other marked tool waits, code or not.
   - Auto can't fully see inside tools that run code, scripts or batches (Figma `use_figma`, SQL
     tools, browser tools). It catches common delete patterns only. Keep those servers on Ask if
     that matters. What desks read through a connection (issues, pages, the web) can also steer
@@ -824,15 +831,72 @@ banner says so; **Resume** carries on where it stopped.
 
 ## Go live
 
-1. `copy .env.example .env`. It already says `HQ_RUNNER=claude`.
-2. Credentials, one of:
-   - **API key** (pay per token): paste it into `ANTHROPIC_API_KEY=`.
-   - **Claude subscription**: leave the key empty. The SDK uses the Claude Code login on this
-     machine (`~/.claude/.credentials.json`). Spends your plan's usage window. Anthropic's SDK
-     docs say third-party products may not ship on claude.ai login; personal use on your own
-     machine is your call. Do not distribute the app set up this way.
-3. Restart `npm run dev`. The header pill turns green: `LIVE · claude-opus-5`, and the hint
-   under the panel says which credential is in use.
+The easy way, with your Claude subscription (Pro, Max, Team or Enterprise), no API key:
+
+1. Open **Claude account** (header pill, your avatar menu, or the sidebar on All projects), or go to `#/account`.
+2. **Sign in with Claude**. HQ shows Claude's own sign-in page: open it, sign in in your browser,
+   and HQ finishes on its own. Signing in also turns on **Run desks on my Claude login**.
+   For another device, or when the page didn't come back to HQ, open **Signing in on another device,
+   or the page didn't come back to HQ?** under the link: its page (**Copy link** copies it) ends on
+   a code you paste into HQ.
+   Already signed in to Claude Code on this PC? Skip this: just turn on **Run desks on my Claude login**.
+3. Restart HQ: stop it in its terminal (Ctrl+C) and start it again (`npm start` or `npm run dev`).
+   The header pill turns green: `LIVE · claude-opus-5`.
+
+Going live keeps what sim made in the projects you already have (demo tickets, chat and activity).
+For a clean board, create a new project, or reset one (`POST /api/projects/:pid/reset`, empty when live).
+
+If the page says **Sign in with Claude Code in a terminal (claude auth login), then turn on Run desks
+on my Claude login here**, this Agent SDK can't sign in from HQ (or Claude Code gave no sign-in
+page). Run `claude auth login` in a terminal and sign in with your Claude subscription, come back to
+the Claude account page (it checks again when you return), turn the switch on, and restart HQ.
+
+Or with `.env` (`copy .env.example .env`). The copied file leaves `HQ_RUNNER` empty, so the switch on
+the Claude account page still decides:
+
+- **API key** (pay per token): paste it into `ANTHROPIC_API_KEY=`. A key always wins over the login.
+- **Claude subscription**: leave the key empty and set `HQ_RUNNER=claude`. That locks the switch on
+  (the page says so); remove it to control the switch from the page again. The SDK uses the Claude
+  Code login on this machine.
+- **Bedrock, Vertex, `ANTHROPIC_AUTH_TOKEN` or an `apiKeyHelper`**: HQ only counts `ANTHROPIC_API_KEY`
+  as a key, so set that the way your setup expects, or set `HQ_RUNNER=claude` and make sure the
+  Claude account page shows you signed in (HQ asks `claude auth status` at start). A
+  `.credentials.json` by itself no longer makes HQ live.
+
+**Console logins.** If Claude Code on this PC is signed in with an Anthropic Console account instead
+of a Claude subscription, desks spend API credits on it. Claude Code reports a Console sign-in as
+`claude.ai` with no plan, so the page warns when no plan comes back: **Switch account** and sign in
+with your subscription.
+
+**Signing out while live.** HQ picked live at start, so it stays live, and desk runs fail without a
+login. The first failure puts HQ on an account hold (**Account problem** in the header): automatic
+work waits. Sign in again on the Claude account page, then press **Resume**. Or restart HQ to go back to sim.
+
+How signing in works (`server/claudeAuth.ts`):
+
+- Claude Code does it, as `claude auth login` would. A session with no tools and no servers asks the
+  Agent SDK for the sign-in page (`claudeAuthenticate`, always the Claude subscription one, never the
+  Console's). Claude Code takes the browser's answer on its own page on this PC and saves the login in
+  `~/.claude`, where desks and every Claude Code here find it. HQ never sees a password or token: only
+  the email, organization and plan from `claude auth status`.
+- Only https pages on claude.com, claude.ai or anthropic.com are shown, checked on the server and in the page.
+- One sign-in at a time; it gives up after 10 minutes, or after a minute when Claude Code gives no
+  sign-in page. Cancel closes the session. A failed one shows why until you **Dismiss** it or try again.
+- The sign-in counts once HQ has asked `claude auth status` again and sees the login; a wait that ends
+  with no login saved fails instead.
+- Signing in from HQ (or the switch) saves `claudeLogin` in `data/settings.json`: desks may run on the
+  login. HQ picks sim or live once, at start, so it shows **Restart HQ to go live** until you restart.
+  `HQ_RUNNER=sim` in `.env` always keeps sim; `HQ_RUNNER=claude` locks the switch on.
+- **Sign out** runs `claude auth logout`: it signs out every Claude Code on this PC, not just HQ, and
+  turns the switch off. Switching account replaces the login for all of them too.
+- HQ counts a login when `~/.claude/.credentials.json` holds a Claude login (a file with only MCP
+  sign-ins doesn't count), `CLAUDE_CODE_OAUTH_TOKEN` is set, or Claude Code said so (a Mac keeps the
+  login in the keychain, so HQ asks `claude auth status` before it picks sim or live). Signing out here
+  can't remove a `CLAUDE_CODE_OAUTH_TOKEN`; the page says so when one is set.
+
+A subscription spends your plan's usage window, the same limits Claude Code has. Anthropic's SDK
+docs say third-party products may not ship on claude.ai login; personal use on your own machine is
+your call. Do not distribute the app set up this way.
 
 On a subscription, Opus burns the usage window fastest. `HQ_MODEL=claude-sonnet-5` stretches it.
 
@@ -988,10 +1052,12 @@ npm run test:skills
 npm run test:settings
 npm run test:timeouts
 npm run test:auto
+npm run test:account
 ```
 
 - **`test:guard`** checks what an agent may read and write in its workspace and the linked folder. It also checks which MCP tools run freely, need approval, or are refused.
 - **`test:chat`** checks the chat core: recipients, the loop limit, resume and settle.
+- **`test:account`** checks signing in to your Claude account with a stand-in Claude Code: the pages shown (Claude's own sites only), the pasted code (and a code the browser beat to it), cancel and every way a sign-in can end, no token or code in any answer, that a poll never sees a sign-in that worked as signed out, that checks share one Claude Code run and only HQ's own page can force one, how HQ picks sim or live, the switch and the restart hint, and sign-out. Your real login is never touched.
 - **`test:ui`** checks the UI helpers: routes, board columns and filter, search ranking, report link resolution, markdown previews, image sizing, and avatar text contrast.
 - **`test:office`** checks the office floor:
   - the approved v3 layout exactly, and growth from 1 to 12 desks
@@ -1068,8 +1134,14 @@ Everything project-specific lives under `/api/projects/:pid`.
 
 | Method | Path | Body / query |
 | ------ | ---- | ------------ |
-| GET    | /api/meta | includes `effort`: the level every desk run uses, or null for the model default; `paused`: why HQ holds automatic work (you, a usage limit, an account problem), or null; `held`: starts waiting |
+| GET    | /api/meta | includes `effort`: the level every desk run uses, or null for the model default; `paused`: why HQ holds automatic work (you, a usage limit, an account problem), or null; `held`: starts waiting; `restartToGoLive`: desks may run on your Claude login, but HQ started in sim; `optedIn`: desks may run on the Claude login; `simByEnv`: `HQ_RUNNER=sim` keeps HQ in sim |
 | PATCH  | /api/settings | `{ effort?, paused? }`: effort is `low`, `medium`, `high`, `xhigh`, `max`, or null for the model default; `paused: true` pauses everything the team starts on its own, `false` resumes (your Pause first, then a usage hold). For all of HQ; answers with the new meta |
+| GET    | /api/account | your Claude account: `{ account: { loggedIn, method, email, org, plan } \| null, login?, signedInAt?, apiKey, envToken, optedIn, optInByEnv, runner, restartToGoLive, simByEnv }`. `signedInAt`: when the last sign-in from HQ worked; `envToken`: `CLAUDE_CODE_OAUTH_TOKEN` is set. `?check=1` asks Claude Code again, only with a JSON content type (HQ's own page; another site's `<img>` can't); otherwise an answer up to 30 s old, or the check already running. Never a token |
+| POST   | /api/account/login | 202: starts signing in; `login.authUrl` (and `login.manualUrl`) once Claude Code has the page. 409 while one runs |
+| POST   | /api/account/login/code | `{ code }`: the `code#state` the second sign-in page showed. Answers once signed in, also when the browser finished the same sign-in first |
+| DELETE | /api/account/login | cancel the sign-in, or dismiss a failed one |
+| PUT    | /api/account/use | `{ on }`: may desks run on the Claude login? `true` needs a login. From HQ's next start |
+| POST   | /api/account/logout | `claude auth logout`, for every Claude Code on this PC; turns `use` off |
 | GET    | /api/fs/check | `?path=<folder>&except=<pid>` |
 | GET    | /api/projects | |
 | POST   | /api/projects | `{ name, key?, path?, access?, template?, signoff? }`; `signoff` defaults to true |

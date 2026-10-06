@@ -223,18 +223,14 @@ export function isReadOnlyTool(tool: string, hint?: Pick<McpToolInfo, 'readOnly'
   return READ_WORDS.test(snake) || /_read$/.test(snake) || /user_?info$/.test(snake);
 }
 
-/**
- * Tools that delete or remove something. On an auto connection these still wait for your approval.
- * The server's own destructive hint counts, and so does the name, because hints are often missing.
- */
-export function isDestructiveTool(tool: string, hint?: Pick<McpToolInfo, 'destructive'>): boolean {
-  return hint?.destructive === true || nameSaysDelete(tool);
-}
-
 // Keys whose short value names the action: { method: 'delete_pending' }, { ops: ['remove'] }.
 const ACTION_KEYS = new Set(['method', 'action', 'operation', 'op', 'type', 'command', 'verb', 'mode']);
 // Keys that hold code, SQL or a shell command. Not body, text or content: on GitHub, Jira and docs those are prose.
 const CODE_KEYS = new Set(['code', 'script', 'sql', 'query', 'js', 'javascript', 'source', 'function', 'expression', 'statement', 'command']);
+// Tools a server marks destructive because they run a script, where HQ's scan of the script can stand in
+// for the mark, and the key (one of CODE_KEYS) that holds it. Figma's use_figma runs a Plugin API script,
+// and the Plugin API deletes through remove() and delete*() calls, which CODE_DELETES catches.
+const CODE_RUNNERS = new Map([['use_figma', 'code']]);
 // Common ways code deletes. Best effort: code can always hide one.
 const CODE_DELETES =
   /\bdelete\s+from\b|\bdrop\s+(table|schema|database|index|view|column)\b|\btruncate\s+(table\s+)?[\w"`[]|\b(delete|remove|destroy|purge|unlink)\w*\s*\(|\brm\s+-?\w/i;
@@ -254,20 +250,27 @@ function keyIn(set: Set<string>, key: string): boolean {
 }
 
 /**
- * True when a tool's input asks for a delete its name does not show: GitHub's *_write tools with
- * method "remove", a batch with a delete operation, a key like deleteContentRange or force: true,
- * or code and SQL that deletes. Best effort: it looks 4 levels deep and at 500 values at most,
- * and code can always hide a delete.
+ * What a look through a tool's input found:
+ *   deletes  it asks for a delete (see inputSaysDelete)
+ *   whole    every value was looked at: nothing was too deep or past the 500-value limit
  */
-export function inputSaysDelete(input: unknown): boolean {
+function scanInput(input: unknown): { deletes: boolean; whole: boolean } {
   let seen = 0;
+  let whole = true;
   const walk = (value: unknown, key: string, depth: number): boolean => {
-    if (++seen > MAX_VALUES) return false;
+    if (++seen > MAX_VALUES) {
+      whole = false;
+      return false;
+    }
     if (typeof value === 'string') {
       if (value.length <= 40 && keyIn(ACTION_KEYS, key) && nameSaysDelete(value)) return true;
       return keyIn(CODE_KEYS, key) && CODE_DELETES.test(value);
     }
-    if (!value || typeof value !== 'object' || depth >= MAX_DEPTH) return false;
+    if (!value || typeof value !== 'object') return false;
+    if (depth >= MAX_DEPTH) {
+      whole = false;
+      return false;
+    }
     // Items of a list are read under the list's key, so { ops: ['delete'] } counts.
     if (Array.isArray(value)) return value.some((v) => walk(v, key, depth + 1));
     for (const [k, v] of Object.entries(value)) {
@@ -276,7 +279,45 @@ export function inputSaysDelete(input: unknown): boolean {
     }
     return false;
   };
-  return walk(input, '', 0);
+  const deletes = walk(input, '', 0);
+  return { deletes, whole };
+}
+
+/**
+ * True when a tool's input asks for a delete its name does not show: GitHub's *_write tools with
+ * method "remove", a batch with a delete operation, a key like deleteContentRange or force: true,
+ * or code and SQL that deletes. Best effort: it looks 4 levels deep and at 500 values at most,
+ * and code can always hide a delete.
+ */
+export function inputSaysDelete(input: unknown): boolean {
+  return scanInput(input).deletes;
+}
+
+/** True when a CODE_RUNNERS tool's input is its script and plain labels (a file key, a description), nothing else. */
+function onlyRunsScript(tool: string, input: unknown): boolean {
+  const key = CODE_RUNNERS.get(tool);
+  if (!key || !input || typeof input !== 'object' || Array.isArray(input)) return false;
+  const script = (input as Record<string, unknown>)[key];
+  if (typeof script !== 'string' || !script.trim()) return false;
+  return Object.values(input).every((v) => ['string', 'number', 'boolean'].includes(typeof v));
+}
+
+/**
+ * Why a change on an Auto connection waits for approval as a delete, or null when it may run:
+ *   name   the tool's name says it deletes or removes
+ *   input  this call's input asks for a delete (see inputSaysDelete)
+ *   hint   the server marks the tool destructive, and HQ can't see what this call will do
+ * A server marks a tool destructive when it *may* overwrite or delete. Figma marks use_figma that
+ * way because it runs any plugin script. For a tool in CODE_RUNNERS, when the input is just the
+ * script and the whole input was scanned, the scan decides instead: a script that only creates or
+ * reads runs, and one that calls .remove() waits. Every other marked tool waits.
+ */
+export function autoDelete(tool: string, hint: Pick<McpToolInfo, 'destructive'> | undefined, input: unknown): 'name' | 'input' | 'hint' | null {
+  if (nameSaysDelete(tool)) return 'name';
+  const scan = scanInput(input);
+  if (scan.deletes) return 'input';
+  if (hint?.destructive === true && !(scan.whole && onlyRunsScript(tool, input))) return 'hint';
+  return null;
 }
 
 export interface McpSession {
