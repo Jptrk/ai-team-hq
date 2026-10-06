@@ -19,7 +19,7 @@ import { fitWithin, imageFiles } from './lib/images';
 import { cleanMarkdown, escapeTypedText, looksLikeDiffOrTerminal, looksLikeMarkdown, needsPlainEditor } from './lib/markdownPaste';
 import { attachmentUrl, isAttachmentUrl, isReportUrl, reportFileName, resolveReportHref } from './markdown/reportLinks';
 import { parseRoute, projectPath } from './route';
-import { awaitsSignoff, latestDecision, readableInk, autoTodayText, effortLabel, goalLabel, goLiveHint, holdText, pauseLabel, pauseText, runnerLabel, signoffVerdict, waitingSummary, waitingTitle } from './util';
+import { awaitsSignoff, clockTime, latestDecision, readableInk, autoTodayText, effortLabel, goalLabel, goLiveHint, holdText, pauseLabel, pauseText, runnerLabel, signoffVerdict, waitingSummary, waitingTitle } from './util';
 import { MCP_PRESETS, presetArgs, presetDefaults } from '../shared/mcpPresets';
 import { buildSpec, safeAuthUrl } from '../shared/mcpSpec';
 import type { ConnectionRow, SkillMeta } from '../shared/types';
@@ -679,7 +679,11 @@ test('pause and holds: what the header and a held ticket say', () => {
   assert.equal(pauseLabel({ by: 'you' }), 'Paused');
   assert.equal(pauseLabel({ by: 'account' }), 'Account problem');
   assert.equal(pauseLabel({ by: 'usage' }), 'Usage limit');
-  assert.match(pauseLabel({ by: 'usage', until: '2026-10-06T07:00:00.000Z' }), /^Usage limit · until \d/);
+  // Today: just the time; another day (a weekly limit): the weekday too. Judged from now, whatever day the tests run.
+  const soon = new Date(Date.now() + 60_000).toISOString();
+  assert.match(pauseLabel({ by: 'usage', until: soon }), /^Usage limit · until (\d{2}:\d{2}|\S+ \d{2}:\d{2})$/);
+  assert.match(clockTime('2026-10-06T07:00:00.000Z', Date.parse('2026-10-06T07:00:30.000Z')), /^\d{2}:\d{2}$/);
+  assert.match(clockTime('2026-10-09T07:00:00.000Z', Date.parse('2026-10-06T07:00:00.000Z')), /^\S+ \d{2}:\d{2}$/);
   assert.match(pauseText({ by: 'you' }), /^The team starts nothing on its own/);
   assert.match(pauseText({ by: 'usage', reason: "Claude's 5-hour limit reached.", until: '2026-10-06T07:00:00.000Z' }), /^Claude's 5-hour limit reached\. .*carries on by itself at /);
   assert.match(pauseText({ by: 'account', reason: 'Claude reported a billing problem.' }), /until you resume\.$/);

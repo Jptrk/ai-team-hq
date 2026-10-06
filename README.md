@@ -915,6 +915,13 @@ What happens on an instruction:
      Report files written during the run are linked on the ticket automatically.
    - Skills turned on for the desk are listed in its system prompt, and their folders are added read-only.
      `run_skill_script` runs a skill's script where you allowed it (see [Skills](#skills)).
+   - Deleting: with no shell, a desk's only way to delete is the HQ tool `delete_file`. It works where
+     the desk may write (its workspace; the project folder on Read & write), never on `.git`,
+     `node_modules`, `.env` files or keys (nor a folder holding any of them), and never on its
+     `ROLE.md`, `memory.md`, `reports/` or the folders themselves. Nothing is deleted for good: it
+     moves to `data/projects/<project>/trash/<when>-<desk>/`, under `workspace/` or `project/`, where
+     you can move it back. A deleted project file is listed with the ticket's changed files (QA sees
+     it marked deleted) and in its history. At most 50 per run, and a folder of at most 2000 files.
    - Session id is saved per desk and resumed next run, so a desk remembers earlier tasks.
    - Caps: `HQ_MAX_BUDGET_USD` per run, `HQ_MAX_TURNS`, and the time limits in
      [How long a run may take](#how-long-a-run-may-take).
@@ -1029,6 +1036,7 @@ chat reply's whole budget ("Reached maximum budget ($1)").
 | `data/projects/<id>/attachments/` | Images you pasted, named by the server |
 | `workspaces/<id>/<agent>/` | One desk's `ROLE.md`, `memory.md`, `reports/` |
 | `data/skills/` | The skills library and the installed skills (see [Skills](#skills)) |
+| `data/projects/<id>/trash/` | What desks deleted, by time and desk, to move back by hand. Never emptied by HQ |
 | `data/settings.json` | Settings for all of HQ: the [effort](#effort) level, [Pause](#pause), and a Claude usage-limit hold |
 | `data/archive/` | Removed projects |
 | `data/backup/` | The single-project `db.json` from before projects existed |
@@ -1052,6 +1060,7 @@ npm run test:skills
 npm run test:settings
 npm run test:timeouts
 npm run test:auto
+npm run test:delete
 npm run test:account
 ```
 
@@ -1101,6 +1110,7 @@ npm run test:account
   - the Skills section of the system prompt, the read-only fence around skill folders, and the API routes
 
   It fetches nothing: a stand-in builds a local fixture where git would clone.
+- **`test:delete`** checks `delete_file`: files and folders move to the project's trash (nothing overwritten there), only where a desk may write, never protected files or a folder holding one, never a desk's own ROLE.md, memory.md or reports, the per-run and folder-size limits, the ticket history and changed files, and the QA prompt marking a deleted file.
 - **`test:auto`** checks what the team does on its own, with desks on a fake runner:
   - Pause: team starts held on their tickets and chat wakes held in threads (counts unchanged), your own starts never held (also when they join a waiting team run), queued team runs held at once without blocking yours, Resume oldest first, stale holds dropped
   - Claude's usage limit (held everywhere, cleared at the reset), account problems, and restarts (a team run starts again once; a hand-off and its QA check both cut off keep the QA check)
