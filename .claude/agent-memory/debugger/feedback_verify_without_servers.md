@@ -17,4 +17,6 @@ Parallel agents may edit the same tree (seen 2026-10-06: an MCP-guard fixer touc
 
 When the server is live, the coordinator may instead hand over a staging copy (scratchpad `hq-stage`, node_modules a junction to the real repo). Work only there, and report an exact created/changed/deleted list for a batch copy. `npm run build` briefly writes `node_modules/.vite-temp`; delete `dist/` afterwards.
 
+Under `npm run dev` with no runs going, the same staging trick keeps restarts to one (2026-10-09): copy server/ shared/ src/ scripts/ + tsconfig/package.json/README into scratchpad `hq-stage` with a node_modules junction, edit there, pass `tsc` and every suite there, re-check runs, then `cp` the changed files back in one command and `diff -rq` repo vs stage. Remove the junction with `cmd /c rmdir` (never `rm -rf`). Note: under `npm run dev` the process listening on 4747 is the watch child, whose command line reads `node --import tsx server/index.ts` (no `--watch`); don't take that for `npm start`.
+
 An Express route can be checked without a listener: import `server/routes.ts` after chdir to a temp dir and call `router(req, res, next)` with a mock `{ method, url, headers, query, get }` request and a `res` with `locals`, `status()` and `json()` (server/account.test.ts has an `api()` helper that does this, with a headers argument).

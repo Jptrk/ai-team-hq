@@ -7,3 +7,4 @@
 - [Desk identity review checks](desk-identity-review-checks.md) — ids reused after reset/rename inherit stale workspace ROLE.md/memory.md; founder-name clashes
 - [MCP guard review checks](mcp-guard-review-checks.md) — deny-side key heuristics reused for allow decisions, CODE_DELETES gaps, which deny reason a test hits
 - [Runner mode review checks](runner-mode-review-checks.md) — sim/idle/live: HQ sign-out clears the yes, stranded work when not live, stale sim copy/README
+- [GPT desk review checks](gpt-desk-review-checks.md) — Windows .git./key. aliases past guard, Stop races, codex.exe probes, per-project model holds
