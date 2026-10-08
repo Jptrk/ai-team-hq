@@ -121,6 +121,28 @@
     }
   }
 
+  /* ---------- removed projects ---------- */
+  .removed-projects {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 32px;
+  }
+  .removed-projects p {
+    margin: 0;
+  }
+  .removed-table .actions-cell {
+    white-space: nowrap;
+  }
+  @media (max-width: 719px) {
+    /* The button is too wide to sit beside the name: it gets its own line. */
+    .removed-table .actions-cell {
+      position: static;
+      width: 100%;
+      padding-top: 8px;
+    }
+  }
+
   /* ---------- project settings ---------- */
   .danger-zone {
     display: flex;

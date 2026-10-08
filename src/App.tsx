@@ -275,8 +275,10 @@ export function App() {
           notify('Saved', { tone: 'success' });
           navigate(projectPath(p.id));
         }}
-        onArchived={async () => {
-          notify(`${current.name} removed. Its data is in data/archive.`);
+        onRemoved={async (outcome) => {
+          if (!outcome.deleted) notify(`${current.name} archived. It is under Removed projects until you delete it for good.`);
+          else if (!outcome.left.length) notify(`${current.name} deleted for good`, { tone: 'success' });
+          else notify(`${current.name} removed, but another program has some of its files open: ${outcome.left.join(', ')}. Close it, then delete what is left.`, { tone: 'warning' });
           await loadProjects();
           navigate('/projects');
         }}

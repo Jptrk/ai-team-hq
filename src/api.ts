@@ -23,6 +23,7 @@ import type {
   Provider,
   ProjectSkillsResponse,
   ProjectSummary,
+  RemovedProject,
   ReportInfo,
   Run,
   SkillMeta,
@@ -116,6 +117,11 @@ export const api = {
   /** Autopilot stopped itself after 3 failed runs: start it again. */
   resumeAuto: (pid: string) => request<AutoStatus>(`${pp(pid)}/auto/resume`, json('POST')),
   archiveProject: (pid: string) => request<{ ok: true; archivedTo: string }>(pp(pid), json('DELETE')),
+  /** Removes the project and deletes its data and workspaces for good. `left`: what another program held open. */
+  deleteProject: (pid: string) => request<{ ok: true; deleted: true; left: string[] }>(`${pp(pid)}?forGood=1`, json('DELETE')),
+  /** Removed projects waiting in data/archive, newest first. */
+  removedProjects: () => request<RemovedProject[]>('/api/archive'),
+  deleteRemoved: (folder: string) => request<{ ok: true }>(`/api/archive/${encodeURIComponent(folder)}`, json('DELETE')),
   checkPath: (path: string, except?: string) =>
     request<PathCheck>(`/api/fs/check?path=${encodeURIComponent(path)}${except ? `&except=${encodeURIComponent(except)}` : ''}`),
 

@@ -699,6 +699,18 @@ export interface ProjectSummary extends ProjectMeta {
   autoHold: HoldKind | null;
 }
 
+/** A removed project kept in data/archive: its board, workspaces, reports and trash, until you delete it for good. */
+export interface RemovedProject {
+  /** Its folder in data/archive, e.g. "shop-app-2026-10-08T18-03-32-453Z". Names it in the API. */
+  folder: string;
+  name: string;
+  key: string | null;
+  color: string | null;
+  removedAt: string;
+  /** Size on disk, every file counted. */
+  bytes: number;
+}
+
 export interface PathCheck {
   ok: boolean;
   path: string;

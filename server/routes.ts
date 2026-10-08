@@ -39,6 +39,7 @@ import {
   cancelConnectionLogin,
   checkConnections,
   ConnectionError,
+  connectionWork,
   listConnections,
   loginConnection,
   logoutConnection,
@@ -63,11 +64,15 @@ import { officeState } from './office';
 import { autoTick, cancelRun, claudeAtStart, deliver, isIdle, isLive, kickoff, loginOptIn, meta, modelProblem, mootRun, notLiveText, pauseAll, restartToGoLive, resumeAll } from './runner';
 import {
   allProjects,
+  ArchiveError,
   archiveProject,
   createProject,
+  deleteProject,
+  deleteRemoved,
   getProject,
   keyTaken,
   listMeta,
+  listRemoved,
   now,
   ownerName,
   resetProject,
@@ -465,6 +470,19 @@ router.post('/projects', (req, res) => {
   res.status(201).json(summary(p));
 });
 
+/** Removed projects waiting in data/archive, newest first, with their size. */
+router.get('/archive', async (_req, res) => {
+  res.json(await listRemoved());
+});
+
+/** Deletes a removed project from data/archive for good. */
+router.delete('/archive/:folder', async (req, res) => {
+  const outcome = await deleteRemoved(String(req.params.folder));
+  if (outcome === 'not-found') return res.status(404).json({ error: 'That removed project is no longer in data/archive.' });
+  if (outcome === 'in-use') return res.status(409).json({ error: 'Some of its files are open in another program. Close them and try again.' });
+  res.json({ ok: true });
+});
+
 // ---------- skills: one library for every project ----------
 
 /** A SkillError carries its own status and a safe sentence. Anything else stays generic. */
@@ -601,15 +619,28 @@ project.post('/auto/resume', (_req, res) => {
   res.json(autoStatus(p));
 });
 
-/** Archive: data and workspaces move to data/archive. The linked folder is never touched. */
-project.delete('/', (_req, res) => {
+/**
+ * Remove: data and workspaces move to data/archive (409 when another program has a file open, and nothing moves), or
+ * with ?forGood=1 are deleted where they are (`left` lists what another program held open). The linked folder is
+ * never touched.
+ */
+project.delete('/', async (req, res) => {
   const p = P(res);
   if (listMeta().length <= 1) return res.status(409).json({ error: 'This is the only project. Create another one first.' });
   if (p.state.agents.some((a) => a.running) || p.state.runs.some((r) => r.status === 'queued' || r.status === 'running')) {
     return res.status(409).json({ error: 'Agents are still working on this project. Wait for their runs to finish.' });
   }
-  const archivedTo = archiveProject(p.id);
-  res.json({ ok: true, archivedTo });
+  // Between turns no desk runs, but the huddle goes on and would write the project back.
+  if (p.state.huddles.some((h) => h.status === 'running')) return res.status(409).json({ error: 'A huddle is still going here. Stop it first.' });
+  // A check or sign-in runs in the workspace and logs to the project when it ends.
+  if (connectionWork(p.id)) return res.status(409).json({ error: 'A connection check or sign-in is running here. Wait for it or cancel it first.' });
+  if (req.query.forGood === '1') return res.json({ ok: true, deleted: true, left: await deleteProject(p.id) });
+  try {
+    res.json({ ok: true, archivedTo: archiveProject(p.id) });
+  } catch (e) {
+    if (e instanceof ArchiveError) return res.status(e.status).json({ error: e.message });
+    throw e;
+  }
 });
 
 project.get('/state', (_req, res) => {

@@ -93,6 +93,11 @@ export function loginRunning(pid: string | null, name: string): boolean {
   return [...jobs.values()].some((j) => j.name === name && (pid === null || j.pid === pid) && (j.login.state === 'starting' || j.login.state === 'waiting'));
 }
 
+/** A sign-in is running in project `pid`, for any of its servers. */
+export function loginRunningIn(pid: string): boolean {
+  return [...jobs.values()].some((j) => j.pid === pid && (j.login.state === 'starting' || j.login.state === 'waiting'));
+}
+
 function fail(job: Job, error: string, unsupported = false): void {
   if (job.cancelled) return;
   job.login = { state: 'failed', error, expiresAt: job.login.expiresAt, ...(unsupported ? { unsupported } : {}) };

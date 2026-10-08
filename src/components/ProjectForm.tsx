@@ -10,7 +10,8 @@ interface Props {
   projects: ProjectSummary[];
   onCancel: () => void;
   onSaved: (project: ProjectSummary) => void;
-  onArchived?: (archivedTo: string) => void;
+  /** Removed: archived, or deleted for good (`left`: paths another program held open). */
+  onRemoved?: (outcome: { deleted: false } | { deleted: true; left: string[] }) => void;
   /** GPT desks can run: HQ has a ChatGPT login you said yes to. */
   gptReady?: boolean;
   /** Claude desks can run now (Meta.claudeReady). */
@@ -29,7 +30,7 @@ const TEAMS: { id: TeamTemplate; title: string; desks: string }[] = [
   { id: 'blank', title: 'Blank', desks: 'One generalist. Add your own desks after.' },
 ];
 
-export function ProjectForm({ mode, project, projects, onCancel, onSaved, onArchived, gptReady, claudeReady }: Props) {
+export function ProjectForm({ mode, project, projects, onCancel, onSaved, onRemoved, gptReady, claudeReady }: Props) {
   const editing = mode === 'edit' && project;
   const [folder, setFolder] = useState(project?.path ?? '');
   const [name, setName] = useState(project?.name ?? '');
@@ -50,7 +51,8 @@ export function ProjectForm({ mode, project, projects, onCancel, onSaved, onArch
   const [checking, setChecking] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [confirmArchive, setConfirmArchive] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState(false);
+  const [forGood, setForGood] = useState(false);
 
   const takenKeys = projects.filter((p) => p.id !== project?.id).map((p) => p.key);
 
@@ -126,23 +128,34 @@ export function ProjectForm({ mode, project, projects, onCancel, onSaved, onArch
     }
   };
 
-  const archive = async () => {
+  const remove = async () => {
     if (!editing) return;
-    if (!confirmArchive) {
-      setConfirmArchive(true);
+    if (!confirmRemove) {
+      setConfirmRemove(true);
       return;
     }
     setBusy(true);
     setError(null);
     try {
-      const { archivedTo } = await api.archiveProject(project.id);
-      onArchived?.(archivedTo);
+      if (forGood) {
+        const { left } = await api.deleteProject(project.id);
+        onRemoved?.({ deleted: true, left });
+      } else {
+        await api.archiveProject(project.id);
+        onRemoved?.({ deleted: false });
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not remove');
-      setConfirmArchive(false);
+      setConfirmRemove(false);
     } finally {
       setBusy(false);
     }
+  };
+
+  /** Switching how it goes asks for the second click again. */
+  const pickForGood = (on: boolean) => {
+    setForGood(on);
+    setConfirmRemove(false);
   };
 
   return (
@@ -337,11 +350,21 @@ export function ProjectForm({ mode, project, projects, onCancel, onSaved, onArch
       {editing && (
         <section className="danger-zone">
           <h3 className="label">Remove project</h3>
-          <p className="small muted">
-            Moves this project&rsquo;s board and agent workspaces to data/archive. The linked folder is not touched.
-          </p>
-          <button className={`btn ${confirmArchive ? 'btn-danger' : 'btn-outline'}`} disabled={busy} onClick={() => void archive()}>
-            {confirmArchive ? `Click again to remove ${project.key}` : 'Remove project'}
+          <div className="choices two" role="radiogroup" aria-label="How to remove it">
+            <label className={`choice${!forGood ? ' on' : ''}`}>
+              <input type="radio" name="remove" value="archive" checked={!forGood} onChange={() => pickForGood(false)} />
+              <span className="choice-title">Archive</span>
+              <span className="choice-sub">Board, workspaces, reports and trash move to data/archive. Delete them for good later from Projects.</span>
+            </label>
+            <label className={`choice${forGood ? ' on' : ''}`}>
+              <input type="radio" name="remove" value="delete" checked={forGood} onChange={() => pickForGood(true)} />
+              <span className="choice-title">Delete for good</span>
+              <span className="choice-sub">Board, history, images, workspaces, reports and trash are deleted. This cannot be undone.</span>
+            </label>
+          </div>
+          <p className="small muted">The linked folder is never touched.</p>
+          <button className={`btn ${confirmRemove ? 'btn-danger' : 'btn-outline'}`} disabled={busy} onClick={() => void remove()}>
+            {confirmRemove ? (forGood ? `Click again to delete ${project.key} for good` : `Click again to archive ${project.key}`) : forGood ? 'Delete project' : 'Archive project'}
           </button>
         </section>
       )}

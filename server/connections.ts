@@ -16,7 +16,7 @@ import type {
   ProjectConnection,
 } from '../shared/types';
 import { configSecrets, discoverAll, discoverServers, gitRoot, isReadOnlyTool, openSession, probeServers, proxyConfigOf, type FoundServer } from './mcp';
-import { cancelLogin, cancelLoginsNamed, LoginError, loginOf, loginRunning, startLogin } from './mcpAuth';
+import { cancelLogin, cancelLoginsNamed, LoginError, loginOf, loginRunning, loginRunningIn, startLogin } from './mcpAuth';
 import { addArgs, claudeJsonPath, cliMessage, logoutArgs, openTerminal, removeArgs, runCli, scrub } from './mcpCli';
 import { folderExists } from './paths';
 import { allProjects, now, type Project } from './store';
@@ -184,7 +184,8 @@ function toolsOf(tools: { name: string; annotations?: { readOnly?: boolean; dest
 // One check or change per project at a time.
 const busy = new Map<string, 'check' | 'change'>();
 
-async function locked<T>(p: Project, what: 'check' | 'change', fn: () => Promise<T>): Promise<T> {
+/** Exported for tests. */
+export async function locked<T>(p: Project, what: 'check' | 'change', fn: () => Promise<T>): Promise<T> {
   const doing = busy.get(p.id);
   if (doing) throw new ConnectionError(doing === 'check' ? 'A check is already running for this project. Wait for it to finish.' : 'Another change is still saving. Wait for it to finish.', 409);
   busy.set(p.id, what);
@@ -193,6 +194,14 @@ async function locked<T>(p: Project, what: 'check' | 'change', fn: () => Promise
   } finally {
     busy.delete(p.id);
   }
+}
+
+/**
+ * Connection work running for this project: a check, a change being saved, or a sign-in. Each may run in the
+ * project's workspace and logs to the project when done, so removing the project waits for it.
+ */
+export function connectionWork(pid: string): 'check' | 'change' | 'sign-in' | null {
+  return busy.get(pid) ?? (loginRunningIn(pid) ? 'sign-in' : null);
 }
 
 // A first `npx` run downloads the package, which can take longer than the usual check.

@@ -1,7 +1,11 @@
 import { Plus, Settings } from 'lucide-react';
-import { projectProvider, TEMPLATE_LABEL, type ProjectSummary } from '../../shared/types';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { projectProvider, TEMPLATE_LABEL, type ProjectSummary, type RemovedProject } from '../../shared/types';
+import { api } from '../api';
 import { PageHeader } from '../shell/PageHeader';
+import { AVATAR_FALLBACK, timeAgo } from '../util';
 import { ProjectAvatar } from './ProjectAvatar';
+import { sizeLabel } from './skills/skillInfo';
 
 interface Props {
   projects: ProjectSummary[];
@@ -79,6 +83,114 @@ export function ProjectsPage({ projects, currentId, onNavigate }: Props) {
           </tbody>
         </table>
       </div>
+      <RemovedProjects />
     </div>
+  );
+}
+
+/** Archived projects waiting in data/archive, each to delete for good. Hidden while there are none, unless the list failed to load. */
+function RemovedProjects() {
+  const [removed, setRemoved] = useState<RemovedProject[]>([]);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [armed, setArmed] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  // Only the newest answer counts, and none once the page is gone.
+  const version = useRef(0);
+
+  const load = useCallback(async () => {
+    const v = ++version.current;
+    try {
+      const list = await api.removedProjects();
+      if (v !== version.current) return;
+      setRemoved(list);
+      setLoadError(null);
+    } catch (e) {
+      if (v === version.current) setLoadError(e instanceof Error ? e.message : 'Could not reach HQ');
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+    return () => {
+      version.current++;
+    };
+  }, [load]);
+
+  if (!removed.length && !loadError) return null;
+
+  const remove = async (r: RemovedProject) => {
+    if (armed !== r.folder) {
+      setArmed(r.folder);
+      return;
+    }
+    setBusy(r.folder);
+    setError(null);
+    try {
+      await api.deleteRemoved(r.folder);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not delete it');
+    } finally {
+      setBusy(null);
+      setArmed(null);
+    }
+    // Whatever happened, show what is there now: it may have been deleted from another tab.
+    await load();
+  };
+
+  const total = removed.reduce((n, r) => n + r.bytes, 0);
+  return (
+    <section className="removed-projects" aria-labelledby="removed-projects-title">
+      <h3 id="removed-projects-title" className="section-label">
+        Removed projects
+      </h3>
+      {loadError && <p className="small muted">Could not load the removed projects: {loadError}</p>}
+      {removed.length > 0 && (
+        <>
+          <p className="small muted">
+            Archived boards, workspaces, reports and trash: {sizeLabel(total)} in data/archive. Delete one for good to free the space. Linked folders are never touched.
+          </p>
+          {error && <p className="banner danger">{error}</p>}
+          <div className="table-wrap card-box">
+            <table className="data-table projects-table removed-table">
+              <thead>
+                <tr>
+                  <th scope="col">Name</th>
+                  <th scope="col">Removed</th>
+                  <th scope="col">Size</th>
+                  <th scope="col">
+                    <span className="sr-only">Delete</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {removed.map((r) => (
+                  <tr key={r.folder}>
+                    <td data-label="Name">
+                      <span className="project-cell">
+                        <ProjectAvatar project={{ key: (r.key ?? r.name).slice(0, 2).toUpperCase(), color: r.color ?? AVATAR_FALLBACK }} size={28} />
+                        <span>
+                          <span className="project-name">{r.name}</span>
+                          <span className="project-sub mono">{r.folder}</span>
+                        </span>
+                      </span>
+                    </td>
+                    <td data-label="Removed">
+                      <span title={new Date(r.removedAt).toLocaleString()}>{timeAgo(r.removedAt)}</span>
+                    </td>
+                    <td data-label="Size">{sizeLabel(r.bytes)}</td>
+                    <td className="actions-cell">
+                      <button type="button" className={`btn btn-sm ${armed === r.folder ? 'btn-danger' : 'btn-outline'}`} disabled={busy !== null} onClick={() => void remove(r)}>
+                        {busy === r.folder ? 'Deleting...' : armed === r.folder ? `Click again to delete ${r.key ?? r.name} for good` : 'Delete for good'}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </section>
   );
 }

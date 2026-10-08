@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { stampNeedsYou } from '../shared/activity';
-import type { Activity, ProjectAccess, ProjectMeta, Provider, State, TeamTemplate } from '../shared/types';
+import type { Activity, ProjectAccess, ProjectMeta, Provider, RemovedProject, State, TeamTemplate } from '../shared/types';
 import { defaultQaDesk, emptyAutoState, hasQa } from '../shared/types';
 import { assignDeskNumbers } from '../shared/desks';
 import { rewindCursor } from './cursor';
@@ -14,7 +14,7 @@ import { seed } from './seed';
  *   data/projects.json            registry: owner + list of projects
  *   data/projects/<id>/db.json    one project's team, board, history
  *   workspaces/<id>/<agent>/      one agent's ROLE.md, memory.md, reports/
- *   data/archive/                 removed projects land here, never deleted
+ *   data/archive/                 removed projects land here, until you delete them for good
  *   data/backup/                  the pre-projects db.json after migration
  *
  * A linked project folder (e.g. a git repo) is never written by the store.
@@ -48,6 +48,11 @@ const handles = new Map<string, Project>();
 
 export class Project {
   private timer: NodeJS.Timeout | null = null;
+  /**
+   * Archived or deleted. It never saves again, so a late log from a check, sign-in or huddle can't bring its
+   * data/projects folder back, or write into a new project that took the same id.
+   */
+  private removed = false;
 
   constructor(
     readonly id: string,
@@ -55,7 +60,7 @@ export class Project {
   ) {}
 
   get meta(): ProjectMeta {
-    const meta = reg().projects.find((p) => p.id === this.id);
+    const meta = this.removed ? undefined : reg().projects.find((p) => p.id === this.id);
     if (!meta) throw new Error(`Project ${this.id} no longer exists`);
     return meta;
   }
@@ -65,6 +70,7 @@ export class Project {
   }
 
   save(): void {
+    if (this.removed) return;
     const file = stateFile(this.id);
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, JSON.stringify(this.state, null, 2));
@@ -72,6 +78,7 @@ export class Project {
 
   /** Debounced write so a burst of edits hits disk once. */
   commit(): void {
+    if (this.removed) return;
     // Every change that moves a ticket commits, so this is where Needs-you tickets get their start time.
     stampNeedsYou(this.state.items, now());
     if (this.timer) clearTimeout(this.timer);
@@ -82,10 +89,17 @@ export class Project {
   }
 
   flush(): void {
-    if (!this.timer) return;
+    if (!this.timer || this.removed) return;
     clearTimeout(this.timer);
     this.timer = null;
     this.save();
+  }
+
+  /** The project was archived or deleted: a write still waiting is dropped, and none comes after. */
+  markRemoved(): void {
+    this.removed = true;
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
   }
 
   log(agentId: string, text: string): Activity {
@@ -205,7 +219,8 @@ function moveDir(from: string, to: string): void {
     fs.renameSync(from, to);
   } catch {
     // Windows refuses to rename a folder with an open handle inside; copy instead and keep the original.
-    fs.cpSync(from, to, { recursive: true });
+    // Links are left out, never followed: a junction that loops back would copy forever.
+    fs.cpSync(from, to, { recursive: true, filter: (src) => !fs.lstatSync(src).isSymbolicLink() });
     try {
       fs.rmSync(from, { recursive: true, force: true });
     } catch {
@@ -420,8 +435,10 @@ export interface ProjectInput {
 
 function makeMeta(input: ProjectInput, r: Registry, forcedId?: string): ProjectMeta {
   const base = forcedId ?? (slug(input.name) || 'project');
+  // What a deleted project left behind (a file another program held open) is never taken over by a new one.
+  const leftOver = (id: string) => !forcedId && (fs.existsSync(projectDataDir(id)) || fs.existsSync(path.join(WORKSPACES, id)));
   let id = base;
-  for (let n = 2; r.projects.some((p) => p.id === id) || id === 'archive'; n++) id = `${base}-${n}`;
+  for (let n = 2; r.projects.some((p) => p.id === id) || id === 'archive' || leftOver(id); n++) id = `${base}-${n}`;
   return {
     id,
     key: input.key,
@@ -468,25 +485,176 @@ export function updateProject(
   return meta;
 }
 
-/** Moves the project's data and workspaces into data/archive. The linked folder is untouched. */
+/** A project that could not be archived, with the HTTP status the route should answer with. Nothing was moved. */
+export class ArchiveError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+  }
+}
+
+/** The errors Windows gives for a file or folder another program has open. */
+const IN_USE = ['EPERM', 'EBUSY', 'EACCES', 'ENOTEMPTY'];
+const codeOf = (e: unknown) => (e as NodeJS.ErrnoException | undefined)?.code ?? '';
+/** A path as you'd find it from HQ's folder: "workspaces/shop-app". */
+const fromHq = (dir: string) => path.relative(path.dirname(DATA), dir).split(path.sep).join('/');
+
+/**
+ * Moves the project's data and workspaces into data/archive. The linked folder is untouched. Each folder moves whole
+ * or not at all: when Windows refuses (another program has a file open), what already moved goes back, the project
+ * stays as it was, and this throws an ArchiveError.
+ */
 export function archiveProject(id: string): string {
   const r = reg();
   const meta = r.projects.find((p) => p.id === id);
   if (!meta) throw new Error('project not found');
   const project = handles.get(id);
   project?.flush();
-  handles.delete(id);
 
   const dest = path.join(ARCHIVE_DIR, `${id}-${stamp()}`);
-  const dataDir = path.dirname(stateFile(id));
-  if (fs.existsSync(dataDir)) moveDir(dataDir, path.join(dest, 'data'));
-  const ws = path.join(WORKSPACES, id);
-  if (fs.existsSync(ws)) moveDir(ws, path.join(dest, 'workspaces'));
-  fs.writeFileSync(path.join(dest, 'project.json'), JSON.stringify(meta, null, 2));
+  const metaFile = path.join(dest, 'project.json');
+  fs.mkdirSync(dest, { recursive: true });
+  fs.writeFileSync(metaFile, JSON.stringify(meta, null, 2));
+  const moved: [string, string][] = [];
+  try {
+    for (const [from, to] of [
+      [projectDataDir(id), path.join(dest, 'data')],
+      [path.join(WORKSPACES, id), path.join(dest, 'workspaces')],
+    ]) {
+      if (!fs.existsSync(from)) continue;
+      fs.renameSync(from, to);
+      moved.push([from, to]);
+    }
+  } catch (e) {
+    let stuck = false;
+    for (const [from, to] of moved.reverse()) {
+      try {
+        fs.renameSync(to, from);
+      } catch {
+        stuck = true;
+        console.error(`[hq] could not move ${to} back to ${from}: move it back by hand`);
+      }
+    }
+    // One holding a folder that could not go back keeps its project.json, so Removed projects names it.
+    if (stuck) throw new ArchiveError(`Part of this project is stuck in ${fromHq(dest)}. Move it back by hand, then try again.`, 500);
+    try {
+      fs.rmSync(metaFile, { force: true });
+      fs.rmdirSync(dest);
+    } catch {
+      /* leave it */
+    }
+    if (IN_USE.includes(codeOf(e))) throw new ArchiveError('Another program has a file of this project open. Close it and try again.', 409);
+    throw new ArchiveError(`Could not move this project to data/archive (${codeOf(e) || 'error'}). Nothing was moved.`, 500);
+  }
 
+  project?.markRemoved();
+  handles.delete(id);
   r.projects = r.projects.filter((p) => p.id !== id);
   saveRegistry();
   return dest;
+}
+
+/**
+ * Removes the project and deletes its data and workspaces for good, where they are: board, history, attachments,
+ * trash, and every desk's ROLE.md, memory.md and reports. The linked folder is untouched. Returns what is still there
+ * because another program holds a file open, relative to HQ's folder. A new project never takes those folders over
+ * (see makeMeta).
+ */
+export async function deleteProject(id: string): Promise<string[]> {
+  const r = reg();
+  if (!r.projects.some((p) => p.id === id)) throw new Error('project not found');
+  handles.get(id)?.markRemoved();
+  handles.delete(id);
+  r.projects = r.projects.filter((p) => p.id !== id);
+  saveRegistry();
+
+  const left: string[] = [];
+  for (const dir of [projectDataDir(id), path.join(WORKSPACES, id)]) {
+    if (!(await removeForGood(dir))) left.push(fromHq(dir));
+  }
+  return left;
+}
+
+/**
+ * Deletes a folder and everything in it. Links inside are removed, never followed. A file another program has open
+ * is tried again for about a second. False when some of it is left.
+ */
+async function removeForGood(dir: string): Promise<boolean> {
+  for (let tries = 1; tries <= 5; tries++) {
+    try {
+      await fs.promises.rm(dir, { recursive: true, force: true });
+      break;
+    } catch (e) {
+      if (!IN_USE.includes(codeOf(e)) || tries === 5) break;
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+  }
+  return !fs.existsSync(dir);
+}
+
+function removedFolders(): string[] {
+  try {
+    return fs
+      .readdirSync(ARCHIVE_DIR, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name);
+  } catch {
+    return [];
+  }
+}
+
+/** "shop-app-2026-10-08T18-03-32-453Z": the id, and when it was removed (see archiveProject). */
+function parseRemovedFolder(folder: string): { id: string; at: string | null } {
+  const m = /^(.*)-(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z$/.exec(folder);
+  return m ? { id: m[1], at: `${m[2]}T${m[3]}:${m[4]}:${m[5]}.${m[6]}Z` } : { id: folder, at: null };
+}
+
+/** Bytes on disk under `at`. Links count as themselves and are never followed. */
+async function sizeOf(at: string): Promise<number> {
+  const st = await fs.promises.lstat(at).catch(() => null);
+  if (!st) return 0;
+  if (!st.isDirectory()) return st.size;
+  let total = 0;
+  for (const name of await fs.promises.readdir(at).catch(() => [] as string[])) total += await sizeOf(path.join(at, name));
+  return total;
+}
+
+/** Removed projects waiting in data/archive, newest first. */
+export async function listRemoved(): Promise<RemovedProject[]> {
+  const out = await Promise.all(
+    removedFolders().map(async (folder): Promise<RemovedProject | null> => {
+      const dir = path.join(ARCHIVE_DIR, folder);
+      // Deleted while this listed it (from another tab, or by hand): left out.
+      const st = await fs.promises.stat(dir).catch(() => null);
+      if (!st) return null;
+      const { id, at } = parseRemovedFolder(folder);
+      let meta: Partial<ProjectMeta> = {};
+      try {
+        meta = JSON.parse(await fs.promises.readFile(path.join(dir, 'project.json'), 'utf8')) as Partial<ProjectMeta>;
+      } catch {
+        // A folder without it still shows, by its id; one deleted meanwhile doesn't.
+        if (!fs.existsSync(dir)) return null;
+      }
+      const text = (v: unknown) => (typeof v === 'string' && v ? v : null);
+      return {
+        folder,
+        name: text(meta.name) ?? id,
+        key: text(meta.key),
+        color: text(meta.color),
+        removedAt: at ?? st.mtime.toISOString(),
+        bytes: await sizeOf(dir),
+      };
+    }),
+  );
+  return out.filter((r): r is RemovedProject => r !== null).sort((a, b) => b.removedAt.localeCompare(a.removedAt));
+}
+
+/** Deletes a removed project from data/archive for good. Only a folder there by that exact name. */
+export async function deleteRemoved(folder: string): Promise<'deleted' | 'not-found' | 'in-use'> {
+  if (!removedFolders().includes(folder)) return 'not-found';
+  return (await removeForGood(path.join(ARCHIVE_DIR, folder))) ? 'deleted' : 'in-use';
 }
 
 export function resetProject(id: string, empty: boolean): State {

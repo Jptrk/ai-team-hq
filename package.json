@@ -24,6 +24,7 @@
     "test:timeouts": "tsx server/timeouts.test.ts",
     "test:auto": "tsx server/autopilot.test.ts",
     "test:delete": "tsx server/delete.test.ts",
+    "test:archive": "tsx server/archive.test.ts",
     "test:account": "tsx server/account.test.ts",
     "test:codex": "tsx server/codex.test.ts",
     "test:idle": "tsx server/idle.test.ts",

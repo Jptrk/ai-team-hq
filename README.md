@@ -285,8 +285,21 @@ Routing an instruction: `@Name` sends it straight to that desk. Otherwise the de
 match best gets it, and the lead catches anything nobody matches.
 
 Project settings (from the picker) edit name, key, folder, access and sign-off, or remove the project.
-Removing moves its board and agent workspaces to `data/archive/`. The linked folder is never
-touched.
+Removing it either archives it or deletes it for good:
+
+- **Archive** moves its board, images, trash and agent workspaces (every desk's reports too) to
+  `data/archive/`. It shows under **Removed projects** on the Projects page with its size, and
+  **Delete for good** there (click twice) deletes it. While another program has a file of the
+  project open (an editor, a terminal in a desk's folder), Windows won't move it: HQ moves
+  nothing and asks you to close it and try again.
+- **Delete for good** deletes all of that where it is, straight away. It cannot be undone. A
+  file or folder another program has open is left where it is, and HQ names it so you can
+  delete it once that program is closed. A new project never takes those leftovers over.
+
+Either way the linked folder is never touched, and a link inside a workspace is removed, never
+followed. Removing waits while a desk runs, a huddle is going, or a connection check or sign-in
+runs, and the last project can't go. Desks' Claude Code transcripts stay in
+`~/.claude/projects/`, which HQ doesn't manage.
 
 ## Connections (MCP servers per project)
 
@@ -1156,7 +1169,7 @@ chat reply's whole budget ("Reached maximum budget ($1)").
 | `data/skills/` | The skills library and the installed skills (see [Skills](#skills)) |
 | `data/projects/<id>/trash/` | What desks deleted, by time and desk, to move back by hand. Never emptied by HQ |
 | `data/settings.json` | Settings for all of HQ: the [effort](#effort) level, [Pause](#pause), and a Claude usage-limit hold |
-| `data/archive/` | Removed projects |
+| `data/archive/` | Archived projects, until you delete them for good from Removed projects |
 | `data/backup/` | The single-project `db.json` from before projects existed |
 
 The first boot after upgrading moves the old `data/db.json` and `workspaces/<agent>/` into a
@@ -1179,6 +1192,7 @@ npm run test:settings
 npm run test:timeouts
 npm run test:auto
 npm run test:delete
+npm run test:archive
 npm run test:account
 npm run test:codex
 npm run test:idle
@@ -1233,6 +1247,7 @@ npm run test:idle
 
   It fetches nothing: a stand-in builds a local fixture where git would clone.
 - **`test:delete`** checks `delete_file`: files and folders move to the project's trash (nothing overwritten there), only where a desk may write, never protected files or a folder holding one, never a desk's own ROLE.md, memory.md or reports, the per-run and folder-size limits, the ticket history and changed files, and the QA prompt marking a deleted file.
+- **`test:archive`** checks removing a project: archived (board, images, trash and workspaces to `data/archive/`) or deleted for good with nothing left, the Removed projects list (names, dates, sizes, newest first) and deleting from it (only a folder there by its exact name), a link in a workspace removed but never followed (also when sizing), the linked folder untouched, and removing refused while a desk runs, a huddle is going, a connection check or sign-in runs, or for the last project. On Windows, with another program working in a desk's folder: archiving is refused with nothing moved and the board kept, and deleting for good names the held folder, which a new project by the same name never takes over. A removed project's late saves write nothing, also into a new project that took its id.
 - **`test:auto`** checks what the team does on its own, with desks on a fake runner:
   - Pause: team starts held on their tickets and chat wakes held in threads (counts unchanged), your own starts never held (also when they join a waiting team run), queued team runs held at once without blocking yours, Resume oldest first, stale holds dropped
   - Claude's usage limit (held everywhere, cleared at the reset), account problems, and restarts (a team run starts again once; a hand-off and its QA check both cut off keep the QA check)
@@ -1286,7 +1301,9 @@ Everything project-specific lives under `/api/projects/:pid`.
 | GET    | /api/projects/:pid | |
 | PATCH  | /api/projects/:pid | `{ name?, key?, path?, access?, signoff?, autopilot?, goalMode?, goal?, autoLimits?, provider? }`; a new `provider` starts every desk on a new conversation, 409 while any desk there runs or is queued; `signoff` is true or false: finished tickets wait for your sign-off before Done (missing on older projects means on); `goalMode` needs a `goal` and `autopilot`, and `autopilot: false` turns it off too; `autoLimits` is `{ runs: 1-500, usd: 1-1000 }` |
 | POST   | /api/projects/:pid/auto/resume | Autopilot stopped itself after 3 failed runs: start it again. Answers with the project's auto status |
-| DELETE | /api/projects/:pid | archives it |
+| DELETE | /api/projects/:pid | archives it, or 409 with nothing moved while another program has a file of it open; `?forGood=1` deletes it where it is instead and answers `{ left }`: the folders another program held open, relative to HQ's folder. 409 while a desk runs, a huddle is going, or a connection check or sign-in runs, or for the last project |
+| GET    | /api/archive | removed projects in `data/archive/`, newest first: `{ folder, name, key, color, removedAt, bytes }` |
+| DELETE | /api/archive/:folder | deletes that removed project for good, trying a file another program has open again for about a second; 404 for anything not in `data/archive/` by that exact name, 409 when some of it is still open |
 | GET    | /api/projects/:pid/state | includes `office`: what each desk is doing right now (activity, since, who with); `auto`: why the team's own work waits here, today's count against the limits, and the goal's status; `modelProblem`: why this project's model can't run now, or null |
 | POST   | /api/projects/:pid/instructions | `{ text, attachments?, includeNotes? }` |
 | POST   | /api/projects/:pid/items/:id/decision | `{ decision, note?, attachments?, includeNotes? }` |
