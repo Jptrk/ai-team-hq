@@ -2,6 +2,16 @@ import type { AgentActivity } from './activity';
 
 export type AgentStatus = 'working' | 'waiting' | 'idle' | 'off';
 
+/** Which model a project's desks run on: Claude (Agent SDK), or GPT through Codex on your ChatGPT login. */
+export const PROVIDERS = ['claude', 'gpt'] as const;
+export type Provider = (typeof PROVIDERS)[number];
+export const isProvider = (v: unknown): v is Provider => typeof v === 'string' && (PROVIDERS as readonly string[]).includes(v);
+
+/** A project's model. Projects from before GPT desks have none: Claude. */
+export function projectProvider(meta: Pick<ProjectMeta, 'provider'>): Provider {
+  return meta.provider ?? 'claude';
+}
+
 export interface Agent {
   id: string;
   name: string;
@@ -21,9 +31,9 @@ export interface Agent {
   currentTask?: string;
   lastActive: string;
   skills: string[];
-  /** Live runner only: true while a Claude run is in flight for this agent. */
+  /** Live runner only: true while a run is in flight for this agent. */
   running?: boolean;
-  /** Live runner only: Agent SDK session to resume so the agent keeps context between tasks. */
+  /** Live runner only: the session to resume so the agent keeps context between tasks (an Agent SDK session, or a Codex thread for a GPT desk). */
   sessionId?: string;
   /** Live runner only: cumulative estimated spend in USD. */
   spentUsd?: number;
@@ -119,7 +129,8 @@ export interface WorkItem {
 }
 
 /** Why automatic work can't start now. paused: you; usage / account: Claude refused; halted: Autopilot failed 3 times in a row; runs / usd: the project's daily limit. */
-export type HoldKind = 'paused' | 'usage' | 'account' | 'halted' | 'runs' | 'usd';
+/** model: the project's model can't run now (no login for it, or it is switched off). */
+export type HoldKind = 'paused' | 'usage' | 'account' | 'halted' | 'runs' | 'usd' | 'model';
 
 export interface Hold {
   kind: HoldKind;
@@ -140,8 +151,9 @@ export interface AutoHold {
   /** Times a restart already cut this start off. A second time, it is skipped instead. */
   restarts?: number;
   /**
-   * Yours, made while HQ was idle: it starts as your own click once HQ is live (no daily limits), after Resume when
-   * paused. why then says what it waits for now. It keeps what you gave it: your note, images and the team-notes ask.
+   * Yours, made (or reached its turn) while HQ was idle or the project's model couldn't run: it starts as your own click
+   * once it can (no daily limits), after Resume when paused. why then says what it waits for now. It keeps what you
+   * gave it: your note, images and the team-notes ask. The team's own start for the same ticket never replaces it.
    */
   mine?: true;
   note?: string;
@@ -156,7 +168,7 @@ export interface HeldWake {
   at: string;
   why: HoldKind | 'restart' | 'login';
   restarts?: number;
-  /** Your message, sent while HQ was idle (see AutoHold.mine). */
+  /** Your message, sent (or reached its turn) while HQ was idle or the project's model couldn't run (see AutoHold.mine). */
   mine?: true;
 }
 
@@ -259,6 +271,8 @@ export interface Run {
   status: RunStatus;
   startedAt: string;
   finishedAt?: string;
+  /** The model it ran on. GPT runs use your ChatGPT plan, so they have no dollar cost. Unset: Claude. */
+  provider?: Provider;
   costUsd?: number;
   turns?: number;
   summary?: string;
@@ -639,6 +653,8 @@ export interface ProjectMeta {
   goal?: string;
   /** Most the team may start on its own here per day. Read it with autoLimitsOf. */
   autoLimits?: AutoLimits;
+  /** The model every desk here runs on. Unset: Claude. Read it with projectProvider. */
+  provider?: Provider;
 }
 
 export interface AutoLimits {
@@ -699,7 +715,8 @@ export interface PathCheck {
   error?: string;
 }
 
-export type RunnerName = 'claude' | 'sim';
+/** live: desks run for real, each on its own model (Claude, or GPT on your ChatGPT login). sim: fake activity. */
+export type RunnerName = 'live' | 'sim';
 
 /** How hard Claude works on each desk turn, lowest first: more effort means more thinking and more usage. The Agent SDK's levels. */
 export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
@@ -714,25 +731,45 @@ export interface PauseInfo {
   until?: string;
 }
 
+/** GPT desks, for the header and the desk forms. */
+export interface GptMeta {
+  /** Desks may run on your ChatGPT login: you said so on the Accounts page (signing in from HQ says so too). */
+  optedIn: boolean;
+  /** Opted in and signed in: GPT desks can run once HQ is live. */
+  ready: boolean;
+  /** The model GPT desks use. Null: Codex's default. */
+  model: string | null;
+  /** The reasoning effort GPT desks use. Null: the model's default. */
+  effort: string | null;
+}
+
 /** Server-side facts the UI needs that are not persisted. */
 export interface Meta {
   runner: RunnerName;
+  /** The model Claude desks run on. */
   model: string;
-  /** The effort every desk run uses, one setting for all of HQ. Null: the model's own default. */
+  /** The effort every Claude desk run uses, one setting for all of HQ. Null: the model's own default. */
   effort: EffortLevel | null;
+  gpt: GptMeta;
   /** Nothing the team starts on its own runs, in any project: you paused HQ, or Claude refused (usage limit, account). */
   paused: PauseInfo | null;
   /** Starts and chat wakes waiting for HQ to resume or a limit to clear, across all projects. */
   held: number;
-  /** True when some credential exists, so live mode can actually run. */
+  /** True when some credential exists, so live mode can actually run: a Claude key or login, or a ChatGPT login GPT desks may use. */
   liveReady: boolean;
-  /** Which credential the Agent SDK will use. */
+  /**
+   * Claude projects' desks can run now (claudeBlocked in server/runner/index.ts): false when Run desks on my Claude
+   * login is off and was off when HQ started, or there is no Claude login while GPT desks can run. Live, work in
+   * Claude projects then waits (StateResponse.modelProblem says why). Always true with an API key.
+   */
+  claudeReady: boolean;
+  /** Which credential the Agent SDK will use for Claude desks. */
   auth: 'api-key' | 'claude-login' | 'none';
   /** You signed in to your Claude account from HQ while it runs in sim: a restart makes it live. */
   restartToGoLive: boolean;
   /** HQ_RUNNER=sim in .env: HQ stays in sim whatever you sign in to. */
   simByEnv: boolean;
-  /** Desks may run on the Claude login: you said so on the Claude account page, or HQ_RUNNER=claude is set. */
+  /** Desks may run on the Claude login: you said so on the Accounts page, or HQ_RUNNER=claude is set. */
   optedIn: boolean;
   /**
    * HQ can't go live (no Claude login to run on), but the projects are real: you said yes to the login, or HQ went live
@@ -781,12 +818,76 @@ export interface AccountResponse {
   optedIn: boolean;
   /** HQ_RUNNER=claude in .env: the yes comes from there, so HQ can't take it back. */
   optInByEnv: boolean;
+  /**
+   * Claude desks were allowed when HQ started (a key, or a yes to the login). Only then does switching the login off
+   * keep them on it until a restart; HQ started without that yes, a Claude desk runs only while the switch is on.
+   */
+  claudeAtStart: boolean;
   runner: RunnerName;
   restartToGoLive: boolean;
   /** HQ_RUNNER=sim in .env: HQ stays in sim whatever you sign in to. */
   simByEnv: boolean;
   /** HQ started with no Claude login to run desks on, so they are idle (see Meta.idle). */
   idle: boolean;
+}
+
+/** Your ChatGPT account as HQ's own Codex sees it. Never a token. */
+export interface ChatGptAccount {
+  loggedIn: boolean;
+  email?: string;
+  /** The ChatGPT plan: plus, pro, business… */
+  plan?: string;
+}
+
+/**
+ * Signing in to ChatGPT from HQ. browser: a sign-in page on this PC, which comes back to Codex by itself.
+ * device: a code you enter at OpenAI's device page, from any device. One at a time.
+ */
+export interface ChatGptLogin {
+  state: 'starting' | 'waiting' | 'failed';
+  method: 'browser' | 'device';
+  /** browser: the sign-in page to open. */
+  authUrl?: string;
+  /** device: the page to open, and the code to type there. */
+  verificationUrl?: string;
+  userCode?: string;
+  expiresAt: string;
+  error?: string;
+}
+
+/** One of the plan's usage windows (5-hour, weekly), as Codex last reported it. */
+export interface ChatGptWindow {
+  label: string;
+  usedPercent: number;
+  resetsAt?: string;
+}
+
+/** A model GPT desks can use, from Codex's model list. */
+export interface GptModel {
+  id: string;
+  name: string;
+  efforts: string[];
+  defaultEffort?: string;
+  isDefault?: boolean;
+}
+
+export interface ChatGptResponse {
+  /** Null: Codex did not answer. */
+  account: ChatGptAccount | null;
+  checkedAt?: string;
+  login?: ChatGptLogin;
+  /** When the last sign-in from HQ worked, since HQ started. */
+  signedInAt?: string;
+  /** You said GPT desks may run on this login. They do once HQ is live. */
+  optedIn: boolean;
+  /** The plan's usage windows, when Codex reported them. */
+  usage?: ChatGptWindow[];
+  /** Models on this login, when Codex listed them. */
+  models: GptModel[];
+  model: string | null;
+  effort: string | null;
+  runner: RunnerName;
+  restartToGoLive: boolean;
 }
 
 /** The polled state leaves out messages; a thread's messages load when it opens. */
@@ -800,6 +901,8 @@ export interface StateResponse extends Omit<State, 'messages' | 'huddles' | 'aut
   project: ProjectMeta;
   /** What the team does on its own here: why it waits, and today's count against the limits. */
   auto: AutoStatus;
+  /** Why this project's desks can't run on its model now (no login for it, or switched off), or null. Live HQ only. */
+  modelProblem: string | null;
 }
 
 export type Decision = 'approve' | 'hold' | 'send-back' | 'instruct';

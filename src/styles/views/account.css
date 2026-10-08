@@ -107,4 +107,57 @@
   .account-card .banner svg {
     flex: none;
   }
+
+  /* ---------- ChatGPT (GPT desks) ---------- */
+  .account-subheading {
+    margin: 16px 0 8px;
+    font-size: var(--fs-md);
+    font-weight: 650;
+  }
+  .gpt-usage {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .gpt-usage li {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .gpt-usage-label {
+    font-size: var(--fs-sm);
+  }
+  .gpt-usage-bar {
+    display: block;
+    height: 6px;
+    border-radius: 3px;
+    background: var(--surface-sunken);
+    overflow: hidden;
+  }
+  .gpt-usage-fill {
+    display: block;
+    height: 100%;
+    background: var(--success);
+  }
+  .gpt-usage-fill.high {
+    background: var(--warning);
+  }
+  .gpt-code {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    margin: 0;
+  }
+  .gpt-code .mono {
+    font-size: var(--fs-lg);
+    font-weight: 650;
+    letter-spacing: 0.08em;
+  }
+  .gpt-model {
+    flex-wrap: wrap;
+  }
 }

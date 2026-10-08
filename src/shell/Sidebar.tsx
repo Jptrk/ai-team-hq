@@ -100,7 +100,7 @@ export function Sidebar({ projects, current, route, counts, mode, onNavigate, on
           <ul className="nav-list">
             <NavLink href="/projects" label="All projects" Icon={FolderOpen} active={route.kind === 'projects'} rail={rail} onFollow={onFollow} />
             <NavLink href="/projects/new" label="Create project" Icon={Plus} active={route.kind === 'new'} rail={rail} onFollow={onFollow} />
-            <NavLink href="/account" label="Claude account" Icon={UserRound} active={route.kind === 'account'} rail={rail} onFollow={onFollow} />
+            <NavLink href="/account" label="Accounts" Icon={UserRound} active={route.kind === 'account'} rail={rail} onFollow={onFollow} />
           </ul>
           <div className="sidebar-spacer" />
         </>

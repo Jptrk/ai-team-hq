@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { autoLimitsOf, hasQa, MAX_GOAL, signoffOn, type PathCheck, type ProjectAccess, type ProjectSummary, type TeamTemplate } from '../../shared/types';
+import { autoLimitsOf, hasQa, MAX_GOAL, projectProvider, signoffOn, type PathCheck, type ProjectAccess, type ProjectSummary, type Provider, type TeamTemplate } from '../../shared/types';
 import { api } from '../api';
 import { AVATAR_FALLBACK, cleanPath, suggestKey } from '../util';
 import { ProjectAvatar } from './ProjectAvatar';
@@ -11,7 +11,16 @@ interface Props {
   onCancel: () => void;
   onSaved: (project: ProjectSummary) => void;
   onArchived?: (archivedTo: string) => void;
+  /** GPT desks can run: HQ has a ChatGPT login you said yes to. */
+  gptReady?: boolean;
+  /** Claude desks can run now (Meta.claudeReady). */
+  claudeReady?: boolean;
 }
+
+const MODELS: { id: Provider; title: string; sub: string }[] = [
+  { id: 'claude', title: 'Claude', sub: 'Your Claude login or API key. Connections and web search work.' },
+  { id: 'gpt', title: 'GPT', sub: "Your ChatGPT plan, through HQ's Codex. No connections or web search yet." },
+];
 
 const TEAMS: { id: TeamTemplate; title: string; desks: string }[] = [
   { id: 'dev', title: 'Dev team', desks: 'Tech Lead, Frontend, Backend, QA, DevOps, Code Reviewer, Docs' },
@@ -20,7 +29,7 @@ const TEAMS: { id: TeamTemplate; title: string; desks: string }[] = [
   { id: 'blank', title: 'Blank', desks: 'One generalist. Add your own desks after.' },
 ];
 
-export function ProjectForm({ mode, project, projects, onCancel, onSaved, onArchived }: Props) {
+export function ProjectForm({ mode, project, projects, onCancel, onSaved, onArchived, gptReady, claudeReady }: Props) {
   const editing = mode === 'edit' && project;
   const [folder, setFolder] = useState(project?.path ?? '');
   const [name, setName] = useState(project?.name ?? '');
@@ -28,6 +37,7 @@ export function ProjectForm({ mode, project, projects, onCancel, onSaved, onArch
   const [template, setTemplate] = useState<TeamTemplate>(project?.template ?? 'dev');
   const [access, setAccess] = useState<ProjectAccess>(project?.access ?? 'read');
   const [signoff, setSignoff] = useState(project ? signoffOn(project) : true);
+  const [provider, setProvider] = useState<Provider>(project ? projectProvider(project) : 'claude');
   const [autopilot, setAutopilot] = useState(Boolean(project?.autopilot));
   const [goalMode, setGoalMode] = useState(Boolean(project?.goalMode));
   const [goal, setGoal] = useState(project?.goal ?? '');
@@ -104,8 +114,10 @@ export function ProjectForm({ mode, project, projects, onCancel, onSaved, onArch
       ...(goal.trim() !== before.goal.trim() ? { goal: goal.trim() } : {}),
       ...(runs !== before.limits.runs || usd !== before.limits.usd ? { autoLimits: { runs, usd } } : {}),
     };
+    // Only a change of model is sent: it starts every desk on a new conversation.
+    const model = !editing || provider !== projectProvider(project) ? { provider } : {};
     try {
-      const saved = editing ? await api.updateProject(project.id, { ...body, ...auto }) : await api.createProject({ ...body, template });
+      const saved = editing ? await api.updateProject(project.id, { ...body, ...auto, ...model }) : await api.createProject({ ...body, template, ...model });
       onSaved(saved);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not save');
@@ -205,6 +217,25 @@ export function ProjectForm({ mode, project, projects, onCancel, onSaved, onArch
             <p className="field-hint">Every new team gets its own names, different from your other projects.</p>
           </fieldset>
         )}
+
+        <fieldset className="field">
+          <legend className="label">Model</legend>
+          <div className="choices two">
+            {MODELS.map((m) => (
+              <label key={m.id} className={`choice${provider === m.id ? ' on' : ''}`}>
+                <input type="radio" name="provider" value={m.id} checked={provider === m.id} onChange={() => setProvider(m.id)} />
+                <span className="choice-title">{m.title}</span>
+                <span className="choice-sub">{m.sub}</span>
+              </label>
+            ))}
+          </div>
+          <p className="field-hint">
+            Every desk in this project runs on it.
+            {editing && provider !== projectProvider(project) && ' Switching starts every desk on a new conversation; their memory.md stays. Wait for runs to finish first.'}
+            {provider === 'gpt' && !gptReady && ' Sign in to ChatGPT on the Accounts page, or work here waits.'}
+            {provider === 'claude' && !claudeReady && " Claude can't run on HQ now, so work here waits until it can: see the Accounts page."}
+          </p>
+        </fieldset>
 
         <fieldset className="field" disabled={!hasFolder}>
           <legend className="label">What agents can do in the folder</legend>

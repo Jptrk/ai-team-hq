@@ -33,8 +33,9 @@ export function AutoBar({ project, auto, autoConnections, paused, onChange, onRe
     }
   };
 
-  // Your own Pause shows in the header; here only what holds this project.
-  const hold = auto.hold && !(paused && (auto.hold.kind === 'paused' || auto.hold.kind === 'usage' || auto.hold.kind === 'account')) ? auto.hold : null;
+  // Your own Pause shows in the header, and a model that can't run in the banner above the board; here only what else holds this project.
+  const hold =
+    auto.hold && auto.hold.kind !== 'model' && !(paused && (auto.hold.kind === 'paused' || auto.hold.kind === 'usage' || auto.hold.kind === 'account')) ? auto.hold : null;
 
   return (
     <div className="auto-bar">

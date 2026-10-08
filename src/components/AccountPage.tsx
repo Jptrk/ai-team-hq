@@ -6,6 +6,7 @@ import { api } from '../api';
 import type { Notify } from '../hooks/useFlags';
 import { PageHeader } from '../shell/PageHeader';
 import { ConfirmInline, refocus } from '../ui/ConfirmInline';
+import { ChatGptAccount } from './ChatGptAccount';
 import { hostOf, timeLeft } from './connections/addForm';
 
 interface Props {
@@ -50,8 +51,9 @@ interface ActionError {
 }
 
 /**
- * Your Claude account: sign in with your Claude subscription (not an API key), see who is signed in,
+ * Your accounts. Claude: sign in with your Claude subscription (not an API key), see who is signed in,
  * say whether desks may run on it, and sign out. Claude Code does the sign-in; HQ only shows its page.
+ * ChatGPT, for GPT desks, is its own section (ChatGptAccount).
  */
 export function AccountPage({ notify, onChanged, meta }: Props) {
   const [data, setData] = useState<AccountResponse | null>(null);
@@ -150,7 +152,7 @@ export function AccountPage({ notify, onChanged, meta }: Props) {
   if (!data) {
     return (
       <section className="page narrow-page account">
-        <PageHeader title="Claude account" />
+        <PageHeader title="Accounts" />
         {loadError ? (
           <p className="banner danger" role="alert">
             {loadError}
@@ -167,13 +169,16 @@ export function AccountPage({ notify, onChanged, meta }: Props) {
   const plan = planLabel(account?.plan);
   const noPlan = signedIn && account?.method === 'claude.ai' && !account.plan && !data.envToken;
   const method = methodLabel(account?.method, noPlan);
-  const live = data.runner === 'claude';
+  const live = data.runner === 'live';
+  // The header's meta follows a change on either account; this page's own data only the Claude one.
+  const restart = meta?.restartToGoLive ?? data.restartToGoLive;
   const login = data.login;
   // Signed in, but not with a Claude subscription. A CLAUDE_CODE_OAUTH_TOKEN reads as a token: the note below covers it.
   const otherMethod = signedIn && account?.method && account.method !== 'claude.ai' && !(data.envToken && account.method === 'oauth_token') ? account.method : null;
-  // Live on the login, and it went away: every desk run fails.
-  const liveNoLogin = live && !data.apiKey && account?.loggedIn === false;
-  const backToSim = signedIn && !data.optedIn && live && !data.apiKey && !data.optInByEnv;
+  // Live on the login, and it went away: work in Claude projects waits while GPT ones can run, and fails otherwise.
+  const liveNoLogin = live && data.optedIn && !data.apiKey && account?.loggedIn === false;
+  // Switched off while live: desks stay on the login until a restart, but only when HQ started with the yes (claudeAtStart).
+  const backToSim = signedIn && !data.optedIn && live && !data.apiKey && !data.optInByEnv && data.claudeAtStart;
   // A code error shows under the field while it is there; anything else at the top.
   const codeError = actionError?.at === 'code' && login?.state === 'waiting' ? actionError.text : null;
   const pageError = actionError && (actionError.at === 'page' || !login) ? actionError.text : null;
@@ -181,8 +186,8 @@ export function AccountPage({ notify, onChanged, meta }: Props) {
   return (
     <section className="page narrow-page account">
       <PageHeader
-        title="Claude account"
-        subtitle="Sign in with your Claude subscription (Pro, Max, Team or Enterprise), and desks run on it once HQ restarts. No API key needed."
+        title="Accounts"
+        subtitle="Desks run on your own logins, no API key needed: Claude projects on your Claude subscription, GPT projects on your ChatGPT plan."
       />
       {loadError && (
         <p className="banner danger account-error" role="alert">
@@ -196,16 +201,23 @@ export function AccountPage({ notify, onChanged, meta }: Props) {
       )}
       {liveNoLogin && (
         <p className="banner danger account-error" role="status">
-          HQ is live but has no Claude login: desk runs fail and automatic work is held. Sign in again.
+          HQ is live but has no Claude login:{' '}
+          {meta?.claudeReady === false ? 'work in Claude projects waits until you sign in again.' : 'runs in Claude projects fail. Sign in again.'}
         </p>
       )}
-      {data.idle && !data.restartToGoLive && (
+      {data.idle && !restart && (
         <p className="banner danger account-error" role="status">
-          HQ has no Claude login to run desks on, so they are idle, and there is no sim in your projects.{' '}
-          {signedIn ? 'Turn on Run desks on my Claude login below, then restart HQ.' : 'Sign in below, then restart HQ.'}
+          HQ has no login to run desks on, so they are idle, and there is no sim in your projects. Sign in to Claude or ChatGPT below, turn on running desks on it, then restart HQ.
         </p>
       )}
 
+      {restart && (
+        <p className="banner accent account-error" role="status">
+          <RotateCcw size={15} aria-hidden /> Restart HQ to go live: stop it in its terminal (Ctrl+C) and start it again (npm start or npm run dev).
+        </p>
+      )}
+
+      <h2 className="account-heading">Claude</h2>
       <div className="card-box account-card">
         <div className="account-who">
           <span className={`account-icon${signedIn ? ' on' : ''}`} aria-hidden>
@@ -287,7 +299,7 @@ export function AccountPage({ notify, onChanged, meta }: Props) {
         {signedIn && !signingIn && <p className="field-hint">Signing in again or switching account replaces the login every Claude Code on this PC uses.</p>}
       </div>
 
-      <h2 className="account-heading">Desks on this login</h2>
+      <h3 className="account-subheading">Claude desks on this login</h3>
       <div className="card-box account-card">
         <label className="account-use">
           <span className="switch">
@@ -319,24 +331,23 @@ export function AccountPage({ notify, onChanged, meta }: Props) {
           <p className="banner warning">ANTHROPIC_API_KEY is set in .env, so desks run on that key, not on this login. Remove the key from .env and restart HQ to use your subscription.</p>
         )}
         {data.simByEnv && <p className="banner warning">HQ_RUNNER=sim is set in .env, so HQ stays in sim. Remove it from .env and restart HQ to go live.</p>}
-        {data.restartToGoLive && (
-          <p className="banner accent" role="status">
-            <RotateCcw size={15} aria-hidden /> Restart HQ to go live: stop it in its terminal (Ctrl+C) and start it again (npm start or npm run dev). Desks then run on{' '}
-            {account?.email ?? 'your Claude login'}.
-          </p>
-        )}
         {backToSim && (
           <p className="banner" role="status">
             Desks keep running on the login until HQ restarts; then they stay idle until you turn it back on.
           </p>
         )}
+        {live && signedIn && !data.optedIn && !data.apiKey && !data.claudeAtStart && (
+          <p className="muted small">Off: work in Claude projects waits, without touching this login, until you turn it on.</p>
+        )}
         {live && data.optedIn && !data.apiKey && signedIn && (
           <p className="muted small">
-            Live{meta ? ` on ${meta.model}` : ''}: desks run on {account?.email ?? 'your Claude login'}.
+            Live{meta ? ` on ${meta.model}` : ''}: Claude desks run on {account?.email ?? 'your Claude login'}.
           </p>
         )}
         <p className="field-hint">For your own use on this PC. Anthropic's Agent SDK docs say apps offered to other people may not run on claude.ai logins.</p>
       </div>
+
+      <ChatGptAccount notify={notify} onChanged={onChanged} meta={meta} />
     </section>
   );
 }

@@ -1,7 +1,7 @@
 import express, { Router, type Response } from 'express';
 import fs from 'node:fs';
-import type { AccountResponse, Attachment, Decision, EffortLevel, ItemStatus, ProjectAccess, ProjectMeta, ProjectSummary, ReportInfo, StateResponse, TeamTemplate, ThreadResponse, WorkItem } from '../shared/types';
-import { canEditDescription, EFFORT_LEVELS, hasQa, isEffortLevel, MAX_ATTACHMENTS, MAX_GOAL, MAX_DESCRIPTION, signoffOn } from '../shared/types';
+import type { AccountResponse, Attachment, ChatGptResponse, Decision, EffortLevel, ItemStatus, ProjectAccess, ProjectMeta, ProjectSummary, ReportInfo, StateResponse, TeamTemplate, ThreadResponse, WorkItem } from '../shared/types';
+import { canEditDescription, EFFORT_LEVELS, hasQa, isEffortLevel, isProvider, projectProvider, MAX_ATTACHMENTS, MAX_GOAL, MAX_DESCRIPTION, signoffOn } from '../shared/types';
 import { acceptInstruction, addAgent, parseSkills, refreshStatuses, removeAgent, settleInstructions } from './agents';
 import { AttachmentError, pickAttachments, resolveAttachment, saveUpload } from './attachments';
 import {
@@ -19,6 +19,20 @@ import {
 import { titleFrom } from '../shared/plainText';
 import { parseReportUrl, reportTitleFrom, type ReportUrlParts } from '../shared/reportUrl';
 import { AccountError, accountCached, accountLogin, cancelAccountLogin, checkAccount, lastSignIn, signOutAccount, startAccountLogin, submitAccountCode, useClaudeLogin } from './claudeAuth';
+import {
+  cancelChatGptLogin,
+  ChatGptError,
+  chatGptCached,
+  chatGptLogin,
+  chatGptUsage,
+  checkChatGpt,
+  gptModels,
+  gptOptIn,
+  lastChatGptSignIn,
+  signOutChatGpt,
+  startChatGptLogin,
+  useChatGptLogin,
+} from './codexAuth';
 import { addComment } from './comments';
 import {
   addConnection,
@@ -43,10 +57,10 @@ import { checkFolder, folderExists, KEY_PATTERN, suggestKey } from './paths';
 import { backToWork, closesOnApprove, moveByHand, qaDeskOf, rerouteAllQa, setQaDesk } from './qa';
 import { resolveReport } from './runner/claude';
 import { autoGate, autoStatus, haltedHold, resumeProject } from './autopilot';
-import { setEffort } from './settings';
+import { isGptName, setEffort, setGpt, settings } from './settings';
 import { cancelPreview, changeSkillDesks, installSkills, listLibrary, previewSkills, projectSkills, removeSkill, setScriptsAllowed, setSkillDesks, SkillError } from './skills';
 import { officeState } from './office';
-import { autoTick, cancelRun, deliver, isIdle, isLive, kickoff, loginOptIn, meta, mootRun, notLiveText, pauseAll, restartToGoLive, resumeAll } from './runner';
+import { autoTick, cancelRun, claudeAtStart, deliver, isIdle, isLive, kickoff, loginOptIn, meta, modelProblem, mootRun, notLiveText, pauseAll, restartToGoLive, resumeAll } from './runner';
 import {
   allProjects,
   archiveProject,
@@ -109,7 +123,7 @@ function summary(p: Project): ProjectSummary {
   };
 }
 
-type ProjectPatch = Partial<Pick<ProjectMeta, 'name' | 'key' | 'path' | 'access' | 'signoff' | 'autopilot' | 'goalMode' | 'goal' | 'autoLimits'>>;
+type ProjectPatch = Partial<Pick<ProjectMeta, 'name' | 'key' | 'path' | 'access' | 'signoff' | 'autopilot' | 'goalMode' | 'goal' | 'autoLimits' | 'provider'>>;
 
 /** Validate the editable project fields present in `body`. Exported for tests. */
 export function readProjectPatch(body: Record<string, unknown>, exceptId?: string): { patch: ProjectPatch; error?: string } {
@@ -161,6 +175,10 @@ export function readProjectPatch(body: Record<string, unknown>, exceptId?: strin
     if (typeof runs !== 'number' || !Number.isInteger(runs) || runs < 1 || runs > 500) return { patch, error: 'The daily run limit must be a whole number from 1 to 500' };
     if (typeof usd !== 'number' || !Number.isFinite(usd) || usd < 1 || usd > 1000) return { patch, error: 'The daily spend limit must be from $1 to $1000' };
     patch.autoLimits = { runs, usd: Math.round(usd * 100) / 100 };
+  }
+  if ('provider' in body) {
+    if (!isProvider(body.provider)) return { patch, error: 'provider must be claude or gpt' };
+    patch.provider = body.provider;
   }
   return { patch };
 }
@@ -227,6 +245,7 @@ function accountResponse(): AccountResponse {
     envToken: Boolean(process.env.CLAUDE_CODE_OAUTH_TOKEN),
     optedIn: loginOptIn(),
     optInByEnv: process.env.HQ_RUNNER === 'claude',
+    claudeAtStart: claudeAtStart(),
     runner: meta().runner,
     restartToGoLive: restartToGoLive(),
     simByEnv: process.env.HQ_RUNNER === 'sim',
@@ -278,7 +297,10 @@ router.delete('/account/login', jsonOnly, (_req, res) => {
   res.json(accountResponse());
 });
 
-/** `{ on }`: may desks run on the Claude login already on this PC? Takes effect when HQ next starts. */
+/**
+ * `{ on }`: may desks run on the Claude login already on this PC? From sim or not live, HQ goes live on it when it next
+ * starts. Live, on clears a Claude project's block at once; off keeps Claude projects running until HQ restarts.
+ */
 router.put('/account/use', jsonOnly, (req, res) => {
   const on = (req.body as { on?: unknown } | undefined)?.on;
   if (typeof on !== 'boolean') return res.status(400).json({ error: 'on must be true or false' });
@@ -298,6 +320,117 @@ router.post('/account/logout', jsonOnly, async (_req, res) => {
   } catch (e) {
     accountFailed(res, e, 'Could not sign out');
   }
+});
+
+// ---------- your ChatGPT account, for GPT desks ----------
+
+/** Who is signed in to ChatGPT in HQ's Codex, the sign-in running, the plan's usage, and GPT desks' model. Never a token. */
+function chatGptResponse(): ChatGptResponse {
+  const { account, checkedAt } = chatGptCached();
+  const login = chatGptLogin();
+  const signedInAt = lastChatGptSignIn();
+  const usage = chatGptUsage();
+  const s = settings();
+  return {
+    account,
+    ...(checkedAt ? { checkedAt } : {}),
+    ...(login ? { login } : {}),
+    ...(signedInAt ? { signedInAt } : {}),
+    optedIn: gptOptIn(),
+    ...(usage && account?.loggedIn ? { usage } : {}),
+    models: gptModels(),
+    model: s.gptModel ?? null,
+    effort: s.gptEffort ?? null,
+    runner: meta().runner,
+    restartToGoLive: restartToGoLive(),
+  };
+}
+
+function chatGptFailed(res: Response, e: unknown, fallback: string) {
+  if (e instanceof ChatGptError) return res.status(e.status).json({ error: e.message });
+  console.error('[hq] chatgpt:', e instanceof Error ? e.name : 'error');
+  return res.status(500).json({ error: fallback });
+}
+
+/** ?check=1 asks Codex again (only from HQ's own page, as for /account); otherwise a recent answer is used. */
+router.get('/account/chatgpt', async (req, res) => {
+  const force = req.query.check === '1' && sentJson(req);
+  try {
+    await checkChatGpt(force);
+  } catch (e) {
+    console.error('[hq] chatgpt:', e instanceof Error ? e.name : 'error');
+  }
+  res.json(chatGptResponse());
+});
+
+/** `{ method: 'browser' | 'device' }`: start signing in to ChatGPT. The page shows the sign-in page, or the device code. */
+router.post('/account/chatgpt/login', jsonOnly, (req, res) => {
+  const method = (req.body as { method?: unknown } | undefined)?.method ?? 'browser';
+  if (method !== 'browser' && method !== 'device') return res.status(400).json({ error: 'method must be browser or device' });
+  try {
+    startChatGptLogin(method);
+    res.status(202).json(chatGptResponse());
+  } catch (e) {
+    chatGptFailed(res, e, 'Could not start signing in');
+  }
+});
+
+router.delete('/account/chatgpt/login', jsonOnly, (_req, res) => {
+  if (!cancelChatGptLogin()) return res.status(404).json({ error: 'No sign-in is running.' });
+  res.json(chatGptResponse());
+});
+
+/** `{ on }`: may GPT desks run on HQ's ChatGPT login? Live HQ uses it at once; from sim, HQ goes live when it next starts. */
+router.put('/account/chatgpt/use', jsonOnly, (req, res) => {
+  const on = (req.body as { on?: unknown } | undefined)?.on;
+  if (typeof on !== 'boolean') return res.status(400).json({ error: 'on must be true or false' });
+  try {
+    useChatGptLogin(on);
+    res.json(chatGptResponse());
+  } catch (e) {
+    chatGptFailed(res, e, 'Could not save the setting');
+  }
+});
+
+/** Sign HQ's Codex out of ChatGPT. Your own Codex CLI keeps its login. */
+router.post('/account/chatgpt/logout', jsonOnly, async (_req, res) => {
+  try {
+    await signOutChatGpt();
+    res.json(chatGptResponse());
+  } catch (e) {
+    chatGptFailed(res, e, 'Could not sign out');
+  }
+});
+
+/** The model and effort body: each a Codex name, or null for the default. Checked against Codex's model list when HQ has one. Exported for tests. */
+export function readGptPatch(body: Record<string, unknown>, models = gptModels()): { model?: string | null; effort?: string | null; error?: string } {
+  if (!('model' in body) && !('effort' in body)) return { error: 'Nothing to change' };
+  const out: { model?: string | null; effort?: string | null } = {};
+  for (const key of ['model', 'effort'] as const) {
+    if (!(key in body)) continue;
+    const v = body[key];
+    if (v !== null && !isGptName(v)) return { error: `${key} must be a Codex ${key} name, or null` };
+    out[key] = v;
+  }
+  const model = out.model !== undefined ? out.model : (settings().gptModel ?? null);
+  const known = models.find((m) => (model ? m.id === model : m.isDefault));
+  if (out.model && models.length && !known) return { error: `${out.model} is not a model on this ChatGPT login` };
+  if (out.effort && known?.efforts.length && !known.efforts.includes(out.effort)) return { error: `${known.name} has no ${out.effort} effort` };
+  return out;
+}
+
+/** GPT desks' model and effort, from their next run on. */
+router.put('/account/chatgpt/model', jsonOnly, (req, res) => {
+  const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? (req.body as Record<string, unknown>) : {};
+  const { model, effort, error } = readGptPatch(body);
+  if (error) return res.status(400).json({ error });
+  try {
+    setGpt({ model, effort });
+  } catch (e) {
+    console.error('[hq] chatgpt model:', e instanceof Error ? e.message : 'error');
+    return res.status(500).json({ error: 'Could not save the setting.' });
+  }
+  res.json(chatGptResponse());
 });
 
 /** Live check for the "project folder" field. */
@@ -327,6 +460,7 @@ router.post('/projects', (req, res) => {
     access: patch.access ?? 'read',
     template,
     signoff: patch.signoff ?? true,
+    provider: patch.provider ?? 'claude',
   });
   res.status(201).json(summary(p));
 });
@@ -439,7 +573,20 @@ project.patch('/', (req, res) => {
   if (patch.autopilot === false && !('goalMode' in patch)) patch.goalMode = false;
   const problem = goalModeProblem({ ...p.meta, ...patch });
   if (problem) return res.status(400).json({ error: problem });
+  const switching = patch.provider !== undefined && patch.provider !== projectProvider(p.meta);
+  if (switching && (p.state.agents.some((a) => a.running) || p.state.runs.some((r) => r.status === 'queued' || r.status === 'running'))) {
+    return res.status(409).json({ error: 'Desks are still working here. Wait for their runs to finish, then switch the model.' });
+  }
   updateProject(p.id, patch);
+  if (switching) {
+    // Every desk starts a new conversation on the new model: the other model's can't be resumed. memory.md carries what matters.
+    for (const a of p.state.agents) {
+      a.sessionId = a.sessionTotalUsd = a.sessionAt = a.sessionKey = undefined;
+      a.sessionTokens = a.sessionBaseTokens = undefined;
+    }
+    p.log('you', `The team now runs on ${patch.provider === 'gpt' ? 'GPT (your ChatGPT plan)' : 'Claude'}`);
+    p.commit();
+  }
   // A raised limit, or Autopilot just turned on: held work and free desks may start now.
   autoTick(p);
   res.json(summary(p));
@@ -470,7 +617,7 @@ project.get('/state', (_req, res) => {
   // Messages stay out of the 3-second poll; a thread's messages load when it opens. Same for a huddle's board and transcript.
   // What the team does on its own goes as a status (why it waits, today's count), not the raw held wakes.
   const { messages: _messages, huddles, auto: _auto, ...rest } = p.state;
-  const body: StateResponse = { ...rest, huddles: huddles.map(stripHuddle), office: officeState(p), huddleLimit: HUDDLES_PER_DAY, meta: meta(), project: p.meta, auto: autoStatus(p) };
+  const body: StateResponse = { ...rest, huddles: huddles.map(stripHuddle), office: officeState(p), huddleLimit: HUDDLES_PER_DAY, meta: meta(), project: p.meta, auto: autoStatus(p), modelProblem: modelProblem(p) };
   res.json(body);
 });
 
@@ -832,7 +979,7 @@ project.post('/items/:id/attachments', (req, res) => {
   res.json(item);
 });
 
-/** Put the assignee on a ticket right now (live mode only). */
+/** Put the assignee on a ticket right now (live mode only, and only while the project's model can run). */
 project.post('/items/:id/run', (req, res) => {
   const p = P(res);
   if (!isLive()) return res.status(409).json({ error: notLiveText() });
@@ -843,6 +990,9 @@ project.post('/items/:id/run', (req, res) => {
   const agent = inQa ? qaDeskOf(p.state) : p.state.agents.find((a) => a.id === item.assignee);
   if (!agent || agent.isHuman) return res.status(400).json({ error: inQa ? 'This project has no QA desk. Pick one on the Team tab.' : 'no agent owns this ticket' });
   if (agent.running) return res.status(409).json({ error: `${agent.name} is already running` });
+  // "Right now" can't happen: say why, instead of holding a start you meant to see go.
+  const noModel = modelProblem(p);
+  if (noModel) return res.status(409).json({ error: noModel });
   // An approved ticket that did not get finished (a failed run) is retried as the approved action.
   const run = kickoff(p, item.id, inQa ? 'qa' : item.status === 'approved' ? 'approved' : 'manual');
   if (!run) return res.status(500).json({ error: 'could not queue the run' });

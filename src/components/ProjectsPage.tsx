@@ -1,5 +1,5 @@
 import { Plus, Settings } from 'lucide-react';
-import { TEMPLATE_LABEL, type ProjectSummary } from '../../shared/types';
+import { projectProvider, TEMPLATE_LABEL, type ProjectSummary } from '../../shared/types';
 import { PageHeader } from '../shell/PageHeader';
 import { ProjectAvatar } from './ProjectAvatar';
 
@@ -44,7 +44,10 @@ export function ProjectsPage({ projects, currentId, onNavigate }: Props) {
                     <ProjectAvatar project={p} size={28} />
                     <span>
                       <span className="project-name">{p.name}</span>
-                      <span className="project-sub">{TEMPLATE_LABEL[p.template]}</span>
+                      <span className="project-sub">
+                        {TEMPLATE_LABEL[p.template]}
+                        {projectProvider(p) === 'gpt' && <span className="chip gpt-chip">GPT</span>}
+                      </span>
                     </span>
                   </a>
                 </td>

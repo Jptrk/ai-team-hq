@@ -12,6 +12,7 @@ import { backfillFingerprints } from './connections';
 import { requestGuard } from './http';
 import { cancelAllLogins } from './mcpAuth';
 import { cancelAccountLogin, checkAccount, hasClaudeLogin } from './claudeAuth';
+import { cancelChatGptLogin, checkChatGpt, gptOptIn } from './codexAuth';
 import { initSkills } from './skills';
 import { allProjects, deskRunsOnDisk, flushAll, initStore, listMeta } from './store';
 
@@ -83,6 +84,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
     cancelAllLogins();
     cancelAccountLogin();
+    cancelChatGptLogin();
     flushAll();
     process.exit(0);
   });
@@ -96,19 +98,21 @@ app.listen(PORT, '127.0.0.1', () => {
   console.log(`[hq] ${projects.length} project${projects.length === 1 ? '' : 's'}: ${projects.map((p) => `${p.key} ${p.name}`).join(', ')}`);
   console.log(
     live
-      ? `[hq] runner=claude model=${m.model} effort=${m.effort ?? 'model default'} auth=${m.auth} (real agents, real spend)`
+      ? `[hq] runner=live model=${m.model} effort=${m.effort ?? 'model default'} auth=${m.auth}${m.gpt.ready ? ` gpt=${m.gpt.model ?? 'codex default'}` : ''} (real agents, real spend)`
       : process.env.HQ_RUNNER === 'sim'
-        ? '[hq] runner=sim (HQ_RUNNER=sim in .env, no Claude calls).'
+        ? '[hq] runner=sim (HQ_RUNNER=sim in .env, no model calls).'
         : idle
-          ? "[hq] runner=idle: no Claude login to run desks on, and no sim (it would fake work in your projects). Go live from HQ's Claude account page, then restart HQ."
+          ? "[hq] runner=idle: no login to run desks on, and no sim (it would fake work in your projects). Go live from HQ's Accounts page (Claude or ChatGPT), then restart HQ."
           : m.restartToGoLive
-            ? '[hq] runner=sim (no Claude calls). Desks may run on your Claude login now: restart HQ to go live.'
-            : "[hq] runner=sim (no Claude calls). Go live from HQ's Account page with your Claude login (or put an ANTHROPIC_API_KEY in .env), then restart.",
+            ? '[hq] runner=sim (no model calls). Desks may run on your login now: restart HQ to go live.'
+            : "[hq] runner=sim (no model calls). Go live from HQ's Accounts page with your Claude or ChatGPT login (or put an ANTHROPIC_API_KEY in .env), then restart.",
   );
   const limits = limitsWarning(limitsFromEnv());
   if (live && limits) console.warn(`[hq] ${limits}`);
-  // Ask Claude Code who is signed in, so the Account page answers at once (and a Mac keychain login counts).
+  // Ask Claude Code who is signed in, so the Accounts page answers at once (and a Mac keychain login counts).
   void checkAccount().catch(() => undefined);
+  // The same for ChatGPT, only once you said yes to it: it starts HQ's Codex.
+  if (gptOptIn()) void checkChatGpt().catch(() => undefined);
   if (live && !m.effort && process.env.CLAUDE_CODE_EFFORT_LEVEL) {
     console.warn(`[hq] CLAUDE_CODE_EFFORT_LEVEL=${process.env.CLAUDE_CODE_EFFORT_LEVEL} is set, so desk runs use it while HQ's effort is Model default. A level picked in HQ overrides it.`);
   }

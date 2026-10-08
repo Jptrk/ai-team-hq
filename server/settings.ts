@@ -15,6 +15,12 @@ export interface HqSettings {
   usageHold?: UsageHold;
   /** You signed in to your Claude account from HQ: desks run live on it from the next start, without HQ_RUNNER in .env. */
   claudeLogin?: { at: string };
+  /** You signed in to ChatGPT from HQ (or said yes to its login): GPT desks run on it. */
+  chatgptLogin?: { at: string };
+  /** The model GPT desks use. Unset: Codex's default. */
+  gptModel?: string;
+  /** The reasoning effort GPT desks use. Unset: the model's default. */
+  gptEffort?: string;
   /**
    * HQ has gone live here once (or you said yes to the Claude login). Signing out never clears it: from then on the
    * projects are real, so without a login HQ stays idle instead of running the sim, which fakes work in them.
@@ -34,6 +40,9 @@ let current: HqSettings | null = null;
 
 const isTime = (v: unknown): v is string => typeof v === 'string' && !Number.isNaN(Date.parse(v));
 
+/** A GPT model id or effort level as Codex names them: "gpt-6.1-sol", "xhigh". It goes into Codex's settings, so nothing else. Exported for tests. */
+export const isGptName = (v: unknown): v is string => typeof v === 'string' && /^[a-z0-9][a-z0-9._-]{0,63}$/.test(v);
+
 /** Keeps only known fields with valid values, so a hand-edited file can't break a run. Exported for tests. */
 export function parseSettings(raw: unknown): HqSettings {
   const out: HqSettings = {};
@@ -48,6 +57,10 @@ export function parseSettings(raw: unknown): HqSettings {
   }
   const login = r.claudeLogin as { at?: unknown } | undefined;
   if (login && typeof login === 'object' && isTime(login.at)) out.claudeLogin = { at: login.at };
+  const gpt = r.chatgptLogin as { at?: unknown } | undefined;
+  if (gpt && typeof gpt === 'object' && isTime(gpt.at)) out.chatgptLogin = { at: gpt.at };
+  if (isGptName(r.gptModel)) out.gptModel = r.gptModel;
+  if (isGptName(r.gptEffort)) out.gptEffort = r.gptEffort;
   const went = r.wentLive as { at?: unknown } | undefined;
   if (went && typeof went === 'object' && isTime(went.at)) out.wentLive = { at: went.at };
   return out;
@@ -97,6 +110,30 @@ export function setClaudeLogin(on: boolean, at = new Date().toISOString()): HqSe
     next.claudeLogin = { at };
     next.wentLive ??= { at };
   } else delete next.claudeLogin;
+  return save(next);
+}
+
+/** You signed in to ChatGPT from HQ or turned on its login (on), or signed out or turned it off (off). */
+export function setChatGptLogin(on: boolean, at = new Date().toISOString()): HqSettings {
+  const next: HqSettings = { ...settings() };
+  if (on) {
+    next.chatgptLogin = { at };
+    next.wentLive ??= { at };
+  } else delete next.chatgptLogin;
+  return save(next);
+}
+
+/** The model and effort GPT desks use from the next run on. Null goes back to Codex's default; undefined leaves it. */
+export function setGpt(change: { model?: string | null; effort?: string | null }): HqSettings {
+  const next: HqSettings = { ...settings() };
+  if (change.model !== undefined) {
+    if (change.model) next.gptModel = change.model;
+    else delete next.gptModel;
+  }
+  if (change.effort !== undefined) {
+    if (change.effort) next.gptEffort = change.effort;
+    else delete next.gptEffort;
+  }
   return save(next);
 }
 

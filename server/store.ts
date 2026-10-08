@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { stampNeedsYou } from '../shared/activity';
-import type { Activity, ProjectAccess, ProjectMeta, State, TeamTemplate } from '../shared/types';
+import type { Activity, ProjectAccess, ProjectMeta, Provider, State, TeamTemplate } from '../shared/types';
 import { defaultQaDesk, emptyAutoState, hasQa } from '../shared/types';
 import { assignDeskNumbers } from '../shared/desks';
 import { rewindCursor } from './cursor';
@@ -298,6 +298,8 @@ export function migrateState(s: State, template?: TeamTemplate): State {
     h.stopReason = 'restart';
   }
   for (const a of s.agents) a.running = false;
+  // A test build kept the model per desk; it is the project's now.
+  for (const a of s.agents) delete (a as { provider?: unknown }).provider;
   // Office desks: every desk gets a number it keeps (see shared/desks.ts).
   assignDeskNumbers(s.agents);
   // Nobody is mid-reply after a restart.
@@ -344,6 +346,10 @@ export function migrateState(s: State, template?: TeamTemplate): State {
         thread.count += 1;
         s.messages.push({ id: uid('msg'), threadId: thread.id, n: thread.count, from: 'hq', to: [], text: 'A reply was cut off by a server restart. It starts again by itself when HQ can run it.', ts: r.finishedAt });
         thread.updatedAt = r.finishedAt;
+      } else if (item && again === 1 && item.autoHold?.mine) {
+        // A start of yours waits on this ticket: it goes first, and the team's cut-off run never takes its place.
+        if (!restarted.has(item.id)) item.history.push({ ts: r.finishedAt, text: 'Run interrupted by a server restart. Your waiting start goes instead.' });
+        restarted.add(item.id);
       } else if (item && again === 1) {
         item.autoHold = { reason: r.reason, at: r.finishedAt, why: 'restart', restarts: 1 };
         if (!restarted.has(item.id)) item.history.push({ ts: r.finishedAt, text: 'Run interrupted by a server restart. It starts again by itself when HQ can run it.' });
@@ -408,6 +414,8 @@ export interface ProjectInput {
   template: TeamTemplate;
   /** Finished tickets wait for your sign-off. Left out means on. */
   signoff?: boolean;
+  /** The model every desk runs on. Left out means Claude. */
+  provider?: Provider;
 }
 
 function makeMeta(input: ProjectInput, r: Registry, forcedId?: string): ProjectMeta {
@@ -424,6 +432,7 @@ function makeMeta(input: ProjectInput, r: Registry, forcedId?: string): ProjectM
     color: PROJECT_COLORS[r.projects.length % PROJECT_COLORS.length],
     createdAt: now(),
     signoff: input.signoff ?? true,
+    ...(input.provider === 'gpt' ? { provider: 'gpt' as const } : {}),
   };
 }
 
@@ -441,10 +450,15 @@ export function createProject(input: ProjectInput): Project {
   return getProject(meta.id)!;
 }
 
-export function updateProject(id: string, patch: Partial<Pick<ProjectMeta, 'name' | 'key' | 'path' | 'access' | 'signoff' | 'autopilot' | 'goalMode' | 'goal' | 'autoLimits'>>): ProjectMeta {
+export function updateProject(
+  id: string,
+  patch: Partial<Pick<ProjectMeta, 'name' | 'key' | 'path' | 'access' | 'signoff' | 'autopilot' | 'goalMode' | 'goal' | 'autoLimits' | 'provider'>>,
+): ProjectMeta {
   const meta = reg().projects.find((p) => p.id === id);
   if (!meta) throw new Error('project not found');
   Object.assign(meta, patch);
+  // Claude is the default: only GPT is written down.
+  if (meta.provider !== 'gpt') delete meta.provider;
   saveRegistry();
   const project = getProject(id);
   if (project && patch.name) {

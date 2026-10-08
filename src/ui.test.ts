@@ -658,13 +658,20 @@ test('skill groups: which are open, saved per browser', () => {
   assert.deepEqual([...withOpen(openKeys(null, ['a/one']), keys, 'b/two', true)].sort(), ['a/one', 'b/two']);
 });
 
-test('header pill: sim, live with the model, and the effort only when set', () => {
-  assert.equal(runnerLabel({ runner: 'sim', model: 'claude-opus-5' }), 'Sim');
-  assert.equal(runnerLabel({ runner: 'claude', model: 'claude-opus-5' }), 'Live · claude-opus-5');
-  assert.equal(runnerLabel({ runner: 'sim', model: 'claude-opus-5', idle: true }), 'Not live');
+test('header pill: sim, live with the models, and the effort only when set', () => {
+  assert.equal(runnerLabel({ runner: 'sim', model: 'claude-opus-5', claudeReady: false }), 'Sim');
+  assert.equal(runnerLabel({ runner: 'live', model: 'claude-opus-5', claudeReady: true }), 'Live · claude-opus-5');
+  const gpt = { optedIn: true, ready: true, model: 'gpt-6.1-sol', effort: null };
+  assert.equal(runnerLabel({ runner: 'live', model: 'claude-opus-5', claudeReady: true, gpt }), 'Live · claude-opus-5 + gpt-6.1-sol');
+  // Claude projects wait (no Claude login, or one whose switch is off): the pill never names Claude's model.
+  assert.equal(runnerLabel({ runner: 'live', model: 'claude-opus-5', claudeReady: false, gpt }), 'Live · gpt-6.1-sol', 'live on a ChatGPT login alone');
+  assert.equal(runnerLabel({ runner: 'live', model: 'claude-opus-5', claudeReady: false, gpt: { ...gpt, model: null } }), 'Live · GPT', 'Codex default model');
+  assert.equal(runnerLabel({ runner: 'live', model: 'claude-opus-5', claudeReady: true, gpt: { ...gpt, ready: false } }), 'Live · claude-opus-5', 'GPT not signed in');
+  assert.equal(runnerLabel({ runner: 'live', model: 'claude-opus-5', claudeReady: false, gpt: { ...gpt, ready: false } }), 'Live', 'neither model can run');
+  assert.equal(runnerLabel({ runner: 'sim', model: 'claude-opus-5', claudeReady: false, idle: true }), 'Not live');
   assert.equal(effortLabel({ runner: 'sim', effort: 'high' }), '');
-  assert.equal(effortLabel({ runner: 'claude', effort: null }), '');
-  assert.equal(effortLabel({ runner: 'claude', effort: 'xhigh' }), ' · extra high effort');
+  assert.equal(effortLabel({ runner: 'live', effort: null }), '');
+  assert.equal(effortLabel({ runner: 'live', effort: 'xhigh' }), ' · extra high effort');
 });
 
 test('go live hint: the one step from sim, per state', () => {
@@ -672,8 +679,8 @@ test('go live hint: the one step from sim, per state', () => {
   assert.equal(goLiveHint({ ...base, simByEnv: true, auth: 'claude-login', optedIn: true }), 'HQ_RUNNER=sim in .env keeps HQ in sim.');
   assert.match(goLiveHint({ ...base, restartToGoLive: true, auth: 'claude-login', optedIn: true }), /restart HQ to go live/);
   assert.equal(goLiveHint({ ...base, auth: 'claude-login' }), 'Turn on Run desks on my Claude login to go live.');
-  assert.equal(goLiveHint(base), 'Sign in with your Claude account to go live.');
-  assert.equal(goLiveHint({ ...base, optedIn: true }), 'Sign in with your Claude account to go live.', 'a yes without a login still needs a sign-in');
+  assert.equal(goLiveHint(base), 'Sign in with your Claude or ChatGPT account to go live.');
+  assert.equal(goLiveHint({ ...base, optedIn: true }), 'Sign in with your Claude or ChatGPT account to go live.', 'a yes without a login still needs a sign-in');
 });
 
 test('pause and holds: what the header and a held ticket say', () => {
@@ -690,6 +697,8 @@ test('pause and holds: what the header and a held ticket say', () => {
   assert.match(pauseText({ by: 'account', reason: 'Claude reported a billing problem.' }), /until you resume\.$/);
   assert.equal(holdText({ reason: 'handoff', why: 'paused' }), 'The hand-off waits: HQ is paused. It starts by itself once that clears.');
   assert.equal(holdText({ reason: 'qa', why: 'usd' }), "The QA check waits: this project's spend for today is used up. It starts by itself once that clears.");
+  // Neutral: the server's hold text in history and notes names the cause (switch off, or no login).
+  assert.equal(holdText({ reason: 'handoff', why: 'model' }), "The hand-off waits: this project's model can't run yet. It starts by itself once that clears.");
   assert.equal(goalLabel({ status: 'on-track', planning: true }), 'Planning…');
   assert.equal(goalLabel({ status: 'reached', planning: false }), 'Reached?');
   assert.equal(goalLabel({ status: 'stalled', planning: false }), 'Stalled');

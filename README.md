@@ -10,17 +10,17 @@ Two modes, and a state between them:
 | Mode | What runs | Needs |
 | ---- | --------- | ----- |
 | **sim** (default) | Fake activity on a timer. Good for looking at the UI. | nothing |
-| **live** | Each desk is a real Claude agent (Claude Agent SDK) with its own workspace folder. | your Claude account (sign in from HQ) or an API key |
+| **live** | Each desk is a real agent with its own workspace folder: Claude (Claude Agent SDK), or GPT (OpenAI Codex on your ChatGPT plan), picked per project. | your Claude account or an API key, and/or your ChatGPT account (sign in from HQ) |
 | **not live** (idle) | Nothing. HQ can't go live, but your projects are real, so it runs no sim in them. What you start waits and begins once HQ is live. | |
 
-**Not live** is what HQ starts in when there is no Claude login to run on (and no API key), but you said
-yes to the login (`HQ_RUNNER=claude`, or signing in from HQ) or HQ has gone live here before (`wentLive`
+**Not live** is what HQ starts in when there is no login to run on (no Claude login, no API key, no ChatGPT login you said yes to), but you said
+yes to a login (`HQ_RUNNER=claude`, or signing in from HQ) or HQ has gone live here before (`wentLive`
 in `data/settings.json`, or desk runs on record in any project). Signing
 out never brings the sim back: it fakes tickets, Needs you items, chat replies and activity in every
 project, which is only fine for a demo. `HQ_RUNNER=sim` in `.env` is the one way back to sim then.
 The header pill says **Not live**, a banner says what to do (sign in, or turn the switch on, then restart
 HQ), and huddles don't start. Instructions, approvals, comments and chat messages wait on their ticket or
-thread ("HQ has no Claude login to run desks on"), keeping your note, images and team-notes choice, and
+thread ("HQ has no login to run desks on"), keeping your note, images and team-notes choice, and
 start by themselves once HQ restarts live. They start as your own clicks: a project's daily limits don't
 hold them, only Pause (they wait for **Resume**, and say so) or Claude's usage limit.
 
@@ -843,9 +843,11 @@ banner says so; **Resume** carries on where it stopped.
 
 ## Go live
 
-The easy way, with your Claude subscription (Pro, Max, Team or Enterprise), no API key:
+Either login alone takes HQ live: your Claude subscription for Claude desks (below), or your ChatGPT plan for
+GPT desks (see [GPT desks](#gpt-desks-your-chatgpt-plan)). The easy way with your Claude subscription (Pro,
+Max, Team or Enterprise), no API key:
 
-1. Open **Claude account** (header pill, your avatar menu, or the sidebar on All projects), or go to `#/account`.
+1. Open **Accounts** (header pill, your avatar menu, or the sidebar on All projects), or go to `#/account`.
 2. **Sign in with Claude**. HQ shows Claude's own sign-in page: open it, sign in in your browser,
    and HQ finishes on its own. Signing in also turns on **Run desks on my Claude login**.
    For another device, or when the page didn't come back to HQ, open **Signing in on another device,
@@ -883,7 +885,14 @@ with your subscription.
 **Signing out while live.** HQ picked live at start, so it stays live, and desk runs fail without a
 login. The first failure puts HQ on an account hold (**Account problem** in the header): automatic
 work waits. Sign in again on the Claude account page, then press **Resume**. A restart without a login
-starts HQ **not live** (no sim, see above).
+starts HQ **not live** (no sim, see above). While GPT projects can run, nothing starts in a Claude
+project instead: its work waits, with no account hold, so GPT projects keep working, and starts by
+itself once you sign in again (see [GPT desks](#gpt-desks-your-chatgpt-plan)).
+
+**Turning the switch off while live.** Desks keep running on the login until HQ restarts. That needs a
+yes when HQ started: live on ChatGPT alone, with **Run desks on my Claude login** off at start, Claude
+projects run only while the switch is on. While it is off, their work waits, without touching the
+login, and starts by itself once you turn the switch on (no restart needed).
 
 How signing in works (`server/claudeAuth.ts`):
 
@@ -976,6 +985,101 @@ More effort means slower runs and more usage. Pick it in the header: click the `
 - `xhigh` and `max` need a model that has them; `claude-opus-5` has all five, and Claude Code runs
   them at `high` on a model without them. A level picked in HQ beats `CLAUDE_CODE_EFFORT_LEVEL`.
   On a wide window the header pill shows the level when one is set: `LIVE · claude-opus-5 · medium effort`.
+
+## GPT desks (your ChatGPT plan)
+
+A project can run on GPT instead of Claude, on your ChatGPT plan (Plus, Pro, Business...) with no OpenAI API
+key. Its desks do the same work as Claude desks: tickets, chat replies, huddles, QA checks and Goal mode
+planning, with the same files, skills, HQ tools and fence. The model is one choice per project, so every
+desk in a project, and every conversation it keeps, is on the same model. A Claude project and a GPT project
+can sit side by side.
+
+1. Open **Accounts** and, under **ChatGPT**, **Sign in with ChatGPT**. HQ shows OpenAI's own sign-in page:
+   open it in a browser **on this PC**, sign in, and HQ finishes on its own. From another device, pick
+   **Use a code instead**: open OpenAI's device page anywhere and type the code HQ shows (ChatGPT must
+   allow device code sign-in: Settings, Security). Signing in also turns on **Run GPT desks on my ChatGPT
+   login**.
+2. Pick the project's model: **Model: Claude / GPT** in **Create project**, or in **Project settings**. GPT
+   projects show a `GPT` chip in the project list.
+3. If HQ was in sim or not live, restart it. Already live on Claude, GPT projects run straight away.
+
+Under the ChatGPT section you also see the plan's usage (the 5-hour and weekly windows, from the latest
+check or run) and pick GPT desks' **Model** and **Effort**: one setting for every GPT desk, from its next
+run. The list is the models on your login; **Codex default** follows OpenAI's pick.
+
+What is different from a Claude desk:
+
+- **No connections (MCP) and no web search yet.** Connections turned on for a desk in a GPT project are
+  not used; the desk's panel says so.
+- **No dollar cost.** Runs spend the plan's usage, not money: their cost shows as `ChatGPT plan`, and the
+  daily dollar limit doesn't count them (the daily run limit does). A Plus plan runs out fast with
+  several busy desks.
+- **Limits.** When the plan's limit is hit, the run fails with which window ran out and when it resets,
+  and HQ holds **all** automatic work until then, Claude desks' too, the same hold Claude's limit puts on.
+  Your own clicks still start runs.
+- **A run is capped by tool calls**, not dollars: `HQ_GPT_MAX_TOOL_CALLS` (80) for ticket runs and QA
+  checks, `HQ_GPT_MSG_MAX_TOOL_CALLS` (24) for chat replies, `HQ_GPT_PLAN_MAX_TOOL_CALLS` (40) for
+  planning. The time limits in [How long a run may take](#how-long-a-run-may-take) hold too.
+- **Switching a project's model** starts every desk in it on a new conversation on the other model
+  (`memory.md` carries what matters). HQ refuses it while any desk there is running or queued.
+- **A project whose model can't run waits; nothing fails.** A GPT project with no ChatGPT login (or the
+  switch off), or a Claude project while HQ is live on ChatGPT alone, shows a banner saying which: the
+  switch that is off, or the login that is missing. What you start there waits on its ticket or thread
+  with your note and images, and starts by itself once the model can run, as work does while HQ is not
+  live. So does what you started before, still queued behind a busy desk when the model stopped being
+  able to run: it waits instead of failing, and its chat thread is not paused. **Put … on it** is
+  refused there with the reason, since it can't start now. The team's own starts (Autopilot, hand-offs,
+  QA checks) wait at the same gate as a Pause, and never replace a start of yours held on the same
+  ticket. Huddles don't start; a huddle turn already queued fails with the reason. The header pill names
+  only the models that can run now. A Claude project counts as unable to run when
+  **Run desks on my Claude login** is off and was off when HQ started (a Claude login on this PC you never
+  said yes to is never used), or, with no API key, when there is no Claude login while GPT projects can
+  run (a refused login would otherwise put an account hold on GPT projects too).
+
+How it works (`server/codexServer.ts`, `server/codexAuth.ts`, `server/runner/codex.ts`):
+
+- HQ runs OpenAI's Codex, the pinned `@openai/codex` package (never a `codex` on PATH;
+  `HQ_CODEX_BIN` overrides it), as `codex app-server`: one per run, sign-in or check, talking
+  JSON-RPC over stdio. OpenAI marks app-server as experimental, so the version is pinned in
+  `package.json`.
+- **HQ's own Codex home**, `data/.codex`: the ChatGPT login (`auth.json`, which Codex refreshes itself),
+  desk threads and Codex's logs. Your `~/.codex`, its settings, MCP servers, AGENTS.md and skills never
+  reach a desk, and signing in or out here doesn't touch a Codex CLI you use. HQ never reads a token:
+  only the email, plan and usage windows Codex reports. `OPENAI_API_KEY` is never passed to Codex.
+- **Codex's own tools are off**: the shell, sub-agents, ChatGPT apps and plugins, image tools, goals,
+  hooks, memories, Codex's skills, computer and browser use, the in-app browser and automation,
+  worktrees, workspace dependencies, voice, web search, and the project's `AGENTS.md` (HQ puts the
+  project's instructions in the prompt itself, as for Claude). What stays is `apply_patch` and the clock.
+  Current GPT models call tools from a small JavaScript runner with no file, network or process access, so
+  that runner stays on. Codex ignores a setting it doesn't know without a word, so `test:codex` runs the
+  pinned Codex (`codex features list`) to check each of these reads off.
+- **HQ's file tools.** A GPT desk reads and writes with HQ's own `Read`, `Write`, `Edit`, `Glob` and
+  `Grep` (`server/runner/codexTools.ts`), named and shaped like Claude Code's. Each call goes through the
+  same guard as a Claude desk's (`server/guard.test.ts`) before it touches the disk; folder searches
+  never follow links. `Grep` runs its regular expression off HQ's main thread and gives up after
+  `HQ_GPT_GREP_MS` (20 s), so a pattern that never finishes can't stall HQ. Huddles and planning get the
+  read tools only.
+- **Every patch asks first.** The thread is read-only to Codex, so an `apply_patch` is an approval request,
+  and HQ answers with the guard's verdict for each file in it. Deletes always get no: a desk deletes with
+  `delete_file` only. The guard refuses a name Windows would read as another file (a trailing dot or
+  space, as in `.git.` or `server.key `, a `:` stream, or a `\\` path), for every desk and every file tool.
+  Each patch counts toward the run's tool-call cap.
+- **HQ's tools** (`post_update`, `report_done`, `send_message`...) are the same handlers as a Claude
+  desk's, registered as Codex dynamic tools and run inside HQ.
+- **Sessions.** The desk's Codex thread is resumed by id on its next ticket or chat run, with that run's
+  instructions. New tools or a new model start a new thread, and so does a big thread idle past an hour,
+  as for Claude. Huddle turns, QA checks and plans start a thread of their own.
+- **Stop** interrupts the turn (`turn/interrupt`), at once, even before Codex has answered `turn/start`;
+  the run's time limits and the tool-call cap do too. From then on every tool call is refused and every
+  patch declined, so nothing is written after Stop. A thread too long for the model fails its run and is
+  dropped: the desk's next run starts a new one.
+- **The sign-in.** Codex runs it, as `codex login` would: the sign-in page comes back to Codex at
+  `127.0.0.1:1455` on this PC, or the device code finishes on OpenAI's side. Only https pages on
+  `auth.openai.com` are shown, checked on the server and in the page. One sign-in at a time; it gives up
+  after 15 minutes. **Sign out** signs HQ's Codex out and turns the switch off. `chatgptLogin`, `gptModel`
+  and `gptEffort` live in `data/settings.json`.
+- OpenAI allows this sign-in for local apps, never for a hosted or commercial service. Keep HQ for your own
+  use on this PC.
 
 ## Env
 
@@ -1076,12 +1180,14 @@ npm run test:timeouts
 npm run test:auto
 npm run test:delete
 npm run test:account
+npm run test:codex
 npm run test:idle
 ```
 
-- **`test:guard`** checks what an agent may read and write in its workspace and the linked folder. It also checks which MCP tools run freely, need approval, or are refused.
+- **`test:guard`** checks what an agent may read and write in its workspace and the linked folder, including names Windows reads as another file (`.git.`, `server.key.`, a `:` stream, a `\\` path). It also checks which MCP tools run freely, need approval, or are refused.
 - **`test:chat`** checks the chat core: recipients, the loop limit, resume and settle.
 - **`test:account`** checks signing in to your Claude account with a stand-in Claude Code: the pages shown (Claude's own sites only), the pasted code (and a code the browser beat to it), cancel and every way a sign-in can end, no token or code in any answer, that a poll never sees a sign-in that worked as signed out, that checks share one Claude Code run and only HQ's own page can force one, how HQ picks sim, live or not live, the switch and the restart hint, and sign-out. Your real login is never touched.
+- **`test:codex`** checks GPT desks with a stand-in Codex: the ChatGPT sign-in on this PC and by device code (OpenAI's own pages only, cancel, sign-out), account, usage windows and model list parsing, the model and effort setting, the desk config that switches Codex's own tools off (also against the pinned Codex's own `features list`, offline, skipped when it isn't installed), the file tools through HQ's fence (reads, writes, protected files, globs, grep, a runaway pattern stopped off the main thread), a ticket run end to end (HQ tools, close-out, no dollar cost, the thread kept and resumed), patch approvals inside and outside the fence (Windows name tricks declined, patches counted toward the cap), a used-up plan holding automatic work, Stop (also before Codex answers `turn/start`, with nothing written after it), the tool-call cap, a turn's end matched by its id, a thread too long for the model dropped, a project whose model can't run (the reason names the switch that is off or the login that is missing; work waits on its ticket with your note, the team's own starts wait at the gate, and it all starts once the model can run; an instruct and a chat message of yours already queued behind a busy desk wait too, with no failed run and no paused thread; a team start never replaces your held start; **Put … on it** is refused with the reason and holds nothing), a status check that must not undo a sign-out, and switching a project's model (refused while desks run; every desk starts a new conversation). Nothing signs in and no model runs.
 - **`test:idle`** checks HQ not live: starts and chat messages you make wait (one note per desk per thread) and begin once HQ is live as your own clicks, with your note and images, past the daily limits but not a Pause; a held comment still gets its answer; huddles are refused; `wentLive` survives sign-out and is backfilled from desk runs on disk.
 - **`test:ui`** checks the UI helpers: routes, board columns and filter, search ranking, report link resolution, markdown previews, image sizing, and avatar text contrast.
 - **`test:office`** checks the office floor:
@@ -1160,22 +1266,28 @@ Everything project-specific lives under `/api/projects/:pid`.
 
 | Method | Path | Body / query |
 | ------ | ---- | ------------ |
-| GET    | /api/meta | includes `effort`: the level every desk run uses, or null for the model default; `paused`: why HQ holds automatic work (you, a usage limit, an account problem), or null; `held`: starts waiting; `restartToGoLive`: desks may run on your Claude login, but HQ started in sim; `optedIn`: desks may run on the Claude login; `simByEnv`: `HQ_RUNNER=sim` keeps HQ in sim; `idle`: HQ started not live (no login to run on, no sim) |
+| GET    | /api/meta | includes `runner`: `live` or `sim`, picked when HQ started; `effort`: the level every Claude desk run uses, or null for the model default; `gpt`: GPT desks, `{ optedIn, ready, model, effort }` (may run on the ChatGPT login; opted in and signed in; the model and effort, each null for Codex's default); `paused`: why HQ holds automatic work (you, a usage limit, an account problem), or null; `held`: starts waiting; `liveReady`: a Claude key or login, or a ChatGPT login GPT desks may use; `claudeReady`: Claude projects' desks can run now (false while their work waits, see [GPT desks](#gpt-desks-your-chatgpt-plan)); `auth`: what Claude desks use, `api-key`, `claude-login` or `none`; `restartToGoLive`: desks may run on your Claude or ChatGPT login, but HQ started in sim; `optedIn`: desks may run on the Claude login; `simByEnv`: `HQ_RUNNER=sim` keeps HQ in sim; `idle`: HQ started not live (no login to run on, no sim) |
 | PATCH  | /api/settings | `{ effort?, paused? }`: effort is `low`, `medium`, `high`, `xhigh`, `max`, or null for the model default; `paused: true` pauses everything the team starts on its own, `false` resumes (your Pause first, then a usage hold). For all of HQ; answers with the new meta |
-| GET    | /api/account | your Claude account: `{ account: { loggedIn, method, email, org, plan } \| null, login?, signedInAt?, apiKey, envToken, optedIn, optInByEnv, runner, restartToGoLive, simByEnv, idle }`. `signedInAt`: when the last sign-in from HQ worked; `envToken`: `CLAUDE_CODE_OAUTH_TOKEN` is set. `?check=1` asks Claude Code again, only with a JSON content type (HQ's own page; another site's `<img>` can't); otherwise an answer up to 30 s old, or the check already running. Never a token |
+| GET    | /api/account | your Claude account: `{ account: { loggedIn, method, email, org, plan } \| null, login?, signedInAt?, apiKey, envToken, optedIn, optInByEnv, claudeAtStart, runner, restartToGoLive, simByEnv, idle }`. `signedInAt`: when the last sign-in from HQ worked; `envToken`: `CLAUDE_CODE_OAUTH_TOKEN` is set; `claudeAtStart`: Claude desks were allowed when HQ started (a key, or `optedIn`), so switching the login off keeps them on it until a restart. `?check=1` asks Claude Code again, only with a JSON content type (HQ's own page; another site's `<img>` can't); otherwise an answer up to 30 s old, or the check already running. Never a token |
 | POST   | /api/account/login | 202: starts signing in; `login.authUrl` (and `login.manualUrl`) once Claude Code has the page. 409 while one runs |
 | POST   | /api/account/login/code | `{ code }`: the `code#state` the second sign-in page showed. Answers once signed in, also when the browser finished the same sign-in first |
 | DELETE | /api/account/login | cancel the sign-in, or dismiss a failed one |
 | PUT    | /api/account/use | `{ on }`: may desks run on the Claude login? `true` needs a login. From HQ's next start |
 | POST   | /api/account/logout | `claude auth logout`, for every Claude Code on this PC; turns `use` off |
+| GET    | /api/account/chatgpt | your ChatGPT account in HQ's Codex, for GPT desks: `{ account: { loggedIn, email?, plan? } \| null, login?, signedInAt?, optedIn, usage?: [{ label, usedPercent, resetsAt? }], models: [{ id, name, efforts, defaultEffort?, isDefault? }], model, effort, runner, restartToGoLive }`. `?check=1` asks Codex again, only with a JSON content type; otherwise an answer up to 30 s old. Never a token |
+| POST   | /api/account/chatgpt/login | `{ method: "browser" \| "device" }`. 202: starts signing in; `login.authUrl` (browser) or `login.verificationUrl` and `login.userCode` (device) once Codex has them. 409 while one runs |
+| DELETE | /api/account/chatgpt/login | cancel the sign-in, or dismiss a failed one |
+| PUT    | /api/account/chatgpt/use | `{ on }`: may GPT desks run on the ChatGPT login? `true` needs a login |
+| POST   | /api/account/chatgpt/logout | signs HQ's Codex out of ChatGPT; turns `use` off. A Codex CLI keeps its own login |
+| PUT    | /api/account/chatgpt/model | `{ model?, effort? }`: GPT desks' model and effort, each a Codex name or `null` for the default; checked against the model list when HQ has one |
 | GET    | /api/fs/check | `?path=<folder>&except=<pid>` |
 | GET    | /api/projects | |
-| POST   | /api/projects | `{ name, key?, path?, access?, template?, signoff? }`; `signoff` defaults to true |
+| POST   | /api/projects | `{ name, key?, path?, access?, template?, signoff?, provider? }`; `signoff` defaults to true; `provider`: `claude` (default) or `gpt`, the model every desk runs on |
 | GET    | /api/projects/:pid | |
-| PATCH  | /api/projects/:pid | `{ name?, key?, path?, access?, signoff?, autopilot?, goalMode?, goal?, autoLimits? }`; `signoff` is true or false: finished tickets wait for your sign-off before Done (missing on older projects means on); `goalMode` needs a `goal` and `autopilot`, and `autopilot: false` turns it off too; `autoLimits` is `{ runs: 1-500, usd: 1-1000 }` |
+| PATCH  | /api/projects/:pid | `{ name?, key?, path?, access?, signoff?, autopilot?, goalMode?, goal?, autoLimits?, provider? }`; a new `provider` starts every desk on a new conversation, 409 while any desk there runs or is queued; `signoff` is true or false: finished tickets wait for your sign-off before Done (missing on older projects means on); `goalMode` needs a `goal` and `autopilot`, and `autopilot: false` turns it off too; `autoLimits` is `{ runs: 1-500, usd: 1-1000 }` |
 | POST   | /api/projects/:pid/auto/resume | Autopilot stopped itself after 3 failed runs: start it again. Answers with the project's auto status |
 | DELETE | /api/projects/:pid | archives it |
-| GET    | /api/projects/:pid/state | includes `office`: what each desk is doing right now (activity, since, who with); `auto`: why the team's own work waits here, today's count against the limits, and the goal's status |
+| GET    | /api/projects/:pid/state | includes `office`: what each desk is doing right now (activity, since, who with); `auto`: why the team's own work waits here, today's count against the limits, and the goal's status; `modelProblem`: why this project's model can't run now, or null |
 | POST   | /api/projects/:pid/instructions | `{ text, attachments?, includeNotes? }` |
 | POST   | /api/projects/:pid/items/:id/decision | `{ decision, note?, attachments?, includeNotes? }` |
 | POST   | /api/projects/:pid/items/:id/comments | `{ text, attachments?, includeNotes? }`; wakes the owner |
@@ -1183,7 +1295,7 @@ Everything project-specific lives under `/api/projects/:pid`.
 | POST   | /api/projects/:pid/attachments | raw image body; returns the attachment |
 | GET    | /api/projects/:pid/attachments/:file | the image |
 | PATCH  | /api/projects/:pid/items/:id | `{ status?, summary? }`; summary only while To do; status `qa` starts a QA check; `signoff` waits for your sign-off (Approve closes it); `done` tells the desk that handed it over |
-| POST   | /api/projects/:pid/items/:id/run | live only |
+| POST   | /api/projects/:pid/items/:id/run | live only; 409 with `modelProblem` while the project's model can't run (nothing is held) |
 | POST   | /api/projects/:pid/runs/:id/cancel | |
 | GET    | /api/projects/:pid/agents/:id | |
 | POST   | /api/projects/:pid/agents | `{ name, role, skills?, lead? }` |

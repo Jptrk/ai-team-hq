@@ -1,4 +1,4 @@
-import type { Agent, AgentStatus, AutoHold, AutoStatus, Comment, EffortLevel, ItemStatus, Meta, PauseInfo, RunReason, WorkItem } from '../shared/types';
+import type { Agent, AgentStatus, AutoHold, AutoStatus, Comment, EffortLevel, ItemStatus, Meta, PauseInfo, Run, RunReason, WorkItem } from '../shared/types';
 
 /** "15:00" in your time, or "Mon 09:00" when it is not today (a weekly limit). 24-hour, as the server's own texts. */
 export function clockTime(iso: string, nowMs = Date.now()): string {
@@ -10,11 +10,12 @@ export function clockTime(iso: string, nowMs = Date.now()): string {
 const HOLD_START: Partial<Record<RunReason, string>> = { handoff: 'The hand-off', qa: 'The QA check', 'qa-fail': 'The fix after QA', auto: "Autopilot's start" };
 const HOLD_WHY: Record<Exclude<AutoHold['why'], 'restart' | 'login'>, string> = {
   paused: 'HQ is paused',
-  usage: "Claude's usage limit was reached",
-  account: 'Claude reported an account problem',
+  usage: 'a usage limit was reached',
+  account: 'a login reported an account problem',
   halted: 'Autopilot stopped in this project',
   runs: "this project's runs for today are used up",
   usd: "this project's spend for today is used up",
+  model: "this project's model can't run yet",
 };
 
 /** The board's count of what the team started on its own today. */
@@ -32,7 +33,7 @@ export function goalLabel(g: Pick<NonNullable<AutoStatus['goal']>, 'status' | 'p
 export function holdText(h: Pick<AutoHold, 'reason' | 'why'>): string {
   const what = HOLD_START[h.reason] ?? 'A run';
   if (h.why === 'restart') return `${what} was cut off by a server restart. It starts again by itself.`;
-  if (h.why === 'login') return `${what} waits: HQ has no Claude login to run desks on. It starts by itself once HQ is live.`;
+  if (h.why === 'login') return `${what} waits: HQ has no login to run desks on. It starts by itself once HQ is live.`;
   return `${what} waits: ${HOLD_WHY[h.why]}. It starts by itself once that clears.`;
 }
 
@@ -46,28 +47,40 @@ export function pauseLabel(p: Pick<PauseInfo, 'by' | 'until'>): string {
 /** What the pause means, for its popover and the banner. */
 export function pauseText(p: Pick<PauseInfo, 'by' | 'until' | 'reason'>): string {
   if (p.by === 'you') return 'The team starts nothing on its own: no hand-offs, chat replies between desks or QA checks. Your own clicks still work, and runs already going finish.';
-  if (p.by === 'account') return `${p.reason ?? 'Claude reported an account problem.'} Nothing the team starts on its own runs until you resume.`;
-  return `${p.reason ?? "Claude's usage limit was reached."} Nothing the team starts on its own runs until then${p.until ? `; it carries on by itself at ${clockTime(p.until)}` : ''}.`;
+  if (p.by === 'account') return `${p.reason ?? 'A login reported an account problem.'} Nothing the team starts on its own runs until you resume.`;
+  return `${p.reason ?? 'A usage limit was reached.'} Nothing the team starts on its own runs until then${p.until ? `; it carries on by itself at ${clockTime(p.until)}` : ''}.`;
 }
 
 export const EFFORT_LABEL: Record<EffortLevel, string> = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Max' };
 
-/** The header pill: Sim, Not live (idle, see Meta.idle), or Live with the model. */
-export function runnerLabel(meta: Pick<Meta, 'runner' | 'model'> & Partial<Pick<Meta, 'idle'>>): string {
-  return meta.runner === 'claude' ? `Live · ${meta.model}` : meta.idle ? 'Not live' : 'Sim';
+/**
+ * The header pill: Sim, Not live (idle, see Meta.idle), or Live with the models desks can run on now, so it never
+ * names one whose projects wait: Claude's while Claude projects can run (claudeReady), GPT's while GPT ones can.
+ * Neither: just Live.
+ */
+export function runnerLabel(meta: Pick<Meta, 'runner' | 'model' | 'claudeReady'> & Partial<Pick<Meta, 'idle' | 'gpt'>>): string {
+  if (meta.runner !== 'live') return meta.idle ? 'Not live' : 'Sim';
+  const models = [...(meta.claudeReady ? [meta.model] : []), ...(meta.gpt?.ready ? [meta.gpt.model ?? 'GPT'] : [])];
+  return models.length ? `Live · ${models.join(' + ')}` : 'Live';
 }
 
 /** In sim: the one step that takes HQ live from here. */
 export function goLiveHint(meta: Pick<Meta, 'simByEnv' | 'restartToGoLive' | 'auth' | 'optedIn'>): string {
   if (meta.simByEnv) return 'HQ_RUNNER=sim in .env keeps HQ in sim.';
-  if (meta.restartToGoLive) return 'Desks may run on your Claude login now: restart HQ to go live.';
+  if (meta.restartToGoLive) return 'Desks may run on your login now: restart HQ to go live.';
   if (meta.auth === 'claude-login' && !meta.optedIn) return 'Turn on Run desks on my Claude login to go live.';
-  return 'Sign in with your Claude account to go live.';
+  return 'Sign in with your Claude or ChatGPT account to go live.';
 }
 
-/** The pill's effort part, live with a level set; wide windows only. */
+/** The pill's effort part, live with a level set; wide windows only. The effort is Claude's. */
 export function effortLabel(meta: Pick<Meta, 'runner' | 'effort'>): string {
-  return meta.runner === 'claude' && meta.effort ? ` · ${EFFORT_LABEL[meta.effort].toLowerCase()} effort` : '';
+  return meta.runner === 'live' && meta.effort ? ` · ${EFFORT_LABEL[meta.effort].toLowerCase()} effort` : '';
+}
+
+/** A run's cost for the panel: dollars for Claude, the plan for GPT, which has no dollar cost. */
+export function runCostText(run: Pick<Run, 'provider' | 'costUsd'>): string | null {
+  if (run.provider === 'gpt') return 'ChatGPT plan';
+  return run.costUsd !== undefined ? `est. $${run.costUsd.toFixed(3)}` : null;
 }
 
 export function agentById(agents: Agent[], id: string): Agent | undefined {

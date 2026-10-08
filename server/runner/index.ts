@@ -1,14 +1,17 @@
 import type { Agent, Attachment, ItemStatus, Meta, Run, RunReason, RunnerName, WorkItem } from '../../shared/types';
+import { projectProvider } from '../../shared/types';
 import { refreshStatuses, settleInstructions } from '../agents';
 import { clearWaiting, findThread, markRead, needsWake, note, pauseForFailure, unreadFor } from '../chat';
 import { rewindCursor } from '../cursor';
 import { unansweredComment, unansweredImages } from '../comments';
 import { hasClaudeLogin } from '../claudeAuth';
-import { autoGate, countCost, countStart, globalHold, heldCount, holdItem, holdWake, holdWords, noteAutoFailure, noteAutoSuccess, pauseInfo, pickStarts, queuedAuto, usageHoldExpired, usageHoldFrom, type HeldFor } from '../autopilot';
+import { gptOptIn, gptReady, hasChatGptLogin } from '../codexAuth';
+import { autoGate, countCost, countStart, globalHold, heldCount, setModelGate, holdItem, holdWake, holdWords, noteAutoFailure, noteAutoSuccess, pauseInfo, pickStarts, queuedAuto, usageHoldExpired, usageHoldFrom, type HeldFor } from '../autopilot';
 import { clearSignoff, qaDeskOf, queuedQaRun, rerouteQa } from '../qa';
 import { setPaused, settings, setUsageHold } from '../settings';
 import { allProjects, now, uid, type Project } from '../store';
 import { claudeRunner, MODEL, runCost } from './claude';
+import { codexRunner, isGptSession } from './codex';
 import { goalState, planDue, plannerOf } from '../goal';
 import { CONCURRENCY, enqueue } from './queue';
 import type { AgentRunner, RunHooks, RunInput } from './types';
@@ -19,8 +22,9 @@ import type { UsageLimit } from './watch';
  *   kickoff()  a desk works a ticket it owns, or the QA desk checks one
  *   deliver()  a desk is woken by a chat message
  *   runHuddleDesk()  a desk takes its turn in a huddle
- * sim    = fake activity from server/sim.ts, no Claude calls
- * claude = real Claude Agent SDK sessions
+ * sim  = fake activity from server/sim.ts, no model calls
+ * live = real runs, each on its project's model: Claude Agent SDK sessions (claude.ts), or Codex threads on your
+ *        ChatGPT login in GPT projects (codex.ts)
  */
 
 const hasKey = Boolean(process.env.ANTHROPIC_API_KEY);
@@ -33,21 +37,63 @@ export function authSource(): 'api-key' | 'claude-login' | 'none' {
   return 'none';
 }
 
-/** Desks may run on the Claude login: HQ_RUNNER=claude in .env, or you signed in from HQ's Account page. */
+/** Desks may run on the Claude login: HQ_RUNNER=claude in .env, or you signed in from HQ's Accounts page. */
 export function loginOptIn(): boolean {
   return explicit === 'claude' || Boolean(settings().claudeLogin);
 }
 
+/** Why a project's model can't run: its login's switch is off, or HQ has no such login. */
+type ModelCause = 'claude-off' | 'claude-login' | 'gpt-off' | 'gpt-login';
+
+/** Each cause in full for the page (problem), and in a few words for what waits on it (hold). */
+const MODEL_WHY: Record<ModelCause, { problem: string; hold: string }> = {
+  'claude-off': {
+    problem:
+      "This project runs on Claude, but Run desks on my Claude login is off (HQ started without it). On HQ's Accounts page, turn it on, or switch the project to GPT in Project settings.",
+    hold: 'this project runs on Claude and Run desks on my Claude login is off',
+  },
+  'claude-login': {
+    problem:
+      "This project runs on Claude, but HQ has no Claude login for it. On HQ's Accounts page, sign in to Claude and turn on Run desks on my Claude login, or switch the project to GPT in Project settings.",
+    hold: 'this project runs on Claude and HQ has no Claude login for it',
+  },
+  'gpt-off': {
+    problem: "This project runs on GPT, but Run GPT desks on my ChatGPT login is off. Turn it on on HQ's Accounts page, or switch the project to Claude in Project settings.",
+    hold: 'this project runs on GPT and Run GPT desks on my ChatGPT login is off',
+  },
+  'gpt-login': {
+    problem:
+      "This project runs on GPT, but HQ has no ChatGPT login for it. On HQ's Accounts page, sign in to ChatGPT and turn on Run GPT desks on my ChatGPT login, or switch the project to Claude in Project settings.",
+    hold: 'this project runs on GPT and HQ has no ChatGPT login for it',
+  },
+};
+
 /**
- * sim unless a key is present, or you opted in to the Claude login (loginOptIn) and there is one.
- * Without a key the Agent SDK uses the Claude Code login on this machine (~/.claude),
- * which spends that subscription's usage. Their account, their call, so it needs an
- * explicit yes rather than happening by default. HQ_RUNNER=sim always wins. Pure: exported for tests.
+ * A Claude project's desks don't run on Claude now: their work waits (modelProblem). Never with a key. Without one, when:
+ *   - Claude was never said yes to (not now, not when HQ started): HQ is live through GPT alone, and a Claude desk
+ *     must not quietly spend a Claude login you never opted into; or
+ *   - there is no Claude login while GPT desks can run: a refused login would put every desk, GPT ones too, on an
+ *     account hold.
+ * Otherwise the Claude runner runs as it always did: switching the login off keeps desks on it until HQ restarts,
+ * and a lost login is the usual account hold. Pure: exported for tests.
  */
-export function pickRunner(o: { explicit?: string; hasKey: boolean; optIn: boolean; auth: ReturnType<typeof authSource> }): RunnerName {
+export function claudeBlocked(o: { hasKey: boolean; optIn: boolean; atBoot: boolean; auth: ReturnType<typeof authSource>; gpt: boolean }): boolean {
+  if (o.hasKey) return false;
+  return (!o.optIn && !o.atBoot) || (o.auth === 'none' && o.gpt);
+}
+
+/**
+ * sim unless a key is present, or you opted in to the Claude login (loginOptIn) and there is one, or GPT desks may
+ * run on a ChatGPT login (gpt: opted in and signed in). Without a key the Agent SDK uses the Claude Code login on
+ * this machine (~/.claude), which spends that subscription's usage. Their account, their call, so it needs an
+ * explicit yes rather than happening by default. The same goes for the ChatGPT plan. HQ_RUNNER=sim always wins.
+ * Pure: exported for tests.
+ */
+export function pickRunner(o: { explicit?: string; hasKey: boolean; optIn: boolean; auth: ReturnType<typeof authSource>; gpt?: boolean }): RunnerName {
   if (o.explicit === 'sim') return 'sim';
-  if (o.hasKey) return 'claude';
-  return (o.optIn || o.explicit === 'claude') && o.auth !== 'none' ? 'claude' : 'sim';
+  if (o.hasKey) return 'live';
+  if ((o.optIn || o.explicit === 'claude') && o.auth !== 'none') return 'live';
+  return o.gpt ? 'live' : 'sim';
 }
 
 /**
@@ -62,21 +108,34 @@ export function pickIdle(o: { runner: RunnerName; explicit?: string; optIn: bool
 
 let chosen: RunnerName | null = null;
 let idle = false;
+/** Claude desks were allowed when the runner was picked (boot): a key, or a yes to the Claude login. See claudeBlocked. */
+let claudeAtBoot = false;
 
 /** Picked once, at the first ask (boot): the sim, the demo seed and Autopilot's sweep are set up for one mode. */
 export function runnerName(): RunnerName {
   if (chosen) return chosen;
   const optIn = loginOptIn();
-  chosen = pickRunner({ explicit, hasKey, optIn, auth: authSource() });
-  idle = pickIdle({ runner: chosen, explicit, optIn, wentLive: Boolean(settings().wentLive) });
+  const gpt = gptReady();
+  claudeAtBoot = hasKey || optIn;
+  chosen = pickRunner({ explicit, hasKey, optIn, auth: authSource(), gpt });
+  idle = pickIdle({ runner: chosen, explicit, optIn: optIn || gptOptIn(), wentLive: Boolean(settings().wentLive) });
   if (explicit !== 'sim' && !hasKey && optIn) {
     console.warn(
-      chosen === 'claude'
-        ? '[hq] No ANTHROPIC_API_KEY. Agents will run on the Claude login on this machine and spend that subscription’s usage.'
-        : "[hq] Live mode is on but there is no ANTHROPIC_API_KEY and no Claude login. Desks stay idle (no sim: it would fake work in your projects). Sign in from HQ's Claude account page, then restart HQ.",
+      authSource() !== 'none'
+        ? '[hq] No ANTHROPIC_API_KEY. Claude desks will run on the Claude login on this machine and spend that subscription’s usage.'
+        : chosen === 'live'
+          ? "[hq] No ANTHROPIC_API_KEY and no Claude login: Claude desks can't run until you sign in from HQ's Accounts page. GPT desks run on your ChatGPT login."
+          : "[hq] Live mode is on but there is no ANTHROPIC_API_KEY and no Claude login. Desks stay idle (no sim: it would fake work in your projects). Sign in from HQ's Accounts page, then restart HQ.",
     );
   }
+  if (explicit !== 'sim' && gpt) console.warn('[hq] GPT desks will run on the ChatGPT login in HQ’s Codex and spend that plan’s usage.');
   return chosen;
+}
+
+/** Claude desks were allowed when HQ started (a key, or a yes to the Claude login): switching it off then keeps them on it until a restart. */
+export function claudeAtStart(): boolean {
+  runnerName();
+  return claudeAtBoot;
 }
 
 /** Picked with the runner: no login to go live on, and no sim either (see pickIdle). */
@@ -90,26 +149,26 @@ export function setIdleForTests(on: boolean): void {
 }
 
 /** Idle: what you start waits on its ticket or thread, as held work does, and begins once HQ is live (releaseHolds). */
-const LOGIN_HOLD: HeldFor = { kind: 'login', text: 'HQ has no Claude login to run desks on' };
+const LOGIN_HOLD: HeldFor = { kind: 'login', text: 'HQ has no login to run desks on' };
 
 /** Why a run can't start now: idle, or sim. */
 export function notLiveText(): string {
   return isIdle()
-    ? "HQ has no Claude login to run desks on. On HQ's Claude account page, sign in and turn on Run desks on my Claude login, then restart HQ."
-    : "Live runner is off. Go live from HQ's Claude account page.";
+    ? "HQ has no login to run desks on. On HQ's Accounts page, sign in to Claude or ChatGPT and turn on running desks on it, then restart HQ."
+    : "Live runner is off. Go live from HQ's Accounts page.";
 }
 
 /**
- * Idle: your start waits on its ticket with what you gave it, and starts as your own click once HQ is live
- * (releaseYours). A comment answer never takes the place of a held start of yours for the work: the answer follows it.
+ * Idle, or the project's model can't run (also when your start was already queued): your start waits on its ticket
+ * with what you gave it, and starts as your own click once it can (releaseYours). A comment answer never takes the
+ * place of a held start of yours for the work: the answer follows it.
  */
-function holdYours(item: WorkItem, reason: RunReason, note: string | undefined, images: Attachment[], includeNotes: boolean): void {
+function holdYours(item: WorkItem, reason: RunReason, note: string | undefined, images: Attachment[], includeNotes: boolean, why: HeldFor = LOGIN_HOLD): void {
   if (reason === 'comment' && item.autoHold?.mine) return;
   // The same start again (say, a second Instruct): your latest note and images, or the earlier ones when it has none.
   const prev = item.autoHold?.mine && item.autoHold.reason === reason ? item.autoHold : undefined;
-  holdItem(item, reason, LOGIN_HOLD);
+  holdItem(item, reason, why, undefined, undefined, true);
   const hold = item.autoHold!;
-  hold.mine = true;
   const keptNote = note || prev?.note;
   const keptImages = images.length ? images : (prev?.images ?? []);
   if (keptNote) hold.note = keptNote;
@@ -119,27 +178,67 @@ function holdYours(item: WorkItem, reason: RunReason, note: string | undefined, 
 
 /** You signed in from HQ while it runs in sim: the next start is live. */
 export function restartToGoLive(): boolean {
-  return !testRunner && runnerName() === 'sim' && explicit !== 'sim' && loginOptIn() && authSource() !== 'none';
+  return !testRunner && runnerName() === 'sim' && explicit !== 'sim' && ((loginOptIn() && authSource() !== 'none') || gptReady());
 }
 
-/** Tests only: desks run on this instead of Claude, and HQ acts as live. */
+/** Tests only: desks run on this instead of Claude or Codex, and HQ acts as live. */
 let testRunner: AgentRunner | null = null;
 export function useRunnerForTests(r: AgentRunner | null): void {
   testRunner = r;
 }
 
 export function isLive(): boolean {
-  return Boolean(testRunner) || runnerName() === 'claude';
+  return Boolean(testRunner) || runnerName() === 'live';
 }
 
+/** Claude desks can't run now (see claudeBlocked), with what HQ has at this moment. */
+function claudeBlockedNow(): boolean {
+  return claudeBlocked({ hasKey, optIn: loginOptIn(), atBoot: claudeAtStart(), auth: authSource(), gpt: gptReady() });
+}
+
+/**
+ * Why this project's desks can't run on its model now, or null, so the page and the holds name the real cause: GPT
+ * with its switch off or no ChatGPT login, or Claude blocked (see claudeBlocked) with a login whose switch is off, or
+ * none. Live HQ only; never with a test runner.
+ */
+function modelCause(p: Project): ModelCause | null {
+  if (testRunner || !isLive()) return null;
+  if (projectProvider(p.meta) === 'gpt') {
+    if (gptReady()) return null;
+    return hasChatGptLogin() && !gptOptIn() ? 'gpt-off' : 'gpt-login';
+  }
+  if (!claudeBlockedNow()) return null;
+  return authSource() !== 'none' ? 'claude-off' : 'claude-login';
+}
+
+/** Why this project's desks can't run on its model now, in full for the page, or null. */
+export function modelProblem(p: Project): string | null {
+  const cause = modelCause(p);
+  return cause ? MODEL_WHY[cause].problem : null;
+}
+
+/** The hold for work in a project whose model can't run: it starts by itself once it can. */
+function modelHold(p: Project): HeldFor | null {
+  const cause = modelCause(p);
+  return cause ? { kind: 'model', text: MODEL_WHY[cause].hold } : null;
+}
+// Automatic work in such a project waits at the same gate as a Pause or a limit (autoGate).
+setModelGate((p) => {
+  const h = modelHold(p);
+  return h ? { kind: 'model', text: h.text } : null;
+});
+
 export function meta(): Meta {
+  const s = settings();
   return {
-    runner: testRunner ? 'claude' : runnerName(),
+    runner: testRunner ? 'live' : runnerName(),
     model: MODEL,
-    effort: settings().effort ?? null,
+    effort: s.effort ?? null,
+    gpt: { optedIn: gptOptIn(), ready: gptReady(), model: s.gptModel ?? null, effort: s.gptEffort ?? null },
     paused: pauseInfo(),
     held: allProjects().reduce((n, p) => n + heldCount(p), 0),
-    liveReady: authSource() !== 'none',
+    liveReady: authSource() !== 'none' || gptReady(),
+    claudeReady: testRunner ? true : !claudeBlockedNow(),
     auth: authSource(),
     restartToGoLive: restartToGoLive(),
     simByEnv: explicit === 'sim',
@@ -221,7 +320,19 @@ async function execute(p: Project, run: Run, agent: Agent, input: Omit<RunInput,
   p.commit();
 
   try {
-    const out = await (testRunner ?? claudeRunner).run({ project: p, run, agent, hooks: hooksFor(p), ...input }, controller.signal);
+    const provider = projectProvider(p.meta);
+    if (provider === 'gpt') run.provider = 'gpt';
+    // A desk whose project switched models can't resume the other model's session: it starts a new one.
+    if (agent.sessionId && (provider === 'gpt') !== isGptSession(agent)) {
+      agent.sessionId = agent.sessionTotalUsd = agent.sessionAt = agent.sessionKey = undefined;
+      agent.sessionTokens = agent.sessionBaseTokens = undefined;
+    }
+    // Starts wait while the project's model can't run, queued ones too (at their turn in kickoff and deliver). What
+    // gets here anyway (a huddle turn) fails plainly, with the reason.
+    const problem = modelProblem(p);
+    if (problem) throw new Error(problem);
+    const runner = testRunner ?? (provider === 'gpt' ? codexRunner : claudeRunner);
+    const out = await runner.run({ project: p, run, agent, hooks: hooksFor(p), ...input }, controller.signal);
     run.status = 'done';
     run.costUsd = charge(agent, out.sessionId, out.costUsd, out.extraCostUsd);
     run.turns = out.turns;
@@ -233,7 +344,7 @@ async function execute(p: Project, run: Run, agent: Agent, input: Omit<RunInput,
     // Closed out, then Claude's limit stopped it: what the team starts next still waits for the limit.
     if (out.usage) {
       try {
-        claudeRefused(out.usage);
+        limitRefused(out.usage);
       } catch (e) {
         console.error(`[hq] ${p.meta.key} usage hold:`, e instanceof Error ? e.message : e);
       }
@@ -248,7 +359,7 @@ async function execute(p: Project, run: Run, agent: Agent, input: Omit<RunInput,
     // Claude refused (usage limit, account): automatic work everywhere waits, and the team's own start waits with it.
     if (err.usage) {
       try {
-        claudeRefused(err.usage);
+        limitRefused(err.usage);
       } catch (e) {
         console.error(`[hq] ${p.meta.key} usage hold:`, e instanceof Error ? e.message : e);
       }
@@ -342,6 +453,13 @@ export function kickoff(p: Project, itemId: string, reason: RunReason, note?: st
     p.commit();
     return null;
   }
+  // The project's model can't run: your start waits like one made while idle; the team's own waits at the gate below.
+  const noModel = opts.auto ? null : modelHold(p);
+  if (noModel) {
+    holdYours(item, reason, note, images, Boolean(opts.includeNotes), noModel);
+    p.commit();
+    return null;
+  }
   // One waiting QA check per ticket. A running one is not reused: it may be checking an older round, and its verdict will be refused.
   if (reason === 'qa') {
     const queued = queuedQaRun(s, item.id);
@@ -422,6 +540,12 @@ export function kickoff(p: Project, itemId: string, reason: RunReason, note?: st
       if (hold) {
         holdItem(liveItem, reason, hold, liveRun.restarts);
         return skip(p, liveRun, `held: ${hold.text}`);
+      }
+      // Yours, and the project's model stopped being able to run while it waited: it waits on its ticket, not fails.
+      const noModel = liveRun.auto ? null : modelHold(p);
+      if (noModel) {
+        holdYours(liveItem, reason, note, images, Boolean(liveRun.notes), noModel);
+        return skip(p, liveRun, `held: ${noModel.text}`);
       }
 
     // The owner is back on it: it is not waiting on your sign-off any more, so Approve starts a run again. A comment answer changes nothing.
@@ -522,6 +646,12 @@ export function deliver(p: Project, threadId: string, ids: string[], opts: Deliv
       if (needsWake(s, t, id)) holdWake(p, t, id, LOGIN_HOLD, undefined, true);
       continue;
     }
+    // The project's model can't run: your message waits the same way. The team's own wakes wait at the gate below.
+    const noModel = opts.auto ? null : modelHold(p);
+    if (noModel) {
+      if (needsWake(s, t, id)) holdWake(p, t, id, noModel, undefined, true);
+      continue;
+    }
     if (!opts.auto) {
       // You wrote to this desk: a wake held for it here is yours now, and so is a reply already waiting, so a Pause never holds it.
       s.auto.heldWakes = s.auto.heldWakes.filter((w) => !(w.threadId === t.id && w.agentId === id));
@@ -576,6 +706,13 @@ export function deliver(p: Project, threadId: string, ids: string[], opts: Deliv
           holdWake(p, thread, id, hold, liveRun.restarts);
           return skip(p, liveRun, `held: ${hold.text}`);
         }
+        // Yours, and the project's model stopped being able to run while it waited: the desk answers once it can, and
+        // the thread stays open.
+        const noModel = liveRun.auto ? null : modelHold(p);
+        if (noModel) {
+          holdWake(p, thread, id, noModel, undefined, true);
+          return skip(p, liveRun, `held: ${noModel.text}`);
+        }
 
         // Remember where the desk had read to, so a run that dies before replying can be retried.
         liveRun.cursorFrom = thread.cursor[id] ?? 0;
@@ -623,7 +760,7 @@ const oldestHold = (a: WorkItem, b: WorkItem) => a.autoHold!.at.localeCompare(b.
  */
 function releaseYours(p: Project): number {
   const s = p.state;
-  const gate = globalHold();
+  const gate = globalHold() ?? modelHold(p);
   let n = 0;
   let touched = false;
   for (const item of s.items.filter((i) => i.autoHold?.mine).sort(oldestHold)) {
@@ -821,11 +958,11 @@ export function resumeAll(): void {
   eachProject('resume', autoTick);
 }
 
-/** Claude refused a run: hold automatic work everywhere until the limit resets (or you resume, for an account problem). */
-function claudeRefused(limit: UsageLimit): void {
+/** Claude or ChatGPT refused a run: hold automatic work everywhere until the limit resets (or you resume, for an account problem). */
+function limitRefused(limit: UsageLimit): void {
   const first = !settings().usageHold;
   setUsageHold(usageHoldFrom(limit));
-  if (first) console.warn(`[hq] Claude refused a run: ${limit.text} Automatic work waits${limit.kind === 'account' ? ' until you resume' : ''}.`);
+  if (first) console.warn(`[hq] A run was refused: ${limit.text} Automatic work waits${limit.kind === 'account' ? ' until you resume' : ''}.`);
   eachProject('usage hold', holdQueued);
 }
 
@@ -833,7 +970,7 @@ function claudeRefused(limit: UsageLimit): void {
 export function autoSweep(nowMs = Date.now()): void {
   if (usageHoldExpired(nowMs)) {
     setUsageHold(null);
-    console.info('[hq] Claude usage limit reset: held work starts again.');
+    console.info('[hq] Usage limit reset: held work starts again.');
   }
   for (const p of allProjects()) {
     try {

@@ -85,7 +85,7 @@ function EffortPicker({ meta, onMeta }: { meta: Meta; onMeta: (meta: Meta) => vo
   };
   return (
     <fieldset className="effort-pick">
-      <legend className="menu-label">Effort</legend>
+      <legend className="menu-label">Claude effort</legend>
       {EFFORTS.map((e) => (
         <label key={e.id ?? 'default'} className={`menu-row${pick === e.id ? ' on' : ''}`}>
           <input type="radio" name="hq-effort" value={e.id ?? 'default'} checked={pick === e.id} onChange={() => choose(e.id)} />
@@ -94,8 +94,8 @@ function EffortPicker({ meta, onMeta }: { meta: Meta; onMeta: (meta: Meta) => vo
         </label>
       ))}
       <p className="muted small effort-note">
-        {meta.runner === 'claude'
-          ? 'For every desk in every project, from its next run. More effort means more thinking and more usage. After a change, a desk with a long conversation starts a fresh one.'
+        {meta.runner === 'live'
+          ? 'For every Claude desk in every project, from its next run. More effort means more thinking and more usage. After a change, a desk with a long conversation starts a fresh one.'
           : 'Used once agents run live.'}
       </p>
       {error && (
@@ -193,7 +193,8 @@ function AutoControl({ meta, onMeta }: { meta: Meta; onMeta: (meta: Meta) => voi
 function StatusPill({ meta, onMeta, onAccount }: { meta: Meta | null; onMeta: (meta: Meta) => void; onAccount: () => void }) {
   const pop = usePopover<HTMLDivElement>();
   if (!meta) return null;
-  const live = meta.runner === 'claude';
+  const live = meta.runner === 'live';
+  const claude = meta.auth === 'api-key' ? 'your API key' : 'your Claude login';
   return (
     <div className="popover-anchor" ref={pop.ref}>
       <button type="button" className={`status-pill${live ? ' live' : ''}`} aria-expanded={pop.open} onClick={() => pop.setOpen((o) => !o)}>
@@ -208,12 +209,12 @@ function StatusPill({ meta, onMeta, onAccount }: { meta: Meta | null; onMeta: (m
           <p className="popover-title">{live ? 'Live agents' : meta.idle ? 'Not live' : 'Sim mode'}</p>
           <p className="muted small">
             {live
-              ? meta.auth === 'none'
-                ? 'HQ is live, but there is no Claude login on this PC, so desk runs fail. Sign in again on the Claude account page.'
-                : `Each instruction starts a real Claude run on ${meta.auth === 'api-key' ? 'your API key' : 'your Claude login'}. Nothing leaves the building without your approval, except changes on a connection you set to Auto.`
+              ? !meta.liveReady
+                ? 'HQ is live, but there is no login on this PC, so desk runs fail. Sign in again on the Accounts page.'
+                : `Each instruction starts a real run: ${meta.claudeReady ? `Claude projects on ${claude}` : 'Claude projects wait until Claude can run (see Accounts)'}${meta.gpt.ready ? ', GPT projects on your ChatGPT plan' : ''}. Nothing leaves the building without your approval, except changes on a connection you set to Auto.`
               : meta.idle
-                ? `HQ has no Claude login to run desks on, so they are idle, and there is no sim in your projects. ${goLiveHint(meta)}`
-                : `Fake activity, no Claude calls. ${goLiveHint(meta)}`}
+                ? `HQ has no login to run desks on, so they are idle, and there is no sim in your projects. ${goLiveHint(meta)}`
+                : `Fake activity, no model calls. ${goLiveHint(meta)}`}
           </p>
           <button
             type="button"
@@ -223,7 +224,7 @@ function StatusPill({ meta, onMeta, onAccount }: { meta: Meta | null; onMeta: (m
               onAccount();
             }}
           >
-            <UserRound size={15} aria-hidden /> Claude account
+            <UserRound size={15} aria-hidden /> Accounts
           </button>
           <div className="menu-sep" />
           <EffortPicker meta={meta} onMeta={onMeta} />

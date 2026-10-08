@@ -151,7 +151,7 @@ export function resolveReport(projectId: string, agentId: string, rel: string): 
   return abs;
 }
 
-function ensureWorkspace(p: Project, agent: Agent): string {
+export function ensureWorkspace(p: Project, agent: Agent): string {
   const dir = workspaceFor(p.id, agent.id);
   fs.mkdirSync(path.join(dir, 'reports'), { recursive: true });
   const role = path.join(dir, 'ROLE.md');
@@ -178,7 +178,7 @@ function ensureWorkspace(p: Project, agent: Agent): string {
 }
 
 /** Linked folder, only if it still exists on disk. */
-function projectDirOf(p: Project): string | null {
+export function projectDirOf(p: Project): string | null {
   const dir = p.meta.path;
   return dir && folderExists(dir) ? path.resolve(dir) : null;
 }
@@ -547,7 +547,7 @@ function commentLines(p: Project, item: WorkItem, last = 10): string[] {
 }
 
 /** Which images go into this run's prompt. Only the founder's go inline; desk-made ones are listed by path. */
-function imagesFor(input: RunInput): Attachment[] {
+export function imagesFor(input: RunInput): Attachment[] {
   const founders = (list: Attachment[]) => list.filter((a) => a.by === 'you');
   if (input.images?.length) return founders(input.images);
   // A QA check sees the founder's description images too, to check the work against them.
@@ -645,7 +645,7 @@ function reportFilesOf(p: Project, item: WorkItem): string[] {
 }
 
 /** What a QA check may read besides its own workspace: the reports folders of the owner and of any desk linked on the ticket. */
-function qaReadRoots(p: Project, item: WorkItem): string[] {
+export function qaReadRoots(p: Project, item: WorkItem): string[] {
   const desks = new Set([item.assignee]);
   for (const link of item.links) {
     const parts = parseReportUrl(link.url);
@@ -728,7 +728,7 @@ export function qaPrompt(input: Pick<RunInput, 'project' | 'item'>): string {
   return lines.join('\n');
 }
 
-function messagePrompt(input: RunInput, owns: boolean): string {
+export function messagePrompt(input: RunInput, owns: boolean): string {
   const { project: p, agent, thread, item } = input;
   const t = thread!;
   const unread = input.unread ?? [];
@@ -752,7 +752,7 @@ function messagePrompt(input: RunInput, owns: boolean): string {
   return lines.join('\n');
 }
 
-interface RunContext {
+export interface RunContext {
   project: Project;
   agent: Agent;
   /** Ticket runs: the desk's ticket. Message runs: the thread's ticket, owned by someone, maybe not this desk. */
@@ -881,7 +881,7 @@ export function doneRefusal(reason: RunReason | undefined, status: ItemStatus): 
 }
 
 /** Does this desk own the run's ticket right now? Checked when a tool is called, not cached. */
-function owns(ctx: RunContext): boolean {
+export function owns(ctx: RunContext): boolean {
   if (!ctx.item) return false;
   return ctx.project.state.items.find((i) => i.id === ctx.item!.id)?.assignee === ctx.agent.id;
 }
@@ -898,7 +898,7 @@ function pickThread(ctx: RunContext, requested: string | undefined, title: strin
 }
 
 /** The hq server's tools for one run, and what it tells Claude about them. */
-interface HqTools {
+export interface HqTools {
   instructions: string;
   tools: SdkMcpToolDefinition<any>[];
 }
@@ -1098,7 +1098,7 @@ export function planPrompt(ctx: Pick<RunContext, 'project' | 'agent'>): string {
   return lines.join('\n');
 }
 
-function hqTools(ctx: RunContext): HqTools {
+export function hqTools(ctx: RunContext): HqTools {
   if (ctx.mode === 'huddle') return huddleTools(ctx);
   if (ctx.mode === 'plan') return planTools(ctx);
   const p = ctx.project;
@@ -1529,11 +1529,8 @@ const MAX_DELETE_ENTRIES = 2000;
  * in the project folder, never a folder with .git, node_modules, .env files or keys anywhere inside. Exported for tests.
  */
 export async function deleteRefusal(ctx: GuardContext, target: string): Promise<string | null> {
-  // Windows reads "memory.md." and "memory.md " as memory.md, "a.txt:x" as a hidden stream of a.txt, and \\?\ or
-  // \\server paths past the usual checks. None of those: a plain name only.
-  if (/^[\\/]{2}/.test(target)) return 'Use a plain path in your workspace or the project folder.';
-  const parts = path.resolve(target).split(/[\\/]/).slice(1);
-  if (parts.some((part) => part.includes(':') || /[. ]$/.test(part))) return "Use the file's plain name: no trailing dot or space, and no \":\".";
+  const odd = oddPathRefusal(target);
+  if (odd) return odd;
   const verdict = await guard(ctx)('Write', { file_path: target });
   if (verdict.behavior === 'deny') return verdict.message.replace(/write/gi, (w) => (w[0] === 'W' ? 'Delete' : 'delete'));
   let stat: fs.Stats;
@@ -1616,6 +1613,24 @@ export async function deleteForDesk(
   p.log(ctx.agent.id, `Deleted ${area === 'project' ? shown : `${shown} from its workspace`} (${reason}). It is in the trash.`);
   p.commit();
   return { ok: true, text: `Moved ${shown} to HQ's trash (${dest}). ${nameOf(p, 'you')} can get it back from there.` };
+}
+
+/**
+ * Why Windows would take `target` for some other file, or null. Windows (and Codex's apply_patch through it) drops
+ * a trailing dot or space from every name, so ".git.\hooks" is .git\hooks and "server.key." is server.key; it reads
+ * "a.txt:x" as a hidden stream of a.txt; and \\?\ or \\server paths skip the usual checks. Node checks the name as
+ * written, so none of those get past the fence: plain names only. `base` resolves a relative path. Exported for tests.
+ */
+export function oddPathRefusal(target: string, base?: string): string | null {
+  if (/^[\\/]{2}/.test(target)) return 'Use a plain path in your workspace or the project folder, not a network or device path (\\\\...).';
+  const abs = base ? path.resolve(base, target) : path.resolve(target);
+  if (/^[\\/]{2}/.test(abs)) return 'Use a plain path in your workspace or the project folder, not a network or device path (\\\\...).';
+  // The first part is the drive (C:) or empty: ":" may only be there.
+  const parts = abs.split(/[\\/]/).slice(1);
+  if (parts.some((part) => part.includes(':') || /[. ]$/.test(part))) {
+    return 'Use plain names in the path: no name may end in a dot or a space, and no ":" after the drive letter.';
+  }
+  return null;
 }
 
 /** Fixed part of an absolute glob, e.g. C:\repo\apps for C:\repo\apps\**\*.ts. */
@@ -1778,9 +1793,18 @@ export function guard(ctx: GuardContext) {
     const targets: string[] = [];
     for (const key of ['file_path', 'path']) {
       const value = input[key];
-      if (typeof value === 'string' && value) targets.push(path.resolve(ctx.dir, value));
+      if (typeof value !== 'string' || !value) continue;
+      // A name Windows reads as another file (".git.", "server.key ", "a:stream", \\server) is refused before the fence.
+      const odd = oddPathRefusal(value, ctx.dir);
+      if (odd) return { behavior: 'deny', message: odd };
+      targets.push(path.resolve(ctx.dir, value));
     }
-    if (toolName === 'Glob' && typeof input.pattern === 'string' && path.isAbsolute(input.pattern)) targets.push(path.resolve(globBase(input.pattern)));
+    if (toolName === 'Glob' && typeof input.pattern === 'string' && path.isAbsolute(input.pattern)) {
+      const base = globBase(input.pattern);
+      const odd = oddPathRefusal(base);
+      if (odd) return { behavior: 'deny', message: odd };
+      targets.push(path.resolve(base));
+    }
 
     for (const target of targets) {
       const why = refusal(target, fences[0], writes) ?? refusal(realPathOf(target), fences[1], writes);
@@ -1854,14 +1878,14 @@ export function keepWrites(ctx: Pick<RunContext, 'changed' | 'pendingWrites'>, m
   }
 }
 
-function huddlePrompt(ctx: RunContext): string {
+export function huddlePrompt(ctx: RunContext): string {
   const h = findHuddle(ctx.project.state, ctx.huddle!.id);
   if (!h) throw new Error('The huddle is gone.');
   return huddlePromptText(ctx.project, h, ctx.agent.id, ctx.huddle!.role);
 }
 
 /** The SDK's built-in tools a run gets. A huddle only reads; a QA check reads and keeps notes in its workspace. Neither gets the web. */
-function builtinTools(mode: RunMode): string[] {
+export function builtinTools(mode: RunMode): string[] {
   return mode === 'huddle' || mode === 'plan' ? READ_TOOLS : mode === 'qa' ? FILE_TOOLS : [...FILE_TOOLS, ...(WEB ? WEB_TOOLS : [])];
 }
 
@@ -2109,57 +2133,163 @@ export function rememberSession(
   agent.sessionKey = run.key;
 }
 
+/** What kind of run a reason makes. */
+export function modeOf(reason: RunReason): RunMode {
+  return reason === 'message' ? 'message' : reason === 'huddle' ? 'huddle' : reason === 'qa' ? 'qa' : reason === 'plan' ? 'plan' : 'ticket';
+}
+
+/**
+ * A run's context, shared by every runner: what the desk may touch and what it did. Throws when the input does not
+ * fit the mode. connections and servers are the desk's MCP servers; a GPT desk has none. Exported for the GPT runner.
+ */
+export function newRunContext(input: RunInput, dir: string, connections: AllowedServer[], servers: Record<string, McpServerConfig>): RunContext {
+  const p = input.project;
+  const mode = modeOf(input.reason);
+  if ((mode === 'ticket' || mode === 'qa') && !input.item) throw new Error('A ticket run needs a ticket.');
+  if (mode === 'message' && !input.thread) throw new Error('A message run needs a thread.');
+  if (mode === 'huddle' && !input.huddle) throw new Error('A huddle run needs a huddle.');
+  const askedBy =
+    mode === 'message' ? [...new Set((input.unread ?? []).filter((m) => m.to.includes(input.agent.id) && m.from !== 'hq').map((m) => m.from))] : [];
+  return {
+    project: p,
+    agent: input.agent,
+    item: input.item,
+    mode,
+    thread: input.thread,
+    sends: 0,
+    sentToThread: false,
+    awaiting: [],
+    askedBy,
+    hooks: input.hooks,
+    dir,
+    raised: false,
+    finished: false,
+    comments: 0,
+    commented: false,
+    shots: { recent: [], pending: new Set() },
+    startedMs: Date.now() - 1000,
+    reason: input.reason,
+    connections,
+    servers,
+    huddle: input.huddle,
+    huddled: false,
+    qaDone: false,
+    // Read now, as the check starts: a verdict only counts for this round.
+    qaRound: mode === 'qa' ? (input.item?.qa?.round ?? 0) : undefined,
+    changed: new Set(),
+    pendingWrites: new Map(),
+    autoChanges: new Map(),
+    autoAllowed: [],
+    contextTokens: 0,
+    effort: settings().effort,
+    planMade: 0,
+    planSaid: false,
+    // A QA check reads the owner's reports; ticket, message and QA runs read the desk's skills.
+    extraRead: [...(mode === 'qa' && input.item ? qaReadRoots(p, input.item) : []), ...skillReadRoots(p, input.agent.id, mode)],
+  };
+}
+
+/** The desk already closed out (or replied, or asked a teammate): a cap or abort after that is not a failure. Exported for the GPT runner. */
+export function closedOut(ctx: RunContext): boolean {
+  return Boolean(
+    ctx.raised || ctx.finished || ctx.sentToThread || ctx.awaiting.length || ctx.huddled || ctx.qaDone || ctx.planSaid || ctx.planMade > 0 || (ctx.reason === 'comment' && ctx.commented),
+  );
+}
+
+/**
+ * Project files this run changed go on its ticket, for QA and for you. Only the owner's runs count. Returns true when
+ * the ticket changed after it was finished (a comment run, a chat reply): the last check does not cover it, so it goes back to QA.
+ */
+function keepRunChanges(ctx: RunContext, freshSession: boolean): boolean {
+  const p = ctx.project;
+  const item = ctx.item ? p.state.items.find((i) => i.id === ctx.item!.id) : undefined;
+  if (!item || !ctx.changed.size || freshSession || !(ctx.mode === 'ticket' || owns(ctx))) return false;
+  noteChangedFiles(item, ctx.changed);
+  return !ctx.finished && hasQa(p.meta.template) && changedAfterQa(p.state, item, ctx.agent.name) === 'qa';
+}
+
+/** A run failed: what it changed still counts, and a ticket changed after QA goes back to QA. Exported for the GPT runner. */
+export function failRun(ctx: RunContext, freshSession: boolean): void {
+  const recheck = keepRunChanges(ctx, freshSession);
+  ctx.project.commit();
+  if (recheck && ctx.item) ctx.hooks.kickoff(ctx.item.id, 'qa');
+}
+
+/**
+ * A run finished: close out whatever its tools did not, and wake who needs to hear. Huddle turns, plans and QA checks
+ * never hand back a session id, so the desk keeps its own. Exported for the GPT runner.
+ */
+export function finishRun(ctx: RunContext, outcome: RunOutcome, freshSession: boolean): RunOutcome {
+  const p = ctx.project;
+  const mode = ctx.mode;
+  // The huddle engine records a turn that skipped its tool. No session id, so the desk keeps its own.
+  if (mode === 'huddle') return { ...outcome, sessionId: undefined };
+  // A plan: what it made and said is on the board already. Two empty plans in a row are worth telling you about.
+  if (mode === 'plan') {
+    finishPlan(p, ctx.agent.id, ctx.planMade);
+    p.commit();
+    return { ...outcome, sessionId: undefined };
+  }
+
+  const recheck = keepRunChanges(ctx, freshSession);
+  const liveItem = ctx.item ? p.state.items.find((i) => i.id === ctx.item!.id) : undefined;
+
+  // A QA check that ended without a verdict leaves the ticket in QA, to be checked again. Its session is never kept.
+  if (mode === 'qa') {
+    if (liveItem && !ctx.qaDone && liveItem.status === 'qa') {
+      liveItem.history.push({ ts: now(), text: `QA check ended without a verdict. Use "Put ${ctx.agent.name} on it" to check again` });
+      p.log(ctx.agent.id, `Did not finish the QA check on ${p.ticket(liveItem)} "${liveItem.title}"`);
+    }
+    p.commit();
+    return { ...outcome, sessionId: undefined };
+  }
+  const before = liveItem?.status;
+
+  // Close out whatever the tools did not: message runs never touch tickets; ticket runs waiting on a teammate stay open.
+  const wake = settleAfterRun(
+    p.state,
+    {
+      mode: mode === 'message' ? 'message' : 'ticket',
+      agentId: ctx.agent.id,
+      itemId: ctx.item?.id,
+      threadId: ctx.thread?.id,
+      raised: ctx.raised,
+      finished: ctx.finished,
+      sentToThread: ctx.sentToThread,
+      awaiting: ctx.awaiting,
+      askedBy: ctx.askedBy,
+      summary: outcome.summary,
+      reason: ctx.reason,
+      commented: ctx.commented,
+      qa: hasQa(p.meta.template),
+      signoff: signoffOn(p.meta),
+    },
+    (id, text) => p.log(id, text),
+  );
+  p.commit();
+  if (wake.length && ctx.thread) ctx.hooks.deliver(ctx.thread.id, wake);
+  // Finished without report_done in a dev-team project, or changed after QA: it went to QA, so wake the QA desk.
+  if (liveItem && liveItem.status === 'qa' && (before !== 'qa' || recheck)) ctx.hooks.kickoff(liveItem.id, 'qa');
+  // Finished without report_done (to Done, QA or your sign-off): the desk that handed it over hears back, as report_done would tell it.
+  const after = liveItem?.status;
+  if (liveItem && after !== before && (after === 'done' || after === 'qa' || after === 'signoff')) {
+    const posted = noticeFinished(p.state, liveItem, ctx.agent.id, p.ticket(liveItem), after, outcome.summary);
+    if (posted) {
+      p.commit();
+      ctx.hooks.deliver(posted.threadId, posted.deliver);
+    }
+  }
+  return outcome;
+}
+
 export const claudeRunner: AgentRunner = {
   name: 'claude',
   async run(input, signal) {
     const p = input.project;
     const dir = ensureWorkspace(p, input.agent);
     const { servers, allowed } = runtimeServers(p, input.agent.id);
-    const mode: RunMode = input.reason === 'message' ? 'message' : input.reason === 'huddle' ? 'huddle' : input.reason === 'qa' ? 'qa' : input.reason === 'plan' ? 'plan' : 'ticket';
-    if ((mode === 'ticket' || mode === 'qa') && !input.item) throw new Error('A ticket run needs a ticket.');
-    if (mode === 'message' && !input.thread) throw new Error('A message run needs a thread.');
-    if (mode === 'huddle' && !input.huddle) throw new Error('A huddle run needs a huddle.');
-    const askedBy =
-      mode === 'message'
-        ? [...new Set((input.unread ?? []).filter((m) => m.to.includes(input.agent.id) && m.from !== 'hq').map((m) => m.from))]
-        : [];
-    const ctx: RunContext = {
-      project: p,
-      agent: input.agent,
-      item: input.item,
-      mode,
-      thread: input.thread,
-      sends: 0,
-      sentToThread: false,
-      awaiting: [],
-      askedBy,
-      hooks: input.hooks,
-      dir,
-      raised: false,
-      finished: false,
-      comments: 0,
-      commented: false,
-      shots: { recent: [], pending: new Set() },
-      startedMs: Date.now() - 1000,
-      reason: input.reason,
-      connections: allowed,
-      servers,
-      huddle: input.huddle,
-      huddled: false,
-      qaDone: false,
-      // Read now, as the check starts: a verdict only counts for this round.
-      qaRound: mode === 'qa' ? (input.item?.qa?.round ?? 0) : undefined,
-      changed: new Set(),
-      pendingWrites: new Map(),
-      autoChanges: new Map(),
-      autoAllowed: [],
-      contextTokens: 0,
-      effort: settings().effort,
-      planMade: 0,
-      planSaid: false,
-      // A QA check reads the owner's reports; ticket, message and QA runs read the desk's skills.
-      extraRead: [...(mode === 'qa' && input.item ? qaReadRoots(p, input.item) : []), ...skillReadRoots(p, input.agent.id, mode)],
-    };
+    const ctx = newRunContext(input, dir, allowed, servers);
+    const mode = ctx.mode;
     const huddling = mode === 'huddle';
     // HQ_RUN_TIMEOUT_MS covers the whole run: a fresh-session retry gets what the first attempt left.
     const deadline = Date.now() + WATCH.capMs;
@@ -2197,16 +2327,6 @@ export const claudeRunner: AgentRunner = {
       return runOnce(input, ctx, systemPrompt, undefined, signal, deadline);
     };
 
-    // Project files this run changed go on its ticket, for QA and for you. Only the owner's runs count.
-    let recheck = false;
-    const keepChanges = (): void => {
-      const item = ctx.item ? p.state.items.find((i) => i.id === ctx.item!.id) : undefined;
-      if (!item || !ctx.changed.size || freshSession || !(mode === 'ticket' || owns(ctx))) return;
-      noteChangedFiles(item, ctx.changed);
-      // Changed after it was finished (a comment run, a chat reply): the last check does not cover it, so it goes back to QA.
-      if (!ctx.finished && hasQa(p.meta.template) && changedAfterQa(p.state, item, ctx.agent.name) === 'qa') recheck = true;
-    };
-
     let outcome: RunOutcome;
     try {
       try {
@@ -2227,7 +2347,7 @@ export const claudeRunner: AgentRunner = {
             `[hq] ${p.meta.key} ${input.agent.name} ran out of budget in its resumed session after ${turns} turn${turns === 1 ? '' : 's'}. First turn: ${first ? `${first.cacheWrite} tokens written to the cache, ${first.cacheRead} read from it` : 'no usage seen'}.`,
           );
         }
-        if (ctx.raised || ctx.finished || ctx.sentToThread || ctx.awaiting.length || ctx.huddled || ctx.qaDone || ctx.planSaid || ctx.planMade > 0 || (ctx.reason === 'comment' && ctx.commented)) {
+        if (closedOut(ctx)) {
           // The agent already closed out (or replied, or asked a teammate); a cap or abort after that is not a failure.
           outcome = {
             summary: `Closed out, then stopped: ${message}`,
@@ -2258,71 +2378,12 @@ export const claudeRunner: AgentRunner = {
       }
       remember();
       // A run that failed still changed what it changed.
-      keepChanges();
-      p.commit();
-      if (recheck && ctx.item) ctx.hooks.kickoff(ctx.item.id, 'qa');
+      failRun(ctx, freshSession);
       throw e;
     }
     if (extraCostUsd) outcome = { ...outcome, extraCostUsd };
-
-    // The huddle engine records a turn that skipped its tool. No session id, so the desk keeps its own.
-    if (huddling) return { ...outcome, sessionId: undefined };
-    // A plan: what it made and said is on the board already. Two empty plans in a row are worth telling you about.
-    if (mode === 'plan') {
-      finishPlan(p, ctx.agent.id, ctx.planMade);
-      p.commit();
-      return { ...outcome, sessionId: undefined };
-    }
-
+    // A no-op for huddle turns, plans and QA checks: they never touch the desk's own session.
     remember();
-    keepChanges();
-    const liveItem = ctx.item ? p.state.items.find((i) => i.id === ctx.item!.id) : undefined;
-
-    // A QA check that ended without a verdict leaves the ticket in QA, to be checked again. Its session is never kept.
-    if (mode === 'qa') {
-      if (liveItem && !ctx.qaDone && liveItem.status === 'qa') {
-        liveItem.history.push({ ts: now(), text: `QA check ended without a verdict. Use "Put ${ctx.agent.name} on it" to check again` });
-        p.log(ctx.agent.id, `Did not finish the QA check on ${p.ticket(liveItem)} "${liveItem.title}"`);
-      }
-      p.commit();
-      return { ...outcome, sessionId: undefined };
-    }
-    const before = liveItem?.status;
-
-    // Close out whatever the tools did not: message runs never touch tickets; ticket runs waiting on a teammate stay open.
-    const wake = settleAfterRun(
-      p.state,
-      {
-        mode: mode === 'message' ? 'message' : 'ticket',
-        agentId: ctx.agent.id,
-        itemId: ctx.item?.id,
-        threadId: ctx.thread?.id,
-        raised: ctx.raised,
-        finished: ctx.finished,
-        sentToThread: ctx.sentToThread,
-        awaiting: ctx.awaiting,
-        askedBy: ctx.askedBy,
-        summary: outcome.summary,
-        reason: ctx.reason,
-        commented: ctx.commented,
-        qa: hasQa(p.meta.template),
-        signoff: signoffOn(p.meta),
-      },
-      (id, text) => p.log(id, text),
-    );
-    p.commit();
-    if (wake.length && ctx.thread) ctx.hooks.deliver(ctx.thread.id, wake);
-    // Finished without report_done in a dev-team project, or changed after QA: it went to QA, so wake the QA desk.
-    if (liveItem && liveItem.status === 'qa' && (before !== 'qa' || recheck)) ctx.hooks.kickoff(liveItem.id, 'qa');
-    // Finished without report_done (to Done, QA or your sign-off): the desk that handed it over hears back, as report_done would tell it.
-    const after = liveItem?.status;
-    if (liveItem && after !== before && (after === 'done' || after === 'qa' || after === 'signoff')) {
-      const posted = noticeFinished(p.state, liveItem, ctx.agent.id, p.ticket(liveItem), after, outcome.summary);
-      if (posted) {
-        p.commit();
-        ctx.hooks.deliver(posted.threadId, posted.deliver);
-      }
-    }
-    return outcome;
+    return finishRun(ctx, outcome, freshSession);
   },
 };

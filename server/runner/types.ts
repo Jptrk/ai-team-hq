@@ -1,4 +1,4 @@
-import type { Agent, Attachment, Message, Run, RunReason, RunnerName, Thread, WorkItem } from '../../shared/types';
+import type { Agent, Attachment, Message, Provider, Run, RunReason, Thread, WorkItem } from '../../shared/types';
 import type { Project } from '../store';
 import type { UsageLimit } from './watch';
 
@@ -44,6 +44,6 @@ export interface RunOutcome {
 }
 
 export interface AgentRunner {
-  name: RunnerName;
+  name: Provider;
   run(input: RunInput, signal: AbortSignal): Promise<RunOutcome>;
 }

@@ -357,6 +357,18 @@ test('restart: the team’s run starts again by itself once; a second time it is
   assert.equal(again.auto, true);
 });
 
+test('restart: a team run cut off on a ticket where a start of yours waits never replaces yours', async () => {
+  await fresh();
+  const s = p.state;
+  const item = ticket('leo', { status: 'in-progress' });
+  const at = new Date().toISOString();
+  item.autoHold = { reason: 'instruct', at, why: 'model', mine: true, note: 'Use the new numbers' };
+  s.runs.unshift({ id: 'run_cut', agentId: 'leo', status: 'running', startedAt: at, reason: 'handoff', itemId: item.id, auto: true });
+  store.migrateState(s);
+  assert.deepEqual(item.autoHold, { reason: 'instruct', at, why: 'model', mine: true, note: 'Use the new numbers' }, 'yours stays exactly as it was');
+  assert.equal(item.history.at(-1)!.text, 'Run interrupted by a server restart. Your waiting start goes instead.');
+});
+
 test('restart: a hand-off and the QA check its own report queued, both cut off: the ticket waits for its QA check, noted once', async () => {
   await fresh();
   const s = p.state;

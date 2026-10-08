@@ -135,7 +135,7 @@ test('usage: a rejection that extra usage covers is no limit: Claude carries on'
 test('usage: account errors are an account problem; a bare rate_limit is throttling, not a limit', () => {
   assert.equal(usageLimitOf({ type: 'assistant', error: 'billing_error' })?.kind, 'account');
   assert.equal(usageLimitOf({ type: 'assistant', error: 'authentication_failed' })?.kind, 'account');
-  assert.match(usageLimitOf({ type: 'assistant', error: 'authentication_failed' })!.text, /Claude account page.*Resume/, 'a lost login points to where HQ signs in again');
+  assert.match(usageLimitOf({ type: 'assistant', error: 'authentication_failed' })!.text, /Accounts page.*Resume/, 'a lost login points to where HQ signs in again');
   for (const error of ['rate_limit', 'overloaded', 'server_error', 'max_output_tokens', 'unknown']) assert.equal(usageLimitOf({ type: 'assistant', error }), null, error);
   for (const junk of [null, undefined, 'rate_limit', 42, { type: 'user', error: 'billing_error' }, { type: 'rate_limit_event' }]) assert.equal(usageLimitOf(junk), null);
 });

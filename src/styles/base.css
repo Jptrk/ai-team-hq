@@ -318,6 +318,14 @@
     letter-spacing: 0.06em;
     font-size: 10px;
   }
+  /* A desk that runs on GPT (your ChatGPT plan) instead of Claude. */
+  .gpt-chip {
+    background: var(--accent-subtle);
+    color: var(--accent-text);
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    font-size: 10px;
+  }
   /* A start the team made that waits (HQ paused, a limit), and a ticket Autopilot left for you. */
   .held-chip,
   .skip-chip {

@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
  *
  *   #/projects                    all projects
  *   #/projects/new                create a project
- *   #/account                     your Claude account: sign in, and whether desks run on it
+ *   #/account                     your Claude and ChatGPT accounts: sign in, and whether desks run on them
  *   #/p/<pid>                     Needs you
  *   #/p/<pid>/<view>              chat | board | huddles | team | office | notes
  *   #/p/<pid>/chat/<threadId>     one thread

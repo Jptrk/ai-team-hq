@@ -2,6 +2,7 @@ import type { AddRequest } from '../shared/mcpSpec';
 import type {
   AccountResponse,
   AddPreview,
+  ChatGptResponse,
   AutoStatus,
   Agent,
   Attachment,
@@ -19,6 +20,7 @@ import type {
   Meta,
   PathCheck,
   ProjectAccess,
+  Provider,
   ProjectSkillsResponse,
   ProjectSummary,
   ReportInfo,
@@ -62,6 +64,8 @@ export interface ProjectBody {
   goal?: string;
   /** Most the team may start on its own per day. */
   autoLimits?: { runs: number; usd: number };
+  /** The model every desk here runs on. Changing it starts every desk on a new conversation. */
+  provider?: Provider;
 }
 
 export interface HuddleBody {
@@ -95,6 +99,17 @@ export const api = {
   useClaudeLogin: (on: boolean) => request<AccountResponse>('/api/account/use', json('PUT', { on })),
   /** Signs out of Claude for every Claude Code on this PC. */
   signOutAccount: () => request<AccountResponse>('/api/account/logout', json('POST', {})),
+  /** Your ChatGPT account in HQ's Codex, for GPT desks. `check` asks Codex again. */
+  chatGpt: (check = false) => request<ChatGptResponse>(`/api/account/chatgpt${check ? '?check=1' : ''}`),
+  /** Starts signing in to ChatGPT: on this PC (a sign-in page) or from another device (a code). */
+  startChatGptLogin: (method: 'browser' | 'device') => request<ChatGptResponse>('/api/account/chatgpt/login', json('POST', { method })),
+  cancelChatGptLogin: () => request<ChatGptResponse>('/api/account/chatgpt/login', json('DELETE')),
+  /** May GPT desks run on HQ's ChatGPT login? */
+  useChatGptLogin: (on: boolean) => request<ChatGptResponse>('/api/account/chatgpt/use', json('PUT', { on })),
+  /** Signs HQ's Codex out of ChatGPT. Your own Codex CLI keeps its login. */
+  signOutChatGpt: () => request<ChatGptResponse>('/api/account/chatgpt/logout', json('POST', {})),
+  /** GPT desks' model and effort; null is the default. */
+  setGptModel: (body: { model?: string | null; effort?: string | null }) => request<ChatGptResponse>('/api/account/chatgpt/model', json('PUT', body)),
   projects: () => request<ProjectSummary[]>('/api/projects'),
   createProject: (body: ProjectBody) => request<ProjectSummary>('/api/projects', json('POST', body)),
   updateProject: (pid: string, body: ProjectBody) => request<ProjectSummary>(pp(pid), json('PATCH', body)),

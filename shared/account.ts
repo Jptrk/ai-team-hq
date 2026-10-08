@@ -17,6 +17,28 @@ export function safeClaudeUrl(url: unknown): string | null {
   }
 }
 
+/** OpenAI's sign-in site. A ChatGPT sign-in page or device page is only ever shown on it. */
+const OPENAI_HOSTS = ['auth.openai.com'];
+
+/** The sign-in or device page Codex gave, if it is an https page on OpenAI's sign-in site. The server and the page both check it. */
+export function safeOpenAiUrl(url: unknown): string | null {
+  if (typeof url !== 'string' || !url) return null;
+  try {
+    const u = new URL(url);
+    if (u.protocol !== 'https:' || u.username || u.password) return null;
+    return OPENAI_HOSTS.includes(u.hostname.toLowerCase()) ? u.href : null;
+  } catch {
+    return null;
+  }
+}
+
+/** ChatGPT plan names as OpenAI shows them. */
+export function chatGptPlanLabel(plan: string | undefined): string | null {
+  if (!plan) return null;
+  const known: Record<string, string> = { free: 'Free', go: 'Go', plus: 'Plus', pro: 'Pro', team: 'Business', business: 'Business', enterprise: 'Enterprise', edu: 'Edu' };
+  return known[plan.toLowerCase()] ?? plan;
+}
+
 /** Plan names as Claude shows them. */
 export function planLabel(plan: string | undefined): string | null {
   if (!plan) return null;

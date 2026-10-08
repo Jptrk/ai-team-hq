@@ -35,8 +35,8 @@ export interface ProgramOptions {
 // After the program exits, output still on its way gets this long. A leftover child holding the pipes must not hang the caller.
 const EXIT_GRACE_MS = 2_000;
 
-/** End the program and whatever it started. Windows needs taskkill for the children; elsewhere the process group goes. */
-function killTree(child: ChildProcess): void {
+/** End the program and whatever it started. Windows needs taskkill for the children; elsewhere the process group goes (start it detached). */
+export function killTree(child: ChildProcess): void {
   const pid = child.pid;
   if (!pid) return;
   if (process.platform === 'win32') {

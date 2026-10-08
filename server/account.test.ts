@@ -390,19 +390,23 @@ test('code: the browser finished first, so Claude Code has no sign-in for the co
 
 // ---------- what HQ runs on ----------
 
-test('runner: HQ_RUNNER=sim always sim, a key is live, the Claude login only with a yes and a login', () => {
-  const rows: [Parameters<typeof runner.pickRunner>[0], 'sim' | 'claude'][] = [
+test('runner: HQ_RUNNER=sim always sim, a key is live, a login only with a yes and a login (Claude or ChatGPT)', () => {
+  const rows: [Parameters<typeof runner.pickRunner>[0], 'sim' | 'live'][] = [
     [{ explicit: 'sim', hasKey: true, optIn: true, auth: 'api-key' }, 'sim'],
     [{ explicit: 'sim', hasKey: false, optIn: true, auth: 'claude-login' }, 'sim'],
-    [{ hasKey: true, optIn: false, auth: 'api-key' }, 'claude'],
-    [{ explicit: 'claude', hasKey: true, optIn: true, auth: 'api-key' }, 'claude'],
-    [{ explicit: 'claude', hasKey: false, optIn: true, auth: 'claude-login' }, 'claude'],
-    [{ explicit: 'claude', hasKey: false, optIn: false, auth: 'claude-login' }, 'claude'],
-    [{ hasKey: false, optIn: true, auth: 'claude-login' }, 'claude'],
+    [{ hasKey: true, optIn: false, auth: 'api-key' }, 'live'],
+    [{ explicit: 'claude', hasKey: true, optIn: true, auth: 'api-key' }, 'live'],
+    [{ explicit: 'claude', hasKey: false, optIn: true, auth: 'claude-login' }, 'live'],
+    [{ explicit: 'claude', hasKey: false, optIn: false, auth: 'claude-login' }, 'live'],
+    [{ hasKey: false, optIn: true, auth: 'claude-login' }, 'live'],
     [{ explicit: 'claude', hasKey: false, optIn: true, auth: 'none' }, 'sim'],
     [{ hasKey: false, optIn: true, auth: 'none' }, 'sim'],
     [{ hasKey: false, optIn: false, auth: 'claude-login' }, 'sim'],
     [{ hasKey: false, optIn: false, auth: 'none' }, 'sim'],
+    // GPT desks on a ChatGPT login you said yes to: live even with no Claude login. HQ_RUNNER=sim still wins.
+    [{ hasKey: false, optIn: false, auth: 'none', gpt: true }, 'live'],
+    [{ explicit: 'sim', hasKey: false, optIn: false, auth: 'none', gpt: true }, 'sim'],
+    [{ hasKey: false, optIn: false, auth: 'none', gpt: false }, 'sim'],
   ];
   for (const [input, want] of rows) assert.equal(runner.pickRunner(input), want, JSON.stringify(input));
 });
@@ -416,8 +420,8 @@ test('idle: no login to go live on runs no sim in projects that are real (a yes,
     [{ runner: 'sim', optIn: false, wentLive: true }, true],
     [{ runner: 'sim', optIn: false, wentLive: false }, false],
     [{ runner: 'sim', explicit: 'sim', optIn: true, wentLive: true }, false],
-    [{ runner: 'claude', explicit: 'claude', optIn: true, wentLive: true }, false],
-    [{ runner: 'claude', optIn: false, wentLive: false }, false],
+    [{ runner: 'live', explicit: 'claude', optIn: true, wentLive: true }, false],
+    [{ runner: 'live', optIn: false, wentLive: false }, false],
   ];
   for (const [input, want] of rows) assert.equal(runner.pickIdle(input), want, JSON.stringify(input));
   assert.equal(runner.meta().idle, false, 'picked at boot, with the runner');

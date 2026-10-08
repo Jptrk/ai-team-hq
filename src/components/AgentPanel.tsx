@@ -2,12 +2,12 @@ import { X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { HUDDLE_KIND_LABEL } from '../../shared/huddle';
 import type { Agent, Run, SkillMeta, StateResponse, WorkItem } from '../../shared/types';
-import { hasQa, signoffOn } from '../../shared/types';
+import { hasQa, projectProvider, signoffOn } from '../../shared/types';
 import { api } from '../api';
 import { Avatar } from '../ui/Avatar';
 import { Lozenge, StatusLozenge } from '../ui/Lozenge';
 import { TypeIcon } from '../ui/TypeIcon';
-import { AGENT_STATUS_LABEL, ticketKey, timeAgo, type Tone } from '../util';
+import { AGENT_STATUS_LABEL, runCostText, ticketKey, timeAgo, type Tone } from '../util';
 
 interface Props {
   agent: Agent;
@@ -49,6 +49,7 @@ const RUN_REASON: Record<Run['reason'], string> = {
 const STATUS_TONE: Record<Agent['status'], Tone> = { working: 'success', waiting: 'warning', idle: 'neutral', off: 'neutral' };
 
 export function AgentPanel({ agent, state, onClose, onOpenTicket, onOpenThread, onOpenHuddle, onMakeLead, onSetQa, onRemove }: Props) {
+  const provider = projectProvider(state.project);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [busy, setBusy] = useState(false);
   const key = state.project.key;
@@ -161,6 +162,7 @@ export function AgentPanel({ agent, state, onClose, onOpenTicket, onOpenThread, 
             ) : (
               <p className="muted small">None. Turn them on under Connections.</p>
             )}
+            {provider === 'gpt' && connections.length > 0 && <p className="muted small">GPT desks don't use connections yet: these work once the project runs on Claude.</p>}
           </section>
         )}
 
@@ -238,8 +240,8 @@ export function AgentPanel({ agent, state, onClose, onOpenTicket, onOpenThread, 
                     </button>
                     <span className="run-meta">
                       {RUN_REASON[r.reason]} · {r.status}
-                      {r.turns !== undefined && ` · ${r.turns} turns`}
-                      {r.costUsd !== undefined && ` · est. $${r.costUsd.toFixed(3)}`} · {timeAgo(r.startedAt)}
+                      {r.turns !== undefined && ` · ${r.turns} ${r.provider === 'gpt' ? 'tool calls' : 'turns'}`}
+                      {runCostText(r) && ` · ${runCostText(r)}`} · {timeAgo(r.startedAt)}
                     </span>
                     {r.error && <span className="run-error">{r.error}</span>}
                   </li>

@@ -106,7 +106,7 @@ test('meta: idle, not live, and the page says so', () => {
   assert.equal(m.runner, 'sim');
   assert.equal(runner.isLive(), false);
   assert.equal(runnerLabel(m), 'Not live');
-  assert.match(runner.notLiveText(), /no Claude login.*turn on Run desks on my Claude login, then restart HQ/);
+  assert.match(runner.notLiveText(), /no login to run desks on.*sign in to Claude or ChatGPT.*then restart HQ/);
 });
 
 test('a start you make waits on its ticket, says why, and starts as your own click once HQ is live', async () => {
@@ -115,7 +115,7 @@ test('a start you make waits on its ticket, says why, and starts as your own cli
   assert.equal(runner.kickoff(p, item.id, 'instruction'), null);
   assert.equal(p.state.runs.length, 0, 'no run is queued');
   assert.deepEqual({ reason: item.autoHold?.reason, why: item.autoHold?.why, mine: item.autoHold?.mine }, { reason: 'instruction', why: 'login', mine: true });
-  assert.match(item.history.at(-1)!.text, /HQ has no Claude login to run desks on/);
+  assert.match(item.history.at(-1)!.text, /HQ has no login to run desks on/);
   assert.match(holdText(item.autoHold!), /once HQ is live/);
   goLive();
   assert.equal(runner.releaseHolds(p), 1);
@@ -211,7 +211,7 @@ test('messages to a desk wait: no "replying" forever, one note however many you 
   const notes = s.messages.slice(messages).filter((m) => m.from === 'hq');
   assert.deepEqual(
     notes.map((m) => m.text),
-    ['Sam sees this once it clears: HQ has no Claude login to run desks on.'],
+    ['Sam sees this once it clears: HQ has no login to run desks on.'],
   );
   goLive();
   p.state.auto.usage = { day: localDay(), runs: 9999, usd: 0 };
@@ -229,12 +229,12 @@ test('huddles: refused to start and to resume, and nothing is written', () => {
   const body = { kind: 'retro', topic: 'Last two weeks', participants: ['leo', 'sam'], rounds: 1, includeNotes: false };
   const out = engine.startHuddle(p, body) as { error: string; status: number };
   assert.equal(out.status, 409);
-  assert.match(out.error, /no Claude login/);
+  assert.match(out.error, /no login to run desks on/);
   assert.equal(p.state.huddles.length, 0);
   // A huddle stopped earlier stays stopped.
   const h = engine.startHuddle(p, body, async () => ({ ran: false, ok: false, skipped: true, reply: '' })) as Huddle;
   engine.stopHuddleRun(p, h.id);
-  assert.match(engine.resumeHuddleRun(p, h.id) ?? '', /no Claude login/);
+  assert.match(engine.resumeHuddleRun(p, h.id) ?? '', /no login to run desks on/);
   assert.equal(p.state.huddles.find((x) => x.id === h.id)?.status, 'stopped');
 });
 

@@ -169,10 +169,10 @@ export function HuddleSetup({ open, agents, live, idle = false, startedToday, li
           <span>
             {picked.length} desk{picked.length === 1 ? '' : 's'} × {rounds} round{rounds === 1 ? '' : 's'}, plus {rounds} summar{rounds === 1 ? 'y' : 'ies'}.{' '}
             {live
-              ? 'Each run is short (a few turns) and spends your Claude usage.'
+              ? "Each run is short (a few turns) and spends usage on the project's model, Claude or GPT."
               : idle
-                ? "HQ has no Claude login, so desks can't huddle. On the Claude account page, sign in and turn on Run desks on my Claude login, then restart HQ."
-                : 'Sim mode: canned replies, no Claude calls.'}
+                ? "HQ has no login to run desks on, so desks can't huddle. On the Accounts page, sign in to Claude or ChatGPT and turn on running desks on it, then restart HQ."
+                : 'Sim mode: canned replies, no model calls.'}
           </span>
           <span className="muted">
             {limit <= 0 ? 'Huddles are turned off (HQ_HUDDLES_PER_DAY=0).' : left > 0 ? `${left} of ${limit} huddles left today.` : `No huddles left today (limit ${limit}).`}

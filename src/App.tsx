@@ -206,7 +206,7 @@ export function App() {
     route.kind === 'projects'
       ? 'Projects'
       : route.kind === 'account'
-        ? 'Claude account'
+        ? 'Accounts'
         : route.kind === 'new'
         ? 'Create project'
         : route.kind === 'settings'
@@ -234,7 +234,7 @@ export function App() {
     );
   }
 
-  const live = meta?.runner === 'claude';
+  const live = meta?.runner === 'live';
   const owner = state?.agents.find((a) => a.isHuman);
   const crumbs = current ? [<span key="p" className="crumb-project"><ProjectAvatar project={current} size={16} /> {current.name}</span>] : [];
 
@@ -250,6 +250,8 @@ export function App() {
       <ProjectForm
         mode="create"
         projects={projects}
+        gptReady={Boolean(meta?.gpt.ready)}
+        claudeReady={meta?.claudeReady ?? true}
         onCancel={() => window.history.back()}
         onSaved={async (p) => {
           await loadProjects();
@@ -265,6 +267,8 @@ export function App() {
         mode="edit"
         project={current}
         projects={projects}
+        gptReady={Boolean(meta?.gpt.ready)}
+        claudeReady={meta?.claudeReady ?? true}
         onCancel={() => navigate(projectPath(current.id))}
         onSaved={async (p) => {
           await loadProjects();
@@ -587,10 +591,10 @@ export function App() {
               <span>
                 <strong>{pauseLabel(meta.paused)}.</strong> {pauseText(meta.paused)}
               </span>
-              {/* A lost login is fixed on the Claude account page, then Resume. */}
+              {/* A lost login is fixed on the Accounts page, then Resume. */}
               {meta.paused.by === 'account' && route.kind !== 'account' && (
                 <a className="btn btn-outline btn-sm" href="#/account">
-                  Claude account
+                  Accounts
                 </a>
               )}
               <button
@@ -609,14 +613,14 @@ export function App() {
               </button>
             </div>
           )}
-          {/* Live, but the login went away (signed out here or in a terminal): every desk run fails. */}
-          {meta?.runner === 'claude' && !meta.liveReady && route.kind !== 'account' && (
+          {/* Live, but every login went away (signed out here or in a terminal): every desk run fails. */}
+          {meta?.runner === 'live' && !meta.liveReady && route.kind !== 'account' && (
             <div className="banner danger main-error" role="alert">
               <span className="grow">
-                <strong>No Claude login.</strong> HQ is live, but desk runs fail until you sign in again.
+                <strong>No login.</strong> HQ is live, but desk runs fail until you sign in again.
               </span>
               <a className="btn btn-outline btn-sm" href="#/account">
-                Claude account
+                Accounts
               </a>
             </div>
           )}
@@ -624,10 +628,25 @@ export function App() {
           {meta?.idle && !meta.restartToGoLive && route.kind !== 'account' && (
             <div className="banner danger main-error" role="alert">
               <span className="grow">
-                <strong>Not live.</strong> HQ has no Claude login to run desks on, so they are idle, and there is no sim in your projects. {goLiveHint(meta)}
+                <strong>Not live.</strong> HQ has no login to run desks on, so they are idle, and there is no sim in your projects. {goLiveHint(meta)}
               </span>
               <a className="btn btn-outline btn-sm" href="#/account">
-                Claude account
+                Accounts
+              </a>
+            </div>
+          )}
+          {/* Live, but this project's model has no login (or is switched off): its work waits instead of failing. With no
+              login at all, the No login banner above says so. */}
+          {state?.modelProblem && route.kind === 'project' && current && !meta?.restartToGoLive && meta?.liveReady !== false && (
+            <div className="banner danger main-error" role="alert">
+              <span className="grow">
+                <strong>Desks can't run here.</strong> {state.modelProblem} What you start waits and begins once they can.
+              </span>
+              <a className="btn btn-outline btn-sm" href="#/account">
+                Accounts
+              </a>
+              <a className="btn btn-outline btn-sm" href={`#/p/${current.id}/settings`}>
+                Project settings
               </a>
             </div>
           )}
@@ -637,17 +656,17 @@ export function App() {
                 <strong>Restart HQ to go live:</strong> stop it in its terminal (Ctrl+C) and start it again (npm start or npm run dev).
               </span>
               <a className="btn btn-outline btn-sm" href="#/account">
-                Claude account
+                Accounts
               </a>
             </div>
           )}
           {!live && meta && !meta.idle && !meta.restartToGoLive && route.kind === 'project' && view === 'needs-you' && (
             <p className="sim-note muted small">
-              Sim mode: fake activity, no Claude calls. {goLiveHint(meta)}
+              Sim mode: fake activity, no model calls. {goLiveHint(meta)}
               {!meta.simByEnv && (
                 <>
                   {' '}
-                  <a href="#/account">Claude account</a>
+                  <a href="#/account">Accounts</a>
                 </>
               )}
             </p>

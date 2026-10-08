@@ -77,9 +77,15 @@ export function haltedHold(p: Project): Hold | null {
   return halted ? { kind: 'halted', text: `Autopilot stopped here: ${halted.why}` } : null;
 }
 
+/** Why this project's model can't run now (see modelProblem in runner/index.ts), set there: this module can't import the runner. */
+let modelGate: (p: Project) => Hold | null = () => null;
+export function setModelGate(gate: (p: Project) => Hold | null): void {
+  modelGate = gate;
+}
+
 /** Why the team may not start anything on its own in this project right now, or null when it may. */
 export function autoGate(p: Project, nowMs = Date.now(), queued = 0): Hold | null {
-  return globalHold(nowMs) ?? projectHold(p, nowMs, queued);
+  return globalHold(nowMs) ?? modelGate(p) ?? projectHold(p, nowMs, queued);
 }
 
 /** The team's runs queued in this project and not started yet. */
@@ -139,12 +145,15 @@ export function holdWords(hold: Pick<Hold, 'text'>): string {
 }
 
 /**
- * Hold a start the team made for this ticket. Held again for the same start, it keeps its place in line and its
- * history line. at: when it was first held, kept when a released start is held again.
+ * Hold a start for this ticket. Held again for the same start, it keeps its place in line and its history line.
+ * at: when it was first held, kept when a released start is held again. mine: your own start (holdYours in
+ * runner/index.ts). A start of yours held here wins: the team's start for the same ticket leaves it as it is, with
+ * no hold or history line of its own, so your note and images are never lost.
  */
-export function holdItem(item: WorkItem, reason: RunReason, hold: HeldFor, restarts?: number, at?: string): void {
+export function holdItem(item: WorkItem, reason: RunReason, hold: HeldFor, restarts?: number, at?: string, mine = false): void {
+  if (item.autoHold?.mine && !mine) return;
   const same = item.autoHold?.reason === reason;
-  item.autoHold = { reason, at: at ?? (same ? item.autoHold!.at : now()), why: hold.kind, ...(restarts ? { restarts } : {}) };
+  item.autoHold = { reason, at: at ?? (same ? item.autoHold!.at : now()), why: hold.kind, ...(restarts ? { restarts } : {}), ...(mine ? { mine: true as const } : {}) };
   if (!same && !at) item.history.push({ ts: now(), text: `Held ${START_WORDS[reason] ?? 'a run'}: ${holdWords(hold)}. It starts when that clears.` });
 }
 

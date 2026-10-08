@@ -56,6 +56,9 @@
     font-size: var(--fs-xs);
     color: var(--text-subtle);
   }
+  .project-sub .gpt-chip {
+    margin-left: 6px;
+  }
   .folder-cell {
     max-width: 360px;
   }

@@ -84,6 +84,21 @@ const cases: [string, 'read' | 'write', string, Record<string, unknown>, 'allow'
   ['edit a pasted image', 'write', 'Edit', { file_path: path.join(images, 'att_0123456789ab.png') }, 'deny'],
   ["read another project's images", 'read', 'Read', { file_path: path.join(otherImages, 'att_0123456789ab.png') }, 'deny'],
   ['hq tools always', 'read', 'mcp__hq__report_done', { summary: 'done' }, 'allow'],
+  // Windows (and Codex's apply_patch through it) drops a trailing dot or space: these are .git, server.key, node_modules.
+  ['write .git. (trailing dot), writable project', 'write', 'Write', { file_path: path.join(repo, '.git.', 'hooks', 'post-checkout'), content: '' }, 'deny'],
+  ['write ".git " (trailing space), writable project', 'write', 'Write', { file_path: path.join(repo, '.git ', 'x'), content: '' }, 'deny'],
+  ['write server.key. (trailing dot), writable project', 'write', 'Edit', { file_path: path.join(repo, 'server.key.') }, 'deny'],
+  ['write node_modules. (trailing dot), writable project', 'write', 'Write', { file_path: path.join(repo, 'node_modules.', 'x.js'), content: '' }, 'deny'],
+  ['write a hidden stream (x::$DATA), writable project', 'write', 'Write', { file_path: path.join(repo, 'x::$DATA'), content: '' }, 'deny'],
+  ['write a network path', 'write', 'Write', { file_path: '\\\\server\\share\\x', content: '' }, 'deny'],
+  ['write a device path to the project', 'write', 'Write', { file_path: `\\\\?\\${path.join(repo, 'apps', 'x.ts')}`, content: '' }, 'deny'],
+  ['read .git. (trailing dot) too', 'read', 'Read', { file_path: path.join(repo, '.git.', 'config') }, 'deny'],
+  ['read a hidden stream too', 'read', 'Read', { file_path: path.join(repo, 'apps', 'page.tsx:secret') }, 'deny'],
+  ['grep a trailing-space folder', 'read', 'Grep', { pattern: 'x', path: path.join(repo, 'apps ') }, 'deny'],
+  ['glob under a trailing-dot folder', 'read', 'Glob', { pattern: path.join(repo, 'apps.', '**', '*.ts') }, 'deny'],
+  ['relative trailing-dot name in the workspace', 'read', 'Write', { file_path: 'memory.md.', content: '' }, 'deny'],
+  ['a plain name with dots inside still writes', 'write', 'Write', { file_path: path.join(repo, 'apps', 'web', 'v1.2.notes.md'), content: '' }, 'allow'],
+  ['a plain name with spaces inside still reads', 'read', 'Read', { file_path: path.join(repo, 'apps', 'my page.tsx') }, 'allow'],
 ];
 
 let failed = 0;
