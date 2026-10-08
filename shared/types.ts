@@ -129,13 +129,24 @@ export interface Hold {
   until?: string;
 }
 
-/** A held start: what would have run, and why it waits. restart: a server restart cut the run off, and it starts again by itself. */
+/**
+ * A held start: what would have run, and why it waits. restart: a server restart cut the run off, and it starts again
+ * by itself. login: HQ is idle (no Claude login to run on), and it starts once HQ is live.
+ */
 export interface AutoHold {
   reason: RunReason;
   at: string;
-  why: HoldKind | 'restart';
+  why: HoldKind | 'restart' | 'login';
   /** Times a restart already cut this start off. A second time, it is skipped instead. */
   restarts?: number;
+  /**
+   * Yours, made while HQ was idle: it starts as your own click once HQ is live (no daily limits), after Resume when
+   * paused. why then says what it waits for now. It keeps what you gave it: your note, images and the team-notes ask.
+   */
+  mine?: true;
+  note?: string;
+  images?: Attachment[];
+  notes?: true;
 }
 
 /** A desk that would have been woken in a chat, held like a ticket start. */
@@ -143,8 +154,10 @@ export interface HeldWake {
   threadId: string;
   agentId: string;
   at: string;
-  why: HoldKind | 'restart';
+  why: HoldKind | 'restart' | 'login';
   restarts?: number;
+  /** Your message, sent while HQ was idle (see AutoHold.mine). */
+  mine?: true;
 }
 
 /** What the team does on its own in one project, and today's count of it. */
@@ -721,6 +734,11 @@ export interface Meta {
   simByEnv: boolean;
   /** Desks may run on the Claude login: you said so on the Claude account page, or HQ_RUNNER=claude is set. */
   optedIn: boolean;
+  /**
+   * HQ can't go live (no Claude login to run on), but the projects are real: you said yes to the login, or HQ went live
+   * here before. No sim either, so desks stay idle and what you start waits until HQ is live. Picked at boot.
+   */
+  idle: boolean;
 }
 
 /** Your Claude account as Claude Code on this PC sees it (`claude auth status`). Never a token. */
@@ -767,6 +785,8 @@ export interface AccountResponse {
   restartToGoLive: boolean;
   /** HQ_RUNNER=sim in .env: HQ stays in sim whatever you sign in to. */
   simByEnv: boolean;
+  /** HQ started with no Claude login to run desks on, so they are idle (see Meta.idle). */
+  idle: boolean;
 }
 
 /** The polled state leaves out messages; a thread's messages load when it opens. */

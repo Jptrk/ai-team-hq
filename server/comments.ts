@@ -14,6 +14,13 @@ export function addComment(item: WorkItem, c: Pick<Comment, 'from' | 'text'> & P
   return comment;
 }
 
+/** A plain comment of yours (not an Instruct or Send back note) newer than the desk's own latest comment on this ticket. */
+export function unansweredComment(item: WorkItem, agentId: string): boolean {
+  const comments = item.comments ?? [];
+  const answered = comments.reduce((latest, c) => (c.from === agentId && c.ts > latest ? c.ts : latest), '');
+  return comments.some((c) => c.from === 'you' && (!c.kind || c.kind === 'comment') && c.ts > answered);
+}
+
 /** Images on the founder's comments (any kind) newer than the desk's own latest comment on this ticket. */
 export function unansweredImages(item: WorkItem, agentId: string): Attachment[] {
   const comments = item.comments ?? [];

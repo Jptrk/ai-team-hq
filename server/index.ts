@@ -3,7 +3,8 @@ import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
 import { router } from './routes';
-import { autoSweep, isLive, loginOptIn, meta } from './runner';
+import { autoSweep, isIdle, isLive, loginOptIn, meta } from './runner';
+import { noteWentLive, settings } from './settings';
 import { limitsFromEnv, limitsWarning } from './runner/watch';
 import { startSim } from './sim';
 import { sweepAttachments } from './attachments';
@@ -12,7 +13,7 @@ import { requestGuard } from './http';
 import { cancelAllLogins } from './mcpAuth';
 import { cancelAccountLogin, checkAccount, hasClaudeLogin } from './claudeAuth';
 import { initSkills } from './skills';
-import { allProjects, flushAll, initStore, listMeta } from './store';
+import { allProjects, deskRunsOnDisk, flushAll, initStore, listMeta } from './store';
 
 const app = express();
 // Only this PC's own names, and changes only from HQ's own page (see server/http.ts).
@@ -46,8 +47,14 @@ if (process.env.NODE_ENV === 'production' && fs.existsSync(dist)) {
 // HQ picks sim or live once, just below. A Mac keeps the Claude login in the keychain, not a file HQ can
 // read, so ask Claude Code first: otherwise HQ starts in sim every time and "restart to go live" never ends.
 if (!process.env.ANTHROPIC_API_KEY && loginOptIn() && !hasClaudeLogin()) await checkAccount().catch(() => null);
+// Desk runs on record mean HQ went live here before it kept wentLive: note it before HQ picks its mode.
+if (!settings().wentLive && deskRunsOnDisk()) noteWentLive();
 const live = isLive();
-initStore({ emptySeed: live, freshNames: true });
+// Once live, these projects are real: a later start without a login stays idle rather than running the sim in them.
+if (live) noteWentLive();
+// Idle: HQ can't go live, and the projects are real. No demo seed and no sim, which would fake work in them.
+const idle = isIdle();
+initStore({ emptySeed: live || idle, freshNames: true });
 for (const p of allProjects()) {
   const removed = sweepAttachments(p.id, p.state);
   if (removed) console.log(`[hq] ${p.meta.key}: removed ${removed} unused image${removed === 1 ? '' : 's'}`);
@@ -60,7 +67,7 @@ try {
 } catch (e) {
   console.error('[hq] connections:', e instanceof Error ? e.name : 'error');
 }
-if (!live && process.env.SIMULATE !== '0') startSim();
+if (!live && !idle && process.env.SIMULATE !== '0') startSim();
 // Live: every minute, a usage limit that has reset clears and held work starts again (later: Autopilot picks).
 // The first pass waits a little after boot, so starts a restart cut off begin once the server has settled.
 if (live) {
@@ -92,9 +99,11 @@ app.listen(PORT, '127.0.0.1', () => {
       ? `[hq] runner=claude model=${m.model} effort=${m.effort ?? 'model default'} auth=${m.auth} (real agents, real spend)`
       : process.env.HQ_RUNNER === 'sim'
         ? '[hq] runner=sim (HQ_RUNNER=sim in .env, no Claude calls).'
-        : m.restartToGoLive
-          ? '[hq] runner=sim (no Claude calls). Desks may run on your Claude login now: restart HQ to go live.'
-          : "[hq] runner=sim (no Claude calls). Go live from HQ's Account page with your Claude login (or put an ANTHROPIC_API_KEY in .env), then restart.",
+        : idle
+          ? "[hq] runner=idle: no Claude login to run desks on, and no sim (it would fake work in your projects). Go live from HQ's Claude account page, then restart HQ."
+          : m.restartToGoLive
+            ? '[hq] runner=sim (no Claude calls). Desks may run on your Claude login now: restart HQ to go live.'
+            : "[hq] runner=sim (no Claude calls). Go live from HQ's Account page with your Claude login (or put an ANTHROPIC_API_KEY in .env), then restart.",
   );
   const limits = limitsWarning(limitsFromEnv());
   if (live && limits) console.warn(`[hq] ${limits}`);

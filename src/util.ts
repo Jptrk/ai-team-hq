@@ -8,7 +8,7 @@ export function clockTime(iso: string, nowMs = Date.now()): string {
 }
 
 const HOLD_START: Partial<Record<RunReason, string>> = { handoff: 'The hand-off', qa: 'The QA check', 'qa-fail': 'The fix after QA', auto: "Autopilot's start" };
-const HOLD_WHY: Record<Exclude<AutoHold['why'], 'restart'>, string> = {
+const HOLD_WHY: Record<Exclude<AutoHold['why'], 'restart' | 'login'>, string> = {
   paused: 'HQ is paused',
   usage: "Claude's usage limit was reached",
   account: 'Claude reported an account problem',
@@ -32,6 +32,7 @@ export function goalLabel(g: Pick<NonNullable<AutoStatus['goal']>, 'status' | 'p
 export function holdText(h: Pick<AutoHold, 'reason' | 'why'>): string {
   const what = HOLD_START[h.reason] ?? 'A run';
   if (h.why === 'restart') return `${what} was cut off by a server restart. It starts again by itself.`;
+  if (h.why === 'login') return `${what} waits: HQ has no Claude login to run desks on. It starts by itself once HQ is live.`;
   return `${what} waits: ${HOLD_WHY[h.why]}. It starts by itself once that clears.`;
 }
 
@@ -51,9 +52,9 @@ export function pauseText(p: Pick<PauseInfo, 'by' | 'until' | 'reason'>): string
 
 export const EFFORT_LABEL: Record<EffortLevel, string> = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Max' };
 
-/** The header pill: Sim, or Live with the model. */
-export function runnerLabel(meta: Pick<Meta, 'runner' | 'model'>): string {
-  return meta.runner === 'claude' ? `Live · ${meta.model}` : 'Sim';
+/** The header pill: Sim, Not live (idle, see Meta.idle), or Live with the model. */
+export function runnerLabel(meta: Pick<Meta, 'runner' | 'model'> & Partial<Pick<Meta, 'idle'>>): string {
+  return meta.runner === 'claude' ? `Live · ${meta.model}` : meta.idle ? 'Not live' : 'Sim';
 }
 
 /** In sim: the one step that takes HQ live from here. */

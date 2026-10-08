@@ -403,6 +403,7 @@ export function App() {
               open={huddleSetupOpen}
               agents={state.agents}
               live={live}
+              idle={Boolean(meta?.idle)}
               startedToday={state.huddleDay.day === new Date().toISOString().slice(0, 10) ? state.huddleDay.started : 0}
               limit={state.huddleLimit}
               onClose={() => setHuddleSetupOpen(false)}
@@ -612,7 +613,18 @@ export function App() {
           {meta?.runner === 'claude' && !meta.liveReady && route.kind !== 'account' && (
             <div className="banner danger main-error" role="alert">
               <span className="grow">
-                <strong>No Claude login.</strong> HQ is live, but desk runs fail until you sign in again, or restart HQ to go back to sim.
+                <strong>No Claude login.</strong> HQ is live, but desk runs fail until you sign in again.
+              </span>
+              <a className="btn btn-outline btn-sm" href="#/account">
+                Claude account
+              </a>
+            </div>
+          )}
+          {/* Idle: HQ can't go live, and these projects are real, so no sim either: desks just wait. */}
+          {meta?.idle && !meta.restartToGoLive && route.kind !== 'account' && (
+            <div className="banner danger main-error" role="alert">
+              <span className="grow">
+                <strong>Not live.</strong> HQ has no Claude login to run desks on, so they are idle, and there is no sim in your projects. {goLiveHint(meta)}
               </span>
               <a className="btn btn-outline btn-sm" href="#/account">
                 Claude account
@@ -629,7 +641,7 @@ export function App() {
               </a>
             </div>
           )}
-          {!live && meta && !meta.restartToGoLive && route.kind === 'project' && view === 'needs-you' && (
+          {!live && meta && !meta.idle && !meta.restartToGoLive && route.kind === 'project' && view === 'needs-you' && (
             <p className="sim-note muted small">
               Sim mode: fake activity, no Claude calls. {goLiveHint(meta)}
               {!meta.simByEnv && (

@@ -25,6 +25,7 @@
     "test:auto": "tsx server/autopilot.test.ts",
     "test:delete": "tsx server/delete.test.ts",
     "test:account": "tsx server/account.test.ts",
+    "test:idle": "tsx server/idle.test.ts",
     "office:sync": "node scripts/office-sync.mjs"
   },
   "dependencies": {

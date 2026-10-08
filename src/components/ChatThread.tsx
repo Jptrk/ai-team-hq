@@ -42,7 +42,7 @@ export function ChatThread({ pid, thread, state, onBack, onOpenTicket, onChanged
   const nearBottom = useRef(true);
   const agents = state.agents;
   const item = thread.itemId ? state.items.find((i) => i.id === thread.itemId) : undefined;
-  const sim = state.meta.runner === 'sim';
+  const sim = state.meta.runner === 'sim' && !state.meta.idle;
 
   const load = useCallback(async () => {
     try {

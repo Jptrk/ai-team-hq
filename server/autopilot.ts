@@ -130,6 +130,9 @@ const START_WORDS: Partial<Record<RunReason, string>> = {
   auto: "Autopilot's start",
 };
 
+/** What a start is held for: a gate (Hold), or login while HQ is idle without a Claude login to run on. */
+export type HeldFor = Pick<Hold, 'text'> & { kind: Hold['kind'] | 'login' };
+
 /** A hold's words inside a sentence: Claude's limit texts are sentences of their own, so their full stop goes. */
 export function holdWords(hold: Pick<Hold, 'text'>): string {
   return hold.text.replace(/\.\s*$/, '');
@@ -139,19 +142,24 @@ export function holdWords(hold: Pick<Hold, 'text'>): string {
  * Hold a start the team made for this ticket. Held again for the same start, it keeps its place in line and its
  * history line. at: when it was first held, kept when a released start is held again.
  */
-export function holdItem(item: WorkItem, reason: RunReason, hold: Hold, restarts?: number, at?: string): void {
+export function holdItem(item: WorkItem, reason: RunReason, hold: HeldFor, restarts?: number, at?: string): void {
   const same = item.autoHold?.reason === reason;
   item.autoHold = { reason, at: at ?? (same ? item.autoHold!.at : now()), why: hold.kind, ...(restarts ? { restarts } : {}) };
   if (!same && !at) item.history.push({ ts: now(), text: `Held ${START_WORDS[reason] ?? 'a run'}: ${holdWords(hold)}. It starts when that clears.` });
 }
 
 /** Hold a chat wake. The thread says why it waits, once per desk per thread. A desk mid-reply here keeps showing as replying. */
-export function holdWake(p: Project, t: Thread, agentId: string, hold: Hold, restarts?: number): void {
+export function holdWake(p: Project, t: Thread, agentId: string, hold: HeldFor, restarts?: number, mine = false): void {
   const s = p.state;
   const replying = s.runs.some((r) => r.status === 'running' && r.reason === 'message' && r.threadId === t.id && r.agentId === agentId);
   if (!replying) clearWaiting(t, agentId);
-  if (s.auto.heldWakes.some((w) => w.threadId === t.id && w.agentId === agentId)) return;
-  s.auto.heldWakes.push({ threadId: t.id, agentId, at: now(), why: hold.kind, ...(restarts ? { restarts } : {}) });
+  const held = s.auto.heldWakes.find((w) => w.threadId === t.id && w.agentId === agentId);
+  // Already held here, and said so. Yours now when you wrote while HQ was idle.
+  if (held) {
+    if (mine) Object.assign(held, { mine: true as const, why: hold.kind });
+    return;
+  }
+  s.auto.heldWakes.push({ threadId: t.id, agentId, at: now(), why: hold.kind, ...(restarts ? { restarts } : {}), ...(mine ? { mine: true as const } : {}) });
   const name = s.agents.find((a) => a.id === agentId)?.name ?? agentId;
   note(s, t, `${name} sees this once it clears: ${holdWords(hold)}.`);
 }

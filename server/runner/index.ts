@@ -1,10 +1,10 @@
-import type { Agent, Attachment, ItemStatus, Meta, Run, RunReason, RunnerName } from '../../shared/types';
+import type { Agent, Attachment, ItemStatus, Meta, Run, RunReason, RunnerName, WorkItem } from '../../shared/types';
 import { refreshStatuses, settleInstructions } from '../agents';
 import { clearWaiting, findThread, markRead, needsWake, note, pauseForFailure, unreadFor } from '../chat';
 import { rewindCursor } from '../cursor';
-import { unansweredImages } from '../comments';
+import { unansweredComment, unansweredImages } from '../comments';
 import { hasClaudeLogin } from '../claudeAuth';
-import { autoGate, countCost, countStart, heldCount, holdItem, holdWake, holdWords, noteAutoFailure, noteAutoSuccess, pauseInfo, pickStarts, queuedAuto, usageHoldExpired, usageHoldFrom } from '../autopilot';
+import { autoGate, countCost, countStart, globalHold, heldCount, holdItem, holdWake, holdWords, noteAutoFailure, noteAutoSuccess, pauseInfo, pickStarts, queuedAuto, usageHoldExpired, usageHoldFrom, type HeldFor } from '../autopilot';
 import { clearSignoff, qaDeskOf, queuedQaRun, rerouteQa } from '../qa';
 import { setPaused, settings, setUsageHold } from '../settings';
 import { allProjects, now, uid, type Project } from '../store';
@@ -50,21 +50,71 @@ export function pickRunner(o: { explicit?: string; hasKey: boolean; optIn: boole
   return (o.optIn || o.explicit === 'claude') && o.auth !== 'none' ? 'claude' : 'sim';
 }
 
+/**
+ * HQ can't go live (no login, or you turned the Claude login off), but these projects are real: you said yes to the
+ * login, or HQ has gone live here before (wentLive, which signing out never clears). It doesn't fall back to the sim,
+ * which fakes work inside every project (tickets, Needs you items, chat, activity). Desks stay idle until HQ can go
+ * live. Only HQ_RUNNER=sim runs the sim then. Pure: exported for tests.
+ */
+export function pickIdle(o: { runner: RunnerName; explicit?: string; optIn: boolean; wentLive: boolean }): boolean {
+  return o.runner === 'sim' && o.explicit !== 'sim' && (o.optIn || o.explicit === 'claude' || o.wentLive);
+}
+
 let chosen: RunnerName | null = null;
+let idle = false;
 
 /** Picked once, at the first ask (boot): the sim, the demo seed and Autopilot's sweep are set up for one mode. */
 export function runnerName(): RunnerName {
   if (chosen) return chosen;
   const optIn = loginOptIn();
   chosen = pickRunner({ explicit, hasKey, optIn, auth: authSource() });
+  idle = pickIdle({ runner: chosen, explicit, optIn, wentLive: Boolean(settings().wentLive) });
   if (explicit !== 'sim' && !hasKey && optIn) {
     console.warn(
       chosen === 'claude'
         ? '[hq] No ANTHROPIC_API_KEY. Agents will run on the Claude login on this machine and spend that subscription’s usage.'
-        : "[hq] Live mode is on but there is no ANTHROPIC_API_KEY and no Claude login. Falling back to sim. Sign in from HQ's Claude account page.",
+        : "[hq] Live mode is on but there is no ANTHROPIC_API_KEY and no Claude login. Desks stay idle (no sim: it would fake work in your projects). Sign in from HQ's Claude account page, then restart HQ.",
     );
   }
   return chosen;
+}
+
+/** Picked with the runner: no login to go live on, and no sim either (see pickIdle). */
+export function isIdle(): boolean {
+  return !testRunner && runnerName() === 'sim' && idle;
+}
+
+/** Tests only: act as an idle HQ (see pickIdle), which a test process can't otherwise reach after its runner is picked. */
+export function setIdleForTests(on: boolean): void {
+  idle = on;
+}
+
+/** Idle: what you start waits on its ticket or thread, as held work does, and begins once HQ is live (releaseHolds). */
+const LOGIN_HOLD: HeldFor = { kind: 'login', text: 'HQ has no Claude login to run desks on' };
+
+/** Why a run can't start now: idle, or sim. */
+export function notLiveText(): string {
+  return isIdle()
+    ? "HQ has no Claude login to run desks on. On HQ's Claude account page, sign in and turn on Run desks on my Claude login, then restart HQ."
+    : "Live runner is off. Go live from HQ's Claude account page.";
+}
+
+/**
+ * Idle: your start waits on its ticket with what you gave it, and starts as your own click once HQ is live
+ * (releaseYours). A comment answer never takes the place of a held start of yours for the work: the answer follows it.
+ */
+function holdYours(item: WorkItem, reason: RunReason, note: string | undefined, images: Attachment[], includeNotes: boolean): void {
+  if (reason === 'comment' && item.autoHold?.mine) return;
+  // The same start again (say, a second Instruct): your latest note and images, or the earlier ones when it has none.
+  const prev = item.autoHold?.mine && item.autoHold.reason === reason ? item.autoHold : undefined;
+  holdItem(item, reason, LOGIN_HOLD);
+  const hold = item.autoHold!;
+  hold.mine = true;
+  const keptNote = note || prev?.note;
+  const keptImages = images.length ? images : (prev?.images ?? []);
+  if (keptNote) hold.note = keptNote;
+  if (keptImages.length) hold.images = keptImages;
+  if (includeNotes || prev?.notes) hold.notes = true;
 }
 
 /** You signed in from HQ while it runs in sim: the next start is live. */
@@ -94,6 +144,7 @@ export function meta(): Meta {
     restartToGoLive: restartToGoLive(),
     simByEnv: explicit === 'sim',
     optedIn: loginOptIn(),
+    idle: isIdle(),
   };
 }
 
@@ -278,14 +329,19 @@ export interface KickoffOptions {
   heldAt?: string;
 }
 
-/** Queue a run for the ticket's owner, or for the QA desk when reason is 'qa'. No-op in sim mode. Returns the Run, or null (also when held). */
+/** Queue a run for the ticket's owner, or for the QA desk when reason is 'qa'. No-op in sim mode; held while idle. Returns the Run, or null (also when held). */
 export function kickoff(p: Project, itemId: string, reason: RunReason, note?: string, images: Attachment[] = [], opts: KickoffOptions = {}): Run | null {
-  if (!isLive()) return null;
+  if (!isLive() && !isIdle()) return null;
   const s = p.state;
   const item = s.items.find((i) => i.id === itemId);
   if (!item) return null;
   const agent = reason === 'qa' ? qaDeskOf(s) : s.agents.find((a) => a.id === item.assignee);
   if (!agent || agent.isHuman) return null;
+  if (!isLive()) {
+    holdYours(item, reason, note, images, Boolean(opts.includeNotes));
+    p.commit();
+    return null;
+  }
   // One waiting QA check per ticket. A running one is not reused: it may be checking an older round, and its verdict will be refused.
   if (reason === 'qa') {
     const queued = queuedQaRun(s, item.id);
@@ -453,12 +509,17 @@ export interface DeliverOptions {
 export function deliver(p: Project, threadId: string, ids: string[], opts: DeliverOptions = {}): Run[] {
   const s = p.state;
   const t = findThread(s, threadId);
-  if (!t || !isLive()) return [];
+  if (!t || (!isLive() && !isIdle())) return [];
   const queued: Run[] = [];
   for (const id of ids) {
     const agent = s.agents.find((a) => a.id === id && !a.isHuman);
     if (!agent || t.status === 'closed') {
       clearWaiting(t, id);
+      continue;
+    }
+    // Idle: your message waits like a held wake (one note per desk per thread), and the desk answers once HQ is live.
+    if (!isLive()) {
+      if (needsWake(s, t, id)) holdWake(p, t, id, LOGIN_HOLD, undefined, true);
       continue;
     }
     if (!opts.auto) {
@@ -553,16 +614,65 @@ export function holdQueued(p: Project): number {
   return n;
 }
 
+const oldestHold = (a: WorkItem, b: WorkItem) => a.autoHold!.at.localeCompare(b.autoHold!.at) || (a.number ?? 0) - (b.number ?? 0);
+
+/**
+ * Starts what you gave while HQ was idle, oldest first, as your own clicks: a project's daily limits don't hold them,
+ * only HQ's Pause or Claude's usage or account hold, and then each says that is what it waits for. Starts that no longer
+ * fit their ticket are dropped; a comment of yours a later start took the place of is answered after it.
+ */
+function releaseYours(p: Project): number {
+  const s = p.state;
+  const gate = globalHold();
+  let n = 0;
+  let touched = false;
+  for (const item of s.items.filter((i) => i.autoHold?.mine).sort(oldestHold)) {
+    const hold = item.autoHold!;
+    if (gate) {
+      touched ||= hold.why !== gate.kind;
+      hold.why = gate.kind;
+      continue;
+    }
+    touched = true;
+    delete item.autoHold;
+    const moot = mootRun(hold.reason, item.status);
+    if (moot) {
+      item.history.push({ ts: now(), text: `Dropped a held start: ${moot}` });
+      continue;
+    }
+    if (kickoff(p, item.id, hold.reason, hold.note, hold.images ?? [], { includeNotes: hold.notes })) n++;
+    if (hold.reason !== 'comment' && unansweredComment(item, item.assignee)) kickoff(p, item.id, 'comment');
+  }
+  for (const wake of s.auto.heldWakes.filter((w) => w.mine).sort((a, b) => a.at.localeCompare(b.at))) {
+    if (gate) {
+      touched ||= wake.why !== gate.kind;
+      wake.why = gate.kind;
+      continue;
+    }
+    const thread = findThread(s, wake.threadId);
+    // A paused thread keeps its held wake until it is open again; a closed one drops it.
+    if (thread?.status === 'paused') continue;
+    touched = true;
+    s.auto.heldWakes = s.auto.heldWakes.filter((w) => w !== wake);
+    if (!thread || thread.status === 'closed') continue;
+    if (unreadFor(s, thread, wake.agentId).addressed.length === 0) continue;
+    n += deliver(p, thread.id, [wake.agentId]).length;
+  }
+  if (touched) p.commit();
+  return n;
+}
+
 /**
  * Starts what was held here, oldest first, while the gate stays open: ticket starts (again through kickoff, so a
  * gate that closes midway holds the rest again) and chat wakes. Starts that no longer fit their ticket are dropped.
  */
 export function releaseHolds(p: Project): number {
-  if (!isLive() || autoGate(p)) return 0;
+  if (!isLive()) return 0;
   const s = p.state;
-  let n = 0;
+  let n = releaseYours(p);
+  if (autoGate(p)) return n;
   // Oldest hold first; held in the same moment, the older ticket first (items are stored newest first).
-  const items = s.items.filter((i) => i.autoHold).sort((a, b) => a.autoHold!.at.localeCompare(b.autoHold!.at) || (a.number ?? 0) - (b.number ?? 0));
+  const items = s.items.filter((i) => i.autoHold && !i.autoHold.mine).sort(oldestHold);
   for (const item of items) {
     // Counting what is already queued, so a start is only taken off hold when it can really start.
     if (autoGate(p, Date.now(), queuedAuto(p))) break;
@@ -588,6 +698,7 @@ export function releaseHolds(p: Project): number {
     if (kickoff(p, item.id, hold.reason, undefined, [], { auto: true, restarts: hold.restarts, heldAt: hold.at })) n++;
   }
   for (const wake of [...s.auto.heldWakes].sort((a, b) => a.at.localeCompare(b.at))) {
+    if (wake.mine) continue;
     if (autoGate(p, Date.now(), queuedAuto(p))) break;
     const thread = findThread(s, wake.threadId);
     // A paused thread keeps its held wake until it is open again; a closed one drops it.

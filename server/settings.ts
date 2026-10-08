@@ -15,6 +15,11 @@ export interface HqSettings {
   usageHold?: UsageHold;
   /** You signed in to your Claude account from HQ: desks run live on it from the next start, without HQ_RUNNER in .env. */
   claudeLogin?: { at: string };
+  /**
+   * HQ has gone live here once (or you said yes to the Claude login). Signing out never clears it: from then on the
+   * projects are real, so without a login HQ stays idle instead of running the sim, which fakes work in them.
+   */
+  wentLive?: { at: string };
 }
 
 export interface UsageHold {
@@ -43,6 +48,8 @@ export function parseSettings(raw: unknown): HqSettings {
   }
   const login = r.claudeLogin as { at?: unknown } | undefined;
   if (login && typeof login === 'object' && isTime(login.at)) out.claudeLogin = { at: login.at };
+  const went = r.wentLive as { at?: unknown } | undefined;
+  if (went && typeof went === 'object' && isTime(went.at)) out.wentLive = { at: went.at };
   return out;
 }
 
@@ -86,9 +93,17 @@ export function setPaused(on: boolean, at = new Date().toISOString()): HqSetting
 /** You signed in to your Claude account from HQ (on), or signed out of it (off). */
 export function setClaudeLogin(on: boolean, at = new Date().toISOString()): HqSettings {
   const next: HqSettings = { ...settings() };
-  if (on) next.claudeLogin = { at };
-  else delete next.claudeLogin;
+  if (on) {
+    next.claudeLogin = { at };
+    next.wentLive ??= { at };
+  } else delete next.claudeLogin;
   return save(next);
+}
+
+/** HQ started live: noted once, and kept (see HqSettings.wentLive). */
+export function noteWentLive(at = new Date().toISOString()): HqSettings {
+  const s = settings();
+  return s.wentLive ? s : save({ ...s, wentLive: { at } });
 }
 
 /** Claude refused a run (or the hold cleared): automatic work waits while it lasts. */

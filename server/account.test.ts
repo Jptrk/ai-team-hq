@@ -28,6 +28,7 @@ const runner = await import('./runner/index');
 const { safeClaudeUrl, planLabel } = await import('../shared/account');
 // As at boot: no key, no login and no yes, so HQ picks sim, and keeps it while it runs.
 assert.equal(runner.runnerName(), 'sim');
+assert.equal(runner.isIdle(), false, 'no yes: the sim runs');
 
 const CREDS = path.join(configDir, '.credentials.json');
 const TOKEN = 'sk-ant-oat01-secret-access-token-value';
@@ -404,6 +405,22 @@ test('runner: HQ_RUNNER=sim always sim, a key is live, the Claude login only wit
     [{ hasKey: false, optIn: false, auth: 'none' }, 'sim'],
   ];
   for (const [input, want] of rows) assert.equal(runner.pickRunner(input), want, JSON.stringify(input));
+});
+
+test('idle: no login to go live on runs no sim in projects that are real (a yes, or HQ went live before)', () => {
+  const rows: [Parameters<typeof runner.pickIdle>[0], boolean][] = [
+    [{ runner: 'sim', explicit: 'claude', optIn: true, wentLive: false }, true],
+    [{ runner: 'sim', explicit: 'claude', optIn: false, wentLive: false }, true],
+    [{ runner: 'sim', optIn: true, wentLive: false }, true],
+    // Signed out from HQ (the yes is gone), or the switch turned off: HQ went live before, so still no sim.
+    [{ runner: 'sim', optIn: false, wentLive: true }, true],
+    [{ runner: 'sim', optIn: false, wentLive: false }, false],
+    [{ runner: 'sim', explicit: 'sim', optIn: true, wentLive: true }, false],
+    [{ runner: 'claude', explicit: 'claude', optIn: true, wentLive: true }, false],
+    [{ runner: 'claude', optIn: false, wentLive: false }, false],
+  ];
+  for (const [input, want] of rows) assert.equal(runner.pickIdle(input), want, JSON.stringify(input));
+  assert.equal(runner.meta().idle, false, 'picked at boot, with the runner');
 });
 
 test('opt-in: needs a login; then the next start is live, and the meta says restart', async () => {

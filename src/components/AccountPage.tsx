@@ -196,7 +196,13 @@ export function AccountPage({ notify, onChanged, meta }: Props) {
       )}
       {liveNoLogin && (
         <p className="banner danger account-error" role="status">
-          HQ is live but has no Claude login: desk runs fail and automatic work is held. Sign in again, or restart HQ to go back to sim.
+          HQ is live but has no Claude login: desk runs fail and automatic work is held. Sign in again.
+        </p>
+      )}
+      {data.idle && !data.restartToGoLive && (
+        <p className="banner danger account-error" role="status">
+          HQ has no Claude login to run desks on, so they are idle, and there is no sim in your projects.{' '}
+          {signedIn ? 'Turn on Run desks on my Claude login below, then restart HQ.' : 'Sign in below, then restart HQ.'}
         </p>
       )}
 
@@ -321,7 +327,7 @@ export function AccountPage({ notify, onChanged, meta }: Props) {
         )}
         {backToSim && (
           <p className="banner" role="status">
-            Desks keep running on the login until HQ restarts; then it goes back to sim.
+            Desks keep running on the login until HQ restarts; then they stay idle until you turn it back on.
           </p>
         )}
         {live && data.optedIn && !data.apiKey && signedIn && (

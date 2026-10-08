@@ -1,5 +1,5 @@
 import { deriveActivities, startsFrom, withSince, type AgentActivity, type ToolKind } from '../shared/activity';
-import { isLive } from './runner';
+import { isIdle, isLive } from './runner';
 import { lastTools } from './runner/liveTools';
 import { now, type Project } from './store';
 
@@ -27,7 +27,7 @@ export function officeState(p: Project): Record<string, AgentActivity> {
   const running = new Set(s.runs.filter((r) => r.status === 'running').map((r) => r.id));
   const input = { agents: s.agents, items: s.items, runs: s.runs, threads: s.threads, huddles: s.huddles, lastTool: lastTools(running) };
   const derived = deriveActivities(input);
-  if (!isLive()) {
+  if (!isLive() && !isIdle()) {
     const sim = simTools(p);
     for (const [id, d] of Object.entries(derived)) if (d.activity === 'working' && sim[`sim:${id}`] === 'code') d.activity = 'coding';
   }

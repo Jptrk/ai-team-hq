@@ -111,6 +111,26 @@ function stateFile(id: string): string {
   return path.join(PROJECTS_DIR, id, 'db.json');
 }
 
+/**
+ * Some project has desk runs on record, so HQ has run live here (the sim and the seeds never make runs). Read from
+ * disk before initStore, for installs from before HQ kept settings.wentLive.
+ */
+export function deskRunsOnDisk(): boolean {
+  try {
+    const r = JSON.parse(fs.readFileSync(REGISTRY_FILE, 'utf8')) as Partial<Registry>;
+    return (r.projects ?? []).some((m) => {
+      try {
+        const runs = (JSON.parse(fs.readFileSync(stateFile(m.id), 'utf8')) as Partial<State>).runs;
+        return Array.isArray(runs) && runs.length > 0;
+      } catch {
+        return false;
+      }
+    });
+  } catch {
+    return false;
+  }
+}
+
 /** data/projects/<id>: the project's db.json and its attachments/ folder. Archived with the project. */
 export function projectDataDir(id: string): string {
   return path.join(PROJECTS_DIR, id);

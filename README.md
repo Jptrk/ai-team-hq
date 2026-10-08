@@ -5,12 +5,24 @@ project has an inbox of decisions that need you, a team list, a kanban board wit
 ticket keys, and a pixel office where each agent sits at a desk. Link a project to a folder
 on disk and its team can read that codebase.
 
-Two modes:
+Two modes, and a state between them:
 
 | Mode | What runs | Needs |
 | ---- | --------- | ----- |
 | **sim** (default) | Fake activity on a timer. Good for looking at the UI. | nothing |
 | **live** | Each desk is a real Claude agent (Claude Agent SDK) with its own workspace folder. | your Claude account (sign in from HQ) or an API key |
+| **not live** (idle) | Nothing. HQ can't go live, but your projects are real, so it runs no sim in them. What you start waits and begins once HQ is live. | |
+
+**Not live** is what HQ starts in when there is no Claude login to run on (and no API key), but you said
+yes to the login (`HQ_RUNNER=claude`, or signing in from HQ) or HQ has gone live here before (`wentLive`
+in `data/settings.json`, or desk runs on record in any project). Signing
+out never brings the sim back: it fakes tickets, Needs you items, chat replies and activity in every
+project, which is only fine for a demo. `HQ_RUNNER=sim` in `.env` is the one way back to sim then.
+The header pill says **Not live**, a banner says what to do (sign in, or turn the switch on, then restart
+HQ), and huddles don't start. Instructions, approvals, comments and chat messages wait on their ticket or
+thread ("HQ has no Claude login to run desks on"), keeping your note, images and team-notes choice, and
+start by themselves once HQ restarts live. They start as your own clicks: a project's daily limits don't
+hold them, only Pause (they wait for **Resume**, and say so) or Claude's usage limit.
 
 ## Run it
 
@@ -36,7 +48,7 @@ Then open http://127.0.0.1:4747.
 
 ## Layout
 
-Jira-inspired, not a copy. An olive top bar holds search, **+ Create**, the Sim/Live pill, the
+Jira-inspired, not a copy. An olive top bar holds search, **+ Create**, the Sim/Live pill (Not live when idle), the
 theme toggle and your menu. A left sidebar holds the project switcher and the views:
 
 | View | What it is |
@@ -844,7 +856,7 @@ The easy way, with your Claude subscription (Pro, Max, Team or Enterprise), no A
    The header pill turns green: `LIVE · claude-opus-5`.
 
 Going live keeps what sim made in the projects you already have (demo tickets, chat and activity).
-For a clean board, create a new project, or reset one (`POST /api/projects/:pid/reset`, empty when live).
+For a clean board, create a new project, or reset one (`POST /api/projects/:pid/reset`, empty when live or not live).
 
 If the page says **Sign in with Claude Code in a terminal (claude auth login), then turn on Run desks
 on my Claude login here**, this Agent SDK can't sign in from HQ (or Claude Code gave no sign-in
@@ -870,7 +882,8 @@ with your subscription.
 
 **Signing out while live.** HQ picked live at start, so it stays live, and desk runs fail without a
 login. The first failure puts HQ on an account hold (**Account problem** in the header): automatic
-work waits. Sign in again on the Claude account page, then press **Resume**. Or restart HQ to go back to sim.
+work waits. Sign in again on the Claude account page, then press **Resume**. A restart without a login
+starts HQ **not live** (no sim, see above).
 
 How signing in works (`server/claudeAuth.ts`):
 
@@ -885,7 +898,8 @@ How signing in works (`server/claudeAuth.ts`):
 - The sign-in counts once HQ has asked `claude auth status` again and sees the login; a wait that ends
   with no login saved fails instead.
 - Signing in from HQ (or the switch) saves `claudeLogin` in `data/settings.json`: desks may run on the
-  login. HQ picks sim or live once, at start, so it shows **Restart HQ to go live** until you restart.
+  login, and `wentLive`, which nothing clears (HQ notes it too each time it starts live). HQ picks sim,
+  live or not live once, at start, so it shows **Restart HQ to go live** until you restart.
   `HQ_RUNNER=sim` in `.env` always keeps sim; `HQ_RUNNER=claude` locks the switch on.
 - **Sign out** runs `claude auth logout`: it signs out every Claude Code on this PC, not just HQ, and
   turns the switch off. Switching account replaces the login for all of them too.
@@ -1062,11 +1076,13 @@ npm run test:timeouts
 npm run test:auto
 npm run test:delete
 npm run test:account
+npm run test:idle
 ```
 
 - **`test:guard`** checks what an agent may read and write in its workspace and the linked folder. It also checks which MCP tools run freely, need approval, or are refused.
 - **`test:chat`** checks the chat core: recipients, the loop limit, resume and settle.
-- **`test:account`** checks signing in to your Claude account with a stand-in Claude Code: the pages shown (Claude's own sites only), the pasted code (and a code the browser beat to it), cancel and every way a sign-in can end, no token or code in any answer, that a poll never sees a sign-in that worked as signed out, that checks share one Claude Code run and only HQ's own page can force one, how HQ picks sim or live, the switch and the restart hint, and sign-out. Your real login is never touched.
+- **`test:account`** checks signing in to your Claude account with a stand-in Claude Code: the pages shown (Claude's own sites only), the pasted code (and a code the browser beat to it), cancel and every way a sign-in can end, no token or code in any answer, that a poll never sees a sign-in that worked as signed out, that checks share one Claude Code run and only HQ's own page can force one, how HQ picks sim, live or not live, the switch and the restart hint, and sign-out. Your real login is never touched.
+- **`test:idle`** checks HQ not live: starts and chat messages you make wait (one note per desk per thread) and begin once HQ is live as your own clicks, with your note and images, past the daily limits but not a Pause; a held comment still gets its answer; huddles are refused; `wentLive` survives sign-out and is backfilled from desk runs on disk.
 - **`test:ui`** checks the UI helpers: routes, board columns and filter, search ranking, report link resolution, markdown previews, image sizing, and avatar text contrast.
 - **`test:office`** checks the office floor:
   - the approved v3 layout exactly, and growth from 1 to 12 desks
@@ -1144,9 +1160,9 @@ Everything project-specific lives under `/api/projects/:pid`.
 
 | Method | Path | Body / query |
 | ------ | ---- | ------------ |
-| GET    | /api/meta | includes `effort`: the level every desk run uses, or null for the model default; `paused`: why HQ holds automatic work (you, a usage limit, an account problem), or null; `held`: starts waiting; `restartToGoLive`: desks may run on your Claude login, but HQ started in sim; `optedIn`: desks may run on the Claude login; `simByEnv`: `HQ_RUNNER=sim` keeps HQ in sim |
+| GET    | /api/meta | includes `effort`: the level every desk run uses, or null for the model default; `paused`: why HQ holds automatic work (you, a usage limit, an account problem), or null; `held`: starts waiting; `restartToGoLive`: desks may run on your Claude login, but HQ started in sim; `optedIn`: desks may run on the Claude login; `simByEnv`: `HQ_RUNNER=sim` keeps HQ in sim; `idle`: HQ started not live (no login to run on, no sim) |
 | PATCH  | /api/settings | `{ effort?, paused? }`: effort is `low`, `medium`, `high`, `xhigh`, `max`, or null for the model default; `paused: true` pauses everything the team starts on its own, `false` resumes (your Pause first, then a usage hold). For all of HQ; answers with the new meta |
-| GET    | /api/account | your Claude account: `{ account: { loggedIn, method, email, org, plan } \| null, login?, signedInAt?, apiKey, envToken, optedIn, optInByEnv, runner, restartToGoLive, simByEnv }`. `signedInAt`: when the last sign-in from HQ worked; `envToken`: `CLAUDE_CODE_OAUTH_TOKEN` is set. `?check=1` asks Claude Code again, only with a JSON content type (HQ's own page; another site's `<img>` can't); otherwise an answer up to 30 s old, or the check already running. Never a token |
+| GET    | /api/account | your Claude account: `{ account: { loggedIn, method, email, org, plan } \| null, login?, signedInAt?, apiKey, envToken, optedIn, optInByEnv, runner, restartToGoLive, simByEnv, idle }`. `signedInAt`: when the last sign-in from HQ worked; `envToken`: `CLAUDE_CODE_OAUTH_TOKEN` is set. `?check=1` asks Claude Code again, only with a JSON content type (HQ's own page; another site's `<img>` can't); otherwise an answer up to 30 s old, or the check already running. Never a token |
 | POST   | /api/account/login | 202: starts signing in; `login.authUrl` (and `login.manualUrl`) once Claude Code has the page. 409 while one runs |
 | POST   | /api/account/login/code | `{ code }`: the `code#state` the second sign-in page showed. Answers once signed in, also when the browser finished the same sign-in first |
 | DELETE | /api/account/login | cancel the sign-in, or dismiss a failed one |

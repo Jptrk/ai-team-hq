@@ -6,3 +6,4 @@
 - [Account sign-in review checks](account-signin-review-checks.md) — status cache vs forced re-check, vanishing page errors, frozen runner on macOS, creds file unreadable
 - [Desk identity review checks](desk-identity-review-checks.md) — ids reused after reset/rename inherit stale workspace ROLE.md/memory.md; founder-name clashes
 - [MCP guard review checks](mcp-guard-review-checks.md) — deny-side key heuristics reused for allow decisions, CODE_DELETES gaps, which deny reason a test hits
+- [Runner mode review checks](runner-mode-review-checks.md) — sim/idle/live: HQ sign-out clears the yes, stranded work when not live, stale sim copy/README

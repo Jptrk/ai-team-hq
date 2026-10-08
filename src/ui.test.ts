@@ -661,6 +661,7 @@ test('skill groups: which are open, saved per browser', () => {
 test('header pill: sim, live with the model, and the effort only when set', () => {
   assert.equal(runnerLabel({ runner: 'sim', model: 'claude-opus-5' }), 'Sim');
   assert.equal(runnerLabel({ runner: 'claude', model: 'claude-opus-5' }), 'Live · claude-opus-5');
+  assert.equal(runnerLabel({ runner: 'sim', model: 'claude-opus-5', idle: true }), 'Not live');
   assert.equal(effortLabel({ runner: 'sim', effort: 'high' }), '');
   assert.equal(effortLabel({ runner: 'claude', effort: null }), '');
   assert.equal(effortLabel({ runner: 'claude', effort: 'xhigh' }), ' · extra high effort');

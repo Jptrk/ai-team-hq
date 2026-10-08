@@ -205,13 +205,15 @@ function StatusPill({ meta, onMeta, onAccount }: { meta: Meta | null; onMeta: (m
       </button>
       {pop.open && (
         <div className="popover status-popover" role="dialog" aria-label="Runner status">
-          <p className="popover-title">{live ? 'Live agents' : 'Sim mode'}</p>
+          <p className="popover-title">{live ? 'Live agents' : meta.idle ? 'Not live' : 'Sim mode'}</p>
           <p className="muted small">
             {live
               ? meta.auth === 'none'
                 ? 'HQ is live, but there is no Claude login on this PC, so desk runs fail. Sign in again on the Claude account page.'
                 : `Each instruction starts a real Claude run on ${meta.auth === 'api-key' ? 'your API key' : 'your Claude login'}. Nothing leaves the building without your approval, except changes on a connection you set to Auto.`
-              : `Fake activity, no Claude calls. ${goLiveHint(meta)}`}
+              : meta.idle
+                ? `HQ has no Claude login to run desks on, so they are idle, and there is no sim in your projects. ${goLiveHint(meta)}`
+                : `Fake activity, no Claude calls. ${goLiveHint(meta)}`}
           </p>
           <button
             type="button"

@@ -11,6 +11,8 @@ interface Props {
   open: boolean;
   agents: Agent[];
   live: boolean;
+  /** HQ has no Claude login to run on, and no sim: desks can't huddle. */
+  idle?: boolean;
   /** Huddles started today, and the daily limit. */
   startedToday: number;
   limit: number;
@@ -33,7 +35,7 @@ function defaultDesks(agents: Agent[]): string[] {
 }
 
 /** Start a huddle: what kind, about what, with whom, for how many rounds. Shows what it will cost before it starts. */
-export function HuddleSetup({ open, agents, live, startedToday, limit, onClose, onStart }: Props) {
+export function HuddleSetup({ open, agents, live, idle = false, startedToday, limit, onClose, onStart }: Props) {
   const [kind, setKind] = useState<HuddleKind>('retro');
   const [topic, setTopic] = useState('');
   const [picked, setPicked] = useState<string[]>([]);
@@ -61,7 +63,7 @@ export function HuddleSetup({ open, agents, live, startedToday, limit, onClose, 
   const left = Math.max(0, limit - startedToday);
   const topicOk = topic.trim().length >= 3 && topic.length <= MAX_HUDDLE_TOPIC;
   const countOk = picked.length >= MIN_HUDDLE_DESKS && picked.length <= MAX_HUDDLE_DESKS;
-  const canStart = topicOk && countOk && left > 0 && !busy;
+  const canStart = topicOk && countOk && left > 0 && !busy && !idle;
 
   const toggle = (id: string) => setPicked((list) => (list.includes(id) ? list.filter((x) => x !== id) : [...list, id]));
 
@@ -166,7 +168,11 @@ export function HuddleSetup({ open, agents, live, startedToday, limit, onClose, 
           </strong>
           <span>
             {picked.length} desk{picked.length === 1 ? '' : 's'} × {rounds} round{rounds === 1 ? '' : 's'}, plus {rounds} summar{rounds === 1 ? 'y' : 'ies'}.{' '}
-            {live ? 'Each run is short (a few turns) and spends your Claude usage.' : 'Sim mode: canned replies, no Claude calls.'}
+            {live
+              ? 'Each run is short (a few turns) and spends your Claude usage.'
+              : idle
+                ? "HQ has no Claude login, so desks can't huddle. On the Claude account page, sign in and turn on Run desks on my Claude login, then restart HQ."
+                : 'Sim mode: canned replies, no Claude calls.'}
           </span>
           <span className="muted">
             {limit <= 0 ? 'Huddles are turned off (HQ_HUDDLES_PER_DAY=0).' : left > 0 ? `${left} of ${limit} huddles left today.` : `No huddles left today (limit ${limit}).`}

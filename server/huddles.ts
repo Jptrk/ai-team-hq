@@ -16,7 +16,7 @@ import {
   type ContributionArgs,
   type SummaryArgs,
 } from './huddle-core';
-import { cancelRun, isLive, runHuddleDesk, type HuddleTurn } from './runner';
+import { cancelRun, isIdle, isLive, runHuddleDesk, type HuddleTurn } from './runner';
 import { now, uid, type Project } from './store';
 
 /**
@@ -34,6 +34,9 @@ const driving = new Set<string>();
 const stops = new Map<string, number>();
 
 const nameOf = (p: Project, id: string) => p.state.agents.find((a) => a.id === id)?.name ?? id;
+
+/** Idle (no Claude login, and no sim): desks can't take a turn, and canned ones would land in a real project. */
+const NO_LOGIN = "HQ has no Claude login, so desks can't huddle. On HQ's Claude account page, sign in and turn on Run desks on my Claude login, then restart HQ.";
 
 /** Start the drive loop. A throw in it must not take the server down: log it and stop the huddle as failed. */
 function launch(p: Project, id: string, turn: TurnFn): void {
@@ -57,6 +60,7 @@ export function startHuddle(p: Project, raw: unknown, turn: TurnFn = deskTurn): 
   if (busy) return { error: `${huddleLabel(busy)} is still going. Wait for it or stop it first.`, status: 409 };
   const capped = canStartToday(s);
   if (capped) return { error: capped, status: 429 };
+  if (turn === deskTurn && isIdle()) return { error: NO_LOGIN, status: 409 };
   const h = createHuddle(s, checked.input, checked.facilitator);
   p.log('you', `Started ${huddleLabel(h)} "${h.topic.slice(0, 80)}" with ${h.participants.map((id) => nameOf(p, id)).join(', ')}`);
   p.commit();
@@ -85,6 +89,7 @@ export function resumeHuddleRun(p: Project, id: string, turn: TurnFn = deskTurn)
   if (!h) return 'huddle not found';
   const busy = s.huddles.find((x) => x.status === 'running' && x.id !== id);
   if (busy) return `${huddleLabel(busy)} is still going. Wait for it or stop it first.`;
+  if (turn === deskTurn && isIdle()) return NO_LOGIN;
   const why = reopenHuddle(s, h);
   if (why) return why;
   p.log('you', `Resumed ${huddleLabel(h)}`);

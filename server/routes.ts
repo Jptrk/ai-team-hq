@@ -46,7 +46,7 @@ import { autoGate, autoStatus, haltedHold, resumeProject } from './autopilot';
 import { setEffort } from './settings';
 import { cancelPreview, changeSkillDesks, installSkills, listLibrary, previewSkills, projectSkills, removeSkill, setScriptsAllowed, setSkillDesks, SkillError } from './skills';
 import { officeState } from './office';
-import { autoTick, cancelRun, deliver, isLive, kickoff, loginOptIn, meta, mootRun, pauseAll, restartToGoLive, resumeAll } from './runner';
+import { autoTick, cancelRun, deliver, isIdle, isLive, kickoff, loginOptIn, meta, mootRun, notLiveText, pauseAll, restartToGoLive, resumeAll } from './runner';
 import {
   allProjects,
   archiveProject,
@@ -230,6 +230,7 @@ function accountResponse(): AccountResponse {
     runner: meta().runner,
     restartToGoLive: restartToGoLive(),
     simByEnv: process.env.HQ_RUNNER === 'sim',
+    idle: isIdle(),
   };
 }
 
@@ -834,7 +835,7 @@ project.post('/items/:id/attachments', (req, res) => {
 /** Put the assignee on a ticket right now (live mode only). */
 project.post('/items/:id/run', (req, res) => {
   const p = P(res);
-  if (!isLive()) return res.status(409).json({ error: "Live runner is off. Go live from HQ's Claude account page." });
+  if (!isLive()) return res.status(409).json({ error: notLiveText() });
   const item = p.state.items.find((i) => i.id === req.params.id);
   if (!item) return res.status(404).json({ error: 'item not found' });
   // A ticket in QA gets its check again; anything else goes to its owner.
@@ -1186,6 +1187,6 @@ project.get('/workspaces/:agent/report', (req, res) => {
 project.post('/reset', (req, res) => {
   const p = P(res);
   if (p.state.agents.some((a) => a.running)) return res.status(409).json({ error: 'Agents are still running' });
-  const empty = req.query.empty === '1' || (req.query.empty === undefined && isLive());
+  const empty = req.query.empty === '1' || (req.query.empty === undefined && (isLive() || isIdle()));
   res.json(resetProject(p.id, empty));
 });
