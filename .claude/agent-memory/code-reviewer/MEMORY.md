@@ -10,3 +10,4 @@
 - [GPT desk review checks](gpt-desk-review-checks.md) — Windows .git./key. aliases past guard, Stop races, codex.exe probes, per-project model holds
 - [GPT connections review checks](gpt-connections-review-checks.md) — MCP approval matching on Codex, connection env leaking into Codex, `hq`-named server, header var collisions
 - [Project removal fs checks](project-removal-fs-checks.md) — Node 24 cpSync follows junctions/crashes on cycles, rmSync no EPERM retry, stale Project after id reuse
+- [Login review checks](login-review-checks.md) — /API case bypass of requestGuard, loopback-only limiter is global, await-gap login races, port-shared cookies

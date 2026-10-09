@@ -5,7 +5,7 @@ metadata:
   type: feedback
 ---
 
-When fixing review findings in ai-team-hq, never start the dev/API servers, never call MCP tools, and never run anything that reaches a model. Verify with `npx tsc --noEmit -p .` and the `npm run test:*` suites (account, settings, timeouts, ui, mcp, guard, auto, chat, attachments); for extra checks, write throwaway tsx scripts in the session scratchpad that import pure helpers.
+When fixing review findings in ai-team-hq, never start the dev/API servers, never call MCP tools, and never run anything that reaches a model. Verify with `npx tsc --noEmit -p .` and the `npm run test:*` suites (auth, account, settings, timeouts, ui, mcp, guard, auto, chat, attachments; test:mcp holds the requestGuard cases); for extra checks, write throwaway tsx scripts in the session scratchpad that import pure helpers.
 
 **Why:** agent runs spend the founder's Claude subscription usage (see [[no-api-billing-subscription-only]]), and MCP actions post as the founder's own accounts.
 
