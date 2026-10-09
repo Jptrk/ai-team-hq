@@ -21,7 +21,8 @@ import './styles/views/editor.css';
 import './styles/views/huddles.css';
 import './styles/views/skills.css';
 import './styles/views/account.css';
-import { App } from './App';
+import './styles/views/auth.css';
+import { AuthGate } from './shell/AuthGate';
 
 // Load the rich text editor in the background, so the first text box you open is ready.
 const warm = () => void import('./editor/MarkdownEditor');
@@ -37,6 +38,6 @@ for (const type of ['dragover', 'drop'] as const) {
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    <AuthGate />
   </StrictMode>,
 );

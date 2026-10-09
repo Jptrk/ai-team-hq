@@ -7,6 +7,7 @@ import type { Notify } from '../hooks/useFlags';
 import { PageHeader } from '../shell/PageHeader';
 import { ConfirmInline, refocus } from '../ui/ConfirmInline';
 import { ChatGptAccount } from './ChatGptAccount';
+import { HqLoginCard } from './HqLoginCard';
 import { hostOf, timeLeft } from './connections/addForm';
 
 interface Props {
@@ -14,6 +15,8 @@ interface Props {
   /** The meta changed (opt-in, sign-in or sign-out): the header and banners follow. */
   onChanged: () => void;
   meta: Meta | null;
+  /** Who is logged in to HQ itself. */
+  loginName: string;
 }
 
 const msg = (e: unknown, fallback: string) => (e instanceof Error && e.message ? e.message : fallback);
@@ -55,7 +58,7 @@ interface ActionError {
  * say whether desks may run on it, and sign out. Claude Code does the sign-in; HQ only shows its page.
  * ChatGPT, for GPT desks, is its own section (ChatGptAccount).
  */
-export function AccountPage({ notify, onChanged, meta }: Props) {
+export function AccountPage({ notify, onChanged, meta, loginName }: Props) {
   const [data, setData] = useState<AccountResponse | null>(null);
   // Two kinds of error: a load that failed (the next good load clears it), and an action that failed
   // (it stays until you start another, so a poll can't wipe it).
@@ -153,6 +156,9 @@ export function AccountPage({ notify, onChanged, meta }: Props) {
     return (
       <section className="page narrow-page account">
         <PageHeader title="Accounts" />
+        {/* The same key as below, so a password form you started keeps what you typed once the page has loaded. */}
+        <HqLoginCard key="hq-login" name={loginName} notify={notify} />
+        <h2 className="account-heading">Claude</h2>
         {loadError ? (
           <p className="banner danger" role="alert">
             {loadError}
@@ -216,6 +222,8 @@ export function AccountPage({ notify, onChanged, meta }: Props) {
           <RotateCcw size={15} aria-hidden /> Restart HQ to go live: stop it in its terminal (Ctrl+C) and start it again (npm start or npm run dev).
         </p>
       )}
+
+      <HqLoginCard key="hq-login" name={loginName} notify={notify} />
 
       <h2 className="account-heading">Claude</h2>
       <div className="card-box account-card">

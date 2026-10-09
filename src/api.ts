@@ -6,6 +6,7 @@ import type {
   AutoStatus,
   Agent,
   Attachment,
+  AuthStatus,
   Comment,
   ConnectionMode,
   ConnectionsResponse,
@@ -35,15 +36,39 @@ import type {
   WorkItem,
 } from '../shared/types';
 
+/** A failed API call, with its HTTP status. */
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
+let onUnauthorized: (() => void) | null = null;
+
+/**
+ * The login gate (src/shell/AuthGate.tsx) sets this while you are logged in. Only the session check answers 401,
+ * so a 401 then means the session ended: logged out elsewhere, password changed, or 30 days unused.
+ */
+export function setUnauthorizedHandler(fn: (() => void) | null): void {
+  onUnauthorized = fn;
+}
+
+async function failure(res: Response, fallback: string): Promise<ApiError> {
+  if (res.status === 401) onUnauthorized?.();
+  const body = (await res.json().catch(() => ({}))) as { error?: string };
+  return new ApiError(body.error ?? fallback, res.status);
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, {
     ...init,
     headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
   });
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(body.error ?? res.statusText);
-  }
+  if (!res.ok) throw await failure(res, res.statusText);
   return (await res.json()) as T;
 }
 
@@ -86,6 +111,14 @@ export interface AgentBody {
 }
 
 export const api = {
+  /** HQ's own login: is there an account, and is this browser logged in. */
+  authStatus: () => request<AuthStatus>('/api/auth/status'),
+  /** The first account. Only works from the PC HQ runs on, and only once. */
+  setupAccount: (name: string, password: string) => request<AuthStatus>('/api/auth/setup', json('POST', { name, password })),
+  logIn: (name: string, password: string) => request<AuthStatus>('/api/auth/login', json('POST', { name, password })),
+  logOut: () => request<AuthStatus>('/api/auth/logout', json('POST', {})),
+  /** Your other sessions end; this browser stays logged in. */
+  changePassword: (current: string, next: string) => request<{ ok: true }>('/api/auth/password', json('POST', { current, next })),
   meta: () => request<Meta & { owner: string }>('/api/meta'),
   /** Settings for all of HQ. Answers with the new meta. */
   setSettings: (body: { effort?: EffortLevel | null; paused?: boolean }) => request<Meta & { owner: string }>('/api/settings', json('PATCH', body)),
@@ -136,10 +169,7 @@ export const api = {
   /** One image as the raw body. The server checks the bytes, not this header. */
   uploadAttachment: async (pid: string, blob: Blob): Promise<Attachment> => {
     const res = await fetch(`${pp(pid)}/attachments`, { method: 'POST', headers: { 'Content-Type': blob.type || 'application/octet-stream' }, body: blob });
-    if (!res.ok) {
-      const body = (await res.json().catch(() => ({}))) as { error?: string };
-      throw new Error(body.error ?? 'Upload failed');
-    }
+    if (!res.ok) throw await failure(res, 'Upload failed');
     return (await res.json()) as Attachment;
   },
   move: (pid: string, id: string, status: ItemStatus) => request<WorkItem>(`${pp(pid)}/items/${id}`, json('PATCH', { status })),
@@ -209,6 +239,7 @@ export const api = {
   reports: (pid: string, itemId: string) => request<ReportInfo[]>(`${pp(pid)}/items/${itemId}/reports`),
   report: async (url: string): Promise<string> => {
     const res = await fetch(url);
+    if (res.status === 401) throw await failure(res, 'Log in to HQ first.');
     if (!res.ok) throw new Error('Report not found');
     return res.text();
   },

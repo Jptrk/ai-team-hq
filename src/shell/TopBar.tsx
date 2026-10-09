@@ -1,4 +1,4 @@
-import { CirclePause, Keyboard, Menu, Monitor, Moon, PanelLeftClose, PanelLeftOpen, Pause, Play, Plus, Sun, UserRound } from 'lucide-react';
+import { CirclePause, Keyboard, LogOut, Menu, Monitor, Moon, PanelLeftClose, PanelLeftOpen, Pause, Play, Plus, Sun, UserRound } from 'lucide-react';
 import { forwardRef, useEffect, useRef, useState } from 'react';
 import type { Agent, EffortLevel, Meta, WorkItem } from '../../shared/types';
 import { api } from '../api';
@@ -25,6 +25,8 @@ interface Props {
   onOpenTicket: (key: string) => void;
   onAllProjects: () => void;
   onAccount: () => void;
+  /** Log out of HQ in this browser. */
+  onLogout: () => void;
   theme: Theme;
   themePref: ThemePref;
   onThemePref: (p: ThemePref) => void;
@@ -241,6 +243,7 @@ function FounderMenu({
   onThemePref,
   onAllProjects,
   onAccount,
+  onLogout,
 }: {
   ownerName: string;
   ownerColor?: string;
@@ -248,6 +251,7 @@ function FounderMenu({
   onThemePref: (p: ThemePref) => void;
   onAllProjects: () => void;
   onAccount: () => void;
+  onLogout: () => void;
 }) {
   const pop = usePopover<HTMLDivElement>();
   const THEMES: { id: ThemePref; label: string; Icon: typeof Sun }[] = [
@@ -308,7 +312,19 @@ function FounderMenu({
               onAccount();
             }}
           >
-            Claude account
+            Accounts
+          </button>
+          <div className="menu-sep" />
+          <button
+            type="button"
+            role="menuitem"
+            className="menu-row"
+            onClick={() => {
+              pop.setOpen(false);
+              onLogout();
+            }}
+          >
+            <LogOut size={15} aria-hidden /> Log out
           </button>
         </div>
       )}
@@ -342,7 +358,7 @@ export const TopBar = forwardRef<SearchHandle, Props>(function TopBar(p, searchR
         <button type="button" className="icon-btn topbar-btn" onClick={p.onToggleTheme} aria-label={p.theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'} title={p.theme === 'dark' ? 'Light theme' : 'Dark theme'}>
           {p.theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
         </button>
-        <FounderMenu ownerName={p.ownerName} ownerColor={p.ownerColor} themePref={p.themePref} onThemePref={p.onThemePref} onAllProjects={p.onAllProjects} onAccount={p.onAccount} />
+        <FounderMenu ownerName={p.ownerName} ownerColor={p.ownerColor} themePref={p.themePref} onThemePref={p.onThemePref} onAllProjects={p.onAllProjects} onAccount={p.onAccount} onLogout={p.onLogout} />
       </div>
     </header>
   );

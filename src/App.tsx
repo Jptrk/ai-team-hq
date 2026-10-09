@@ -44,7 +44,8 @@ import { AutoBar } from './components/AutoBar';
 
 const VIEW_TITLE: Record<ViewId, string> = { 'needs-you': 'Needs you', chat: 'Chat', board: 'Board', huddles: 'Huddles', team: 'Team', office: 'Office', notes: 'Team notes' };
 
-export function App() {
+/** loginName and onLogout come from the login gate (src/shell/AuthGate.tsx): App only mounts once you are logged in. */
+export function App({ loginName, onLogout }: { loginName: string; onLogout: () => Promise<void> }) {
   const [route, navigate] = useHashRoute();
   const pid = route.kind === 'project' || route.kind === 'settings' || route.kind === 'connections' || route.kind === 'skills' ? route.pid : null;
   const { meta, setMeta, projects, state, error, after, loadProjects, setPollPaused } = useHqData(pid);
@@ -244,7 +245,7 @@ export function App() {
   if (route.kind === 'projects') {
     body = <ProjectsPage projects={projects} currentId={storage.get(KEYS.lastProject) ?? undefined} onNavigate={navigate} />;
   } else if (route.kind === 'account') {
-    body = <AccountPage notify={notify} meta={meta} onChanged={reloadMeta} />;
+    body = <AccountPage notify={notify} meta={meta} onChanged={reloadMeta} loginName={loginName} />;
   } else if (route.kind === 'new') {
     body = (
       <ProjectForm
@@ -573,6 +574,7 @@ export function App() {
           onOpenTicket={openTicket}
           onAllProjects={() => navigate('/projects')}
           onAccount={() => navigate('/account')}
+          onLogout={() => void onLogout().catch((e: unknown) => notify(e instanceof Error ? e.message : 'Could not log out', { tone: 'danger' }))}
           theme={theme}
           themePref={pref}
           onThemePref={setPref}

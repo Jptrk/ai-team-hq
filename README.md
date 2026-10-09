@@ -35,7 +35,8 @@ Open http://localhost:5174. The API runs on http://127.0.0.1:4747.
 
 The API answers only to this PC's own names (`localhost`, `127.0.0.1`, `[::1]`), which blocks
 DNS-rebinding pages. Changes are accepted only from HQ's own page or from tools like curl. Set
-`HQ_ALLOWED_HOSTS=name1,name2` to allow other host names.
+`HQ_ALLOWED_HOSTS=name1,name2` to allow other host names. Every API call also needs you to be
+logged in (see [Login](#login)).
 
 Production build, served from one port:
 
@@ -45,6 +46,43 @@ npm start
 ```
 
 Then open http://127.0.0.1:4747.
+
+## Login
+
+HQ asks for a name and password before it shows anything, on this PC too. There is one account,
+yours.
+
+- **First start:** HQ shows a setup screen where you pick the name and password (at least 12
+  characters). The setup screen only works on the PC HQ runs on. Opened from anywhere else, HQ
+  says to set it up there.
+- **Logged in:** the browser keeps a session cookie for 30 days after you last used HQ. Restarting
+  HQ doesn't log you out.
+- **Log out:** the menu under your picture, top right.
+- **Change password:** Accounts page, HQ login. Your other browsers are logged out; this one stays in.
+- **Wrong guesses:** after 5 failed logins in 15 minutes, HQ waits out the rest of the 15 minutes
+  before it takes another try. Tries from this PC and tries from elsewhere are counted apart, so
+  guessing from elsewhere can't lock you out on this PC. Until HQ runs behind HTTPS with real client
+  addresses (Phase 5), all tries from elsewhere share one count.
+- **Session ended** (logged out elsewhere, password changed, or 30 days unused): the page goes back
+  to the login screen and says so.
+
+### Lost password
+
+Stop HQ, delete `data/auth.json`, start HQ again, and open it on the PC it runs on. The setup screen
+comes back. Your projects are not touched.
+
+### How it is kept
+
+- `data/auth.json` holds your name, a scrypt hash of the password, and a SHA-256 hash of each
+  session code. The password and the session codes themselves are never stored.
+- The cookie (`hq_session_4747`, named after the API's port) is `HttpOnly` (page scripts can't read
+  it) and `SameSite=Strict` (another site can't make your browser send it). Browsers don't keep
+  cookies apart by port, so the name does: a scratch copy on another port (see
+  [Tests](#tests)) has its own login and leaves this one alone.
+- If `data/auth.json` can't be read, nobody can log in, and the setup screen doesn't come back on
+  its own. Fix the file, or delete it and restart.
+- Only `/api/auth/*` answers without a session. The page itself (HTML, scripts, styles) holds no data,
+  so it loads without one.
 
 ## Layout
 
@@ -1218,6 +1256,7 @@ chat reply's whole budget ("Reached maximum budget ($1)").
 | `data/skills/` | The skills library and the installed skills (see [Skills](#skills)) |
 | `data/projects/<id>/trash/` | What desks deleted, by time and desk, to move back by hand. Never emptied by HQ |
 | `data/settings.json` | Settings for all of HQ: the [effort](#effort) level, [Pause](#pause), and a Claude usage-limit hold |
+| `data/auth.json` | Your [login](#login): the name, a hash of the password, and a hash of each session. Delete it to set up again |
 | `data/archive/` | Archived projects, until you delete them for good from Removed projects |
 | `data/backup/` | The single-project `db.json` from before projects existed |
 
@@ -1228,6 +1267,7 @@ project with key `HQ`. Old sessions are dropped because their folders moved; `me
 
 ```bash
 npm run test:guard
+npm run test:auth
 npm run test:chat
 npm run test:ui
 npm run test:attachments
@@ -1248,6 +1288,19 @@ npm run test:idle
 ```
 
 - **`test:guard`** checks what an agent may read and write in its workspace and the linked folder, including names Windows reads as another file (`.git.`, `server.key.`, a `:` stream, a `\\` path). It also checks which MCP tools run freely, need approval, or are refused.
+- **`test:auth`** checks HQ's own login:
+  - the password hash (and a hand-edited one), and the cookie (`HttpOnly`, `SameSite=Strict`, 30 days,
+    named after the API's port)
+  - setup only once and only from this PC, including two setups at once
+  - a wrong name and a wrong password get the same answer; the 6th try in 15 minutes waits; tries
+    from this PC and from elsewhere are counted apart
+  - a session refreshes at most once a day and ends 30 days after its last use; at most 20 are kept
+  - logout, and a password change ending your other sessions; the old password still being checked
+    when a change lands doesn't get in, and of two changes at once only one is saved
+  - only hashes in `data/auth.json`; a broken file lets nobody in and is left as it is
+  - no other route answers 401
+
+  It writes only in a scratch folder.
 - **`test:chat`** checks the chat core: recipients, the loop limit, resume and settle.
 - **`test:account`** checks signing in to your Claude account with a stand-in Claude Code: the pages shown (Claude's own sites only), the pasted code (and a code the browser beat to it), cancel and every way a sign-in can end, no token or code in any answer, that a poll never sees a sign-in that worked as signed out, that checks share one Claude Code run and only HQ's own page can force one, how HQ picks sim, live or not live, the switch and the restart hint, and sign-out. Your real login is never touched.
 - **`test:codex`** checks GPT desks with a stand-in Codex: the ChatGPT sign-in on this PC and by device code (OpenAI's own pages only, cancel, sign-out), account, usage windows and model list parsing, the model and effort setting, the desk config that switches Codex's own tools off (also against the pinned Codex's own `features list`, offline, skipped when it isn't installed), the file tools through HQ's fence (reads, writes, protected files, globs, grep, a runaway pattern stopped off the main thread), a ticket run end to end (HQ tools, close-out, no dollar cost, the thread kept and resumed), patch approvals inside and outside the fence (Windows name tricks declined, patches counted toward the cap), a used-up plan holding automatic work, Stop (also before Codex answers `turn/start`, with nothing written after it), the tool-call cap, a turn's end matched by its id, a thread too long for the model dropped, a project whose model can't run (the reason names the switch that is off or the login that is missing; work waits on its ticket with your note, the team's own starts wait at the gate, and it all starts once the model can run; an instruct and a chat message of yours already queued behind a busy desk wait too, with no failed run and no paused thread; a team start never replaces your held start; **Put … on it** is refused with the reason and holds nothing), a status check that must not undo a sign-out, and switching a project's model (refused while desks run; every desk starts a new conversation). Nothing signs in and no model runs.
@@ -1316,6 +1369,9 @@ HQ_RUNNER=sim PORT=4757 node <repo>/node_modules/tsx/dist/cli.mjs <repo>/server/
 HQ_API_URL=http://127.0.0.1:4757 npx vite --port 5175
 ```
 
+The copy has its own login (its `data/auth.json`, and the `hq_session_4757` cookie), so logging in or
+out there leaves your real HQ alone.
+
 ## Notes
 
 - `npm run dev` restarts the API with `node --watch --import tsx`, not `tsx watch`. Importing
@@ -1326,10 +1382,16 @@ HQ_API_URL=http://127.0.0.1:4757 npx vite --port 5175
 
 ## API
 
-Everything project-specific lives under `/api/projects/:pid`.
+Everything project-specific lives under `/api/projects/:pid`. Every route but `/api/auth/*` needs a
+login session and answers `401` without one; no other route answers `401`.
 
 | Method | Path | Body / query |
 | ------ | ---- | ------------ |
+| GET    | /api/auth/status | `{ hasUser, signedIn, name?, canSetup }`: is there an account, is this browser logged in, and may this request make the first account (no account yet, and it comes from this PC). Changes nothing |
+| POST   | /api/auth/setup | `{ name, password }`: the first account, then logged in (`201`, sets the cookie). Only from this PC (`403`), only once (`409`); the password is 12 to 200 characters |
+| POST   | /api/auth/login | `{ name, password }`: a new session and its cookie. A wrong name or password is `401` with the same message; after 5 tries in 15 minutes, `429` (tries from this PC and from elsewhere are counted apart, see [Login](#login)) |
+| POST   | /api/auth/logout | Ends this browser's session, if any, and clears the cookie. Always `200` |
+| POST   | /api/auth/password | `{ current, next }`: needs a session. A wrong `current` is `400`, not `401`; a change from another browser that lands meanwhile is `409`, and nothing is saved. Ends your other sessions; this one stays |
 | GET    | /api/meta | includes `runner`: `live` or `sim`, picked when HQ started; `effort`: the level every Claude desk run uses, or null for the model default; `gpt`: GPT desks, `{ optedIn, ready, model, effort }` (may run on the ChatGPT login; opted in and signed in; the model and effort, each null for Codex's default); `paused`: why HQ holds automatic work (you, a usage limit, an account problem), or null; `held`: starts waiting; `liveReady`: a Claude key or login, or a ChatGPT login GPT desks may use; `claudeReady`: Claude projects' desks can run now (false while their work waits, see [GPT desks](#gpt-desks-your-chatgpt-plan)); `auth`: what Claude desks use, `api-key`, `claude-login` or `none`; `restartToGoLive`: desks may run on your Claude or ChatGPT login, but HQ started in sim; `optedIn`: desks may run on the Claude login; `simByEnv`: `HQ_RUNNER=sim` keeps HQ in sim; `idle`: HQ started not live (no login to run on, no sim) |
 | PATCH  | /api/settings | `{ effort?, paused? }`: effort is `low`, `medium`, `high`, `xhigh`, `max`, or null for the model default; `paused: true` pauses everything the team starts on its own, `false` resumes (your Pause first, then a usage hold). For all of HQ; answers with the new meta |
 | GET    | /api/account | your Claude account: `{ account: { loggedIn, method, email, org, plan } \| null, login?, signedInAt?, apiKey, envToken, optedIn, optInByEnv, claudeAtStart, runner, restartToGoLive, simByEnv, idle }`. `signedInAt`: when the last sign-in from HQ worked; `envToken`: `CLAUDE_CODE_OAUTH_TOKEN` is set; `claudeAtStart`: Claude desks were allowed when HQ started (a key, or `optedIn`), so switching the login off keeps them on it until a restart. `?check=1` asks Claude Code again, only with a JSON content type (HQ's own page; another site's `<img>` can't); otherwise an answer up to 30 s old, or the check already running. Never a token |

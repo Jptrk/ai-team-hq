@@ -1,0 +1,43 @@
+@layer views {
+  /* ---------- HQ login and setup (src/shell/LoginScreen.tsx) ---------- */
+  .auth-page {
+    min-height: 100dvh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--space-4);
+    background: var(--surface);
+  }
+  .auth-card {
+    width: min(100%, 380px);
+    padding: 24px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--surface-raised);
+    box-shadow: var(--shadow-raised);
+  }
+  .auth-card p {
+    margin: 0;
+  }
+  .auth-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .auth-title {
+    margin: 0;
+    font-family: var(--font-display);
+    font-size: var(--fs-xl);
+  }
+  .auth-card .btn-primary {
+    width: 100%;
+    justify-content: center;
+  }
+  /* The HQ login card on the Accounts page. */
+  .account-password {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    max-width: 360px;
+  }
+}

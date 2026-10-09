@@ -771,6 +771,18 @@ export interface GptMeta {
   effort: string | null;
 }
 
+/** HQ's own login (GET /api/auth/status). Never a password or a session code. */
+export interface AuthStatus {
+  /** An account exists. False until the first one is made on the setup screen. */
+  hasUser: boolean;
+  /** This browser's session is good. */
+  signedIn: boolean;
+  /** Who is logged in, when signedIn. */
+  name?: string;
+  /** No account yet, and this request comes from the PC HQ runs on, so the setup screen may make one. */
+  canSetup: boolean;
+}
+
 /** Server-side facts the UI needs that are not persisted. */
 export interface Meta {
   runner: RunnerName;

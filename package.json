@@ -11,6 +11,7 @@
     "build": "tsc --noEmit && vite build",
     "start": "cross-env NODE_ENV=production tsx server/index.ts",
     "test:guard": "tsx server/guard.test.ts",
+    "test:auth": "tsx server/auth.test.ts",
     "test:chat": "tsx server/chat.test.ts",
     "test:ui": "tsx src/ui.test.ts",
     "test:attachments": "tsx server/attachments.test.ts",

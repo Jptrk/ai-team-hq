@@ -389,6 +389,15 @@ test('request guard as middleware: the Vite dev proxy, an image upload, other si
   assert.equal(call('GET', '/api/projects', { ...api, origin: 'https://evil.com', 'sec-fetch-site': 'cross-site' }), 'next');
   // curl and tests: no browser headers.
   assert.equal(call('DELETE', '/api/projects/x/connections/y', api), 'next');
+  // Express matches routes without case, so /API/... reaches the same routes: it is checked the same way.
+  for (const url of ['/API/projects/x/reset', '/Api/projects/x/reset']) {
+    const json = { ...api, 'content-type': 'application/json' };
+    assert.equal(call('POST', url, { ...json, origin: 'https://evil.com', 'sec-fetch-site': 'cross-site' }), 403, `${url} cross-site`);
+    assert.equal(call('POST', url, { ...json, origin: 'https://evil.com' }), 403, `${url} cross-site, old browser`);
+    assert.equal(call('POST', url, { ...json, origin: 'http://localhost:3000', 'sec-fetch-site': 'same-site' }), 403, `${url} another port`);
+    assert.equal(call('POST', url, { ...json, origin: 'http://localhost:3000' }), 403, `${url} another port, old browser`);
+    assert.equal(call('POST', url, { ...json, origin: 'http://localhost:5174', 'sec-fetch-site': 'same-origin' }), 'next', `${url} HQ's own page`);
+  }
 });
 
 // ---------- the real CLI, scratch config ----------

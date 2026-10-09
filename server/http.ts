@@ -70,7 +70,9 @@ export function requestGuard(req: Request, res: Response, next: NextFunction): v
     res.status(403).json({ error: 'HQ only answers on this PC (localhost). Set HQ_ALLOWED_HOSTS to allow another name.' });
     return;
   }
-  if (req.path.startsWith('/api') && !writeAllowed(req.method, req.get('sec-fetch-site'), req.get('origin'), req.get('host'))) {
+  // Every path, not only ones starting with /api: Express matches routes without case, so /API/... reaches them too.
+  // writeAllowed lets GET, HEAD and OPTIONS through, so loading the page and its files is not affected.
+  if (!writeAllowed(req.method, req.get('sec-fetch-site'), req.get('origin'), req.get('host'))) {
     res.status(403).json({ error: 'Requests from other sites are not allowed' });
     return;
   }

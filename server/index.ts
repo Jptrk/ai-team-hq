@@ -10,6 +10,8 @@ import { startSim } from './sim';
 import { sweepAttachments } from './attachments';
 import { backfillFingerprints } from './connections';
 import { requestGuard } from './http';
+import { requireSession } from './auth';
+import { authRouter } from './authRoutes';
 import { cancelAllLogins } from './mcpAuth';
 import { cancelAccountLogin, checkAccount, hasClaudeLogin } from './claudeAuth';
 import { cancelChatGptLogin, checkChatGpt, gptOptIn } from './codexAuth';
@@ -21,7 +23,9 @@ const app = express();
 // Only this PC's own names, and changes only from HQ's own page (see server/http.ts).
 app.use(requestGuard);
 app.use(express.json({ limit: '64kb' }));
-app.use('/api', router);
+// Logging in needs no session; every other /api call does (server/auth.ts). The page itself stays public: it holds no data.
+app.use('/api/auth', authRouter);
+app.use('/api', requireSession, router);
 
 // Bad JSON bodies and unexpected throws come back as JSON, not an HTML stack trace.
 app.use('/api', (err: Error & { status?: number; type?: string }, req: express.Request, res: express.Response, _next: express.NextFunction) => {
