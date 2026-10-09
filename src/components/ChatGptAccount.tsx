@@ -299,7 +299,7 @@ export function ChatGptAccount({ notify, onChanged, meta }: Props) {
           </p>
         )}
         <p className="field-hint">
-          GPT desks read and write files, use skills and HQ's tools, like Claude desks. They don't get connections (MCP) or web search yet. For your own use on this PC: OpenAI allows this sign-in
+          GPT desks read and write files, use skills, HQ's tools, connections and (with HQ_WEB=1) web search, like Claude desks. A connection you sign in to in a browser needs its own sign-in for GPT, and claude.ai connectors stay Claude only. For your own use on this PC: OpenAI allows this sign-in
           for local apps, not for hosted or commercial services.
         </p>
       </div>

@@ -13,6 +13,7 @@ import { requestGuard } from './http';
 import { cancelAllLogins } from './mcpAuth';
 import { cancelAccountLogin, checkAccount, hasClaudeLogin } from './claudeAuth';
 import { cancelChatGptLogin, checkChatGpt, gptOptIn } from './codexAuth';
+import { cancelAllGptLogins } from './codexMcpAuth';
 import { initSkills } from './skills';
 import { allProjects, deskRunsOnDisk, flushAll, initStore, listMeta } from './store';
 
@@ -85,6 +86,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     cancelAllLogins();
     cancelAccountLogin();
     cancelChatGptLogin();
+    cancelAllGptLogins();
     flushAll();
     process.exit(0);
   });

@@ -8,4 +8,5 @@
 - [MCP guard review checks](mcp-guard-review-checks.md) — deny-side key heuristics reused for allow decisions, CODE_DELETES gaps, which deny reason a test hits
 - [Runner mode review checks](runner-mode-review-checks.md) — sim/idle/live: HQ sign-out clears the yes, stranded work when not live, stale sim copy/README
 - [GPT desk review checks](gpt-desk-review-checks.md) — Windows .git./key. aliases past guard, Stop races, codex.exe probes, per-project model holds
+- [GPT connections review checks](gpt-connections-review-checks.md) — MCP approval matching on Codex, connection env leaking into Codex, `hq`-named server, header var collisions
 - [Project removal fs checks](project-removal-fs-checks.md) — Node 24 cpSync follows junctions/crashes on cycles, rmSync no EPERM retry, stale Project after id reuse

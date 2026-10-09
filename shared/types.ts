@@ -369,10 +369,26 @@ export interface ConnectionCheck {
   tools: McpToolInfo[];
 }
 
+/**
+ * A connection on GPT desks, in a GPT project. ready: works there as it is; needs-login: sign in for GPT first (a
+ * server you sign in to in a browser keeps one sign-in per model); signed-in: signed in for GPT; claude-only: GPT
+ * desks can't use it (why says which kind or rule); unchecked: Check has not asked Codex yet, or Codex couldn't tell.
+ */
+export interface GptConnection {
+  state: 'ready' | 'needs-login' | 'signed-in' | 'claude-only' | 'unchecked';
+  why?: string;
+  /** Signing in for GPT, while it runs or a minute after it failed. */
+  login?: ConnectionLogin;
+  /** When Codex last said how this server signs in. */
+  checkedAt?: string;
+}
+
 /** One row on the Connections screen. */
 export interface ConnectionRow extends McpServerInfo {
   connection: ProjectConnection;
   check?: ConnectionCheck;
+  /** GPT projects only: the server on GPT desks. */
+  gpt?: GptConnection;
   /** False when the server is saved in HQ but no longer in any config. */
   present: boolean;
   /** Its setup in Claude Code changed since you turned it on, so desks don't get it until you turn it on again. */

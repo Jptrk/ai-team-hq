@@ -330,8 +330,16 @@
     margin: 8px 0 0 22px;
   }
   .conn-extra .conn-note,
+  .conn-gpt .conn-note,
   .conn-remove-note {
     margin: 0;
+  }
+  /* A GPT project's row: how the server works on GPT desks, and its sign-in for GPT. */
+  .conn-gpt {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 8px 0 0 22px;
   }
   .conn-actions {
     display: flex;
@@ -443,7 +451,8 @@
   }
   @media (max-width: 719px) {
     .conn-config,
-    .conn-extra {
+    .conn-extra,
+    .conn-gpt {
       margin-left: 0;
     }
     .kv-row {

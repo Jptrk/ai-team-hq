@@ -1022,8 +1022,29 @@ run. The list is the models on your login; **Codex default** follows OpenAI's pi
 
 What is different from a Claude desk:
 
-- **No connections (MCP) and no web search yet.** Connections turned on for a desk in a GPT project are
-  not used; the desk's panel says so.
+- **Connections work, from the same list.** A GPT desk gets the connections turned on for it, as a Claude desk
+  does, with the same Ask / Read only / Auto modes, the same delete checks, the auto-change log and screenshot
+  attachments. The differences, shown on each row of a GPT project's **Connections** page (**On GPT: …**):
+  - A server you sign in to in a browser (Figma, Atlassian…) keeps one sign-in per model: Claude's can't be used
+    by GPT. Press **Check**; a row that says **needs a sign-in for GPT** gets a **Sign in for GPT** button. Codex
+    runs the sign-in, the page comes back to it on this PC, and the token stays in HQ's Codex home. A row
+    **signed in for GPT** has **Sign out for GPT**. Removing a server signs HQ's Codex out of it too.
+  - claude.ai connectors and SSE servers are **Claude only**. A desk is told which of its connections it can't
+    use here. For a claude.ai connector, add the service's own server (for Atlassian, `https://mcp.atlassian.com/v1/mcp`)
+    and sign in to it for GPT. So is a server named `hq` (HQ's own tools carry that name), and a program whose
+    variables would change Codex itself or another connection (see below); the row says why.
+  - **A program on this PC gets only its own variables** plus the short list Codex hands every server (`PATH`,
+    `TEMP`, `USERPROFILE`, `APPDATA` and the like), not HQ's whole environment as on Claude. A server that
+    relies on a variable it inherits (`GITHUB_TOKEN` from `.env` or your shell, `JAVA_HOME`…) works on Claude
+    and fails on GPT: add that variable to the server's own env in Claude Code's settings.
+  - **Auto acts as Ask on a server HQ knows no tools of.** Auto's delete check reads each tool's hints, from a
+    **Check** (Claude's, or for a server signed in only for GPT, Codex's). Until HQ has them, a change there
+    waits for approval, and the desk is told so. Press **Check** on the Connections page.
+  - Codex's own resource tools (`list_mcp_resources`, `list_mcp_resource_templates`, `read_mcp_resource`)
+    read a connection's resources without asking HQ. They only read; Codex 0.161.0 has no setting that
+    turns them off.
+- **Web search** with `HQ_WEB=1`, in ticket runs and chat replies (never in huddles, QA checks or planning), as
+  for Claude: Codex's own web tool.
 - **No dollar cost.** Runs spend the plan's usage, not money: their cost shows as `ChatGPT plan`, and the
   daily dollar limit doesn't count them (the daily run limit does). A Plus plan runs out fast with
   several busy desks.
@@ -1049,7 +1070,34 @@ What is different from a Claude desk:
   said yes to is never used), or, with no API key, when there is no Claude login while GPT projects can
   run (a refused login would otherwise put an account hold on GPT projects too).
 
-How it works (`server/codexServer.ts`, `server/codexAuth.ts`, `server/runner/codex.ts`):
+How it works (`server/codexServer.ts`, `server/codexAuth.ts`, `server/runner/codex.ts`, `server/codexMcp.ts`,
+`server/codexMcpAuth.ts`):
+
+- **Connections.** Each run turns the desk's connections into Codex's settings for that run's app-server: a
+  program's command and arguments, a server's URL. Secrets in variables and headers never go on a command line:
+  a program's variables are passed by name through the environment, and each header is read from a variable
+  (`HQ_MCP_<SERVER>_<HEADER>_<hash>`, the hash keeping `my-api` and `my_api` apart). A token inside a server's
+  URL or a program's arguments does go on Codex's command line, as it does on Claude's.
+- **A connection's variables only add to Codex's environment.** Left out, with the reason: one that sets
+  `OPENAI_*` or `CODEX_*` (Codex reads those itself), a variable Codex hands every server (`PATH`, `TEMP`,
+  `USERPROFILE`…), a proxy or certificate variable (`HTTPS_PROXY` in any case, `SSL_CERT_FILE`,
+  `NODE_EXTRA_CA_CERTS`, `NODE_OPTIONS`…), a variable HQ's environment has with another value, or one another
+  connection sets differently (on Windows, `Api_Key` and `API_KEY` are one variable). A value equal to HQ's
+  own changes nothing, so it is fine.
+- **Every tool call asks HQ first**, and HQ answers with the same rules as for a Claude desk. Codex's approval
+  request names no call, so HQ ties it to a running call by its arguments, then by the tool it names, and
+  judges that call's own tool and arguments; one it can't tie to exactly one call gets no. A refusal reaches
+  the model as "rejected", then HQ tells it why in a note to its turn; the desk's prompt also says what to do
+  with a refused change, in case the note can't be sent. The server's id in Codex is its tool key, so tools are
+  named `mcp__<key>__<tool>` on both models. A tool call counts toward the run's tool-call cap.
+- **Signing in to a connection for GPT** runs Codex's own sign-in for that one server (as `codex mcp login`
+  would). Only https pages, or pages on this PC, are shown. One sign-in at a time, 10 minutes at most. **Check**
+  in a GPT project also asks Codex which servers wait for a sign-in (servers with a token or a program on this
+  PC need none) and what their tools are, with their hints; so does a sign-in once it lands. What Codex said is
+  kept in memory, so after a restart a row says **not checked yet** until you check again, and Auto acts as Ask
+  on a server signed in only for GPT. **Sign out for GPT**, and removing a server, run `codex mcp logout` with
+  HQ's Codex home. The sign-in is HQ's, one per server id and URL, so removing a server leaves it while
+  another project still has the same server.
 
 - HQ runs OpenAI's Codex, the pinned `@openai/codex` package (never a `codex` on PATH;
   `HQ_CODEX_BIN` overrides it), as `codex app-server`: one per run, sign-in or check, talking
@@ -1061,8 +1109,9 @@ How it works (`server/codexServer.ts`, `server/codexAuth.ts`, `server/runner/cod
   only the email, plan and usage windows Codex reports. `OPENAI_API_KEY` is never passed to Codex.
 - **Codex's own tools are off**: the shell, sub-agents, ChatGPT apps and plugins, image tools, goals,
   hooks, memories, Codex's skills, computer and browser use, the in-app browser and automation,
-  worktrees, workspace dependencies, voice, web search, and the project's `AGENTS.md` (HQ puts the
-  project's instructions in the prompt itself, as for Claude). What stays is `apply_patch` and the clock.
+  worktrees, workspace dependencies, voice, web search (unless `HQ_WEB=1`), and the project's `AGENTS.md`
+  (HQ puts the project's instructions in the prompt itself, as for Claude). What stays is `apply_patch`, the
+  clock, and the desk's connections.
   Current GPT models call tools from a small JavaScript runner with no file, network or process access, so
   that runner stays on. Codex ignores a setting it doesn't know without a word, so `test:codex` runs the
   pinned Codex (`codex features list`) to check each of these reads off.
@@ -1318,13 +1367,16 @@ Everything project-specific lives under `/api/projects/:pid`.
 | POST   | /api/projects/:pid/agents | `{ name, role, skills?, lead? }` |
 | PATCH  | /api/projects/:pid/agents/:id | `{ name?, role?, skills?, lead?, qa? }`; `qa` only on dev-team projects; tickets in QA follow the change |
 | DELETE | /api/projects/:pid/agents/:id | |
-| GET    | /api/projects/:pid/connections | |
-| POST   | /api/projects/:pid/connections/check | `{ names? }`: all servers plus claude.ai connectors, or just these. No prompt, no tool calls |
+| GET    | /api/projects/:pid/connections | in a GPT project each row has `gpt: { state, why?, login?, checkedAt? }`: how the server works on GPT desks |
+| POST   | /api/projects/:pid/connections/check | `{ names? }`: all servers plus claude.ai connectors, or just these. No prompt, no tool calls. In a GPT project it also asks Codex which servers need a sign-in for GPT, and their tools' hints |
 | POST   | /api/projects/:pid/connections/preview | add request: what would be saved, masked, and where. Changes nothing |
 | POST   | /api/projects/:pid/connections | add request plus `confirm` (the preview string): saves it with `claude mcp add-json`; starts off |
-| DELETE | /api/projects/:pid/connections/:name | `?source=folder\|user\|repo`: `claude mcp remove` for that place; also clears its sign-in |
+| DELETE | /api/projects/:pid/connections/:name | `?source=folder\|user\|repo`: `claude mcp remove` for that place; also clears its sign-in, for Claude and for GPT (`codex mcp logout`, unless another project still has that server) |
 | POST   | /api/projects/:pid/connections/:name/login | 202: starts a browser sign-in; the row shows the page to open |
 | DELETE | /api/projects/:pid/connections/:name/login | cancel the sign-in |
+| POST   | /api/projects/:pid/connections/:name/gpt-login | GPT projects: 202, starts signing in to this server for GPT desks; the row's `gpt.login` shows the page to open. 400 in a Claude project, for a server with nothing to sign in to (a program on this PC, or one with a token header) or one GPT desks can't use; 409 while another sign-in runs |
+| DELETE | /api/projects/:pid/connections/:name/gpt-login | cancel the GPT sign-in, or dismiss a failed one |
+| POST   | /api/projects/:pid/connections/:name/gpt-logout | GPT projects: `codex mcp logout` for this server in HQ's Codex home; the row then needs a sign-in for GPT. 400 in a Claude project or for a server with nothing to sign in to, 409 while its GPT sign-in runs |
 | POST   | /api/projects/:pid/connections/:name/logout | `claude mcp logout` |
 | POST   | /api/projects/:pid/terminal | `{ login? }`: Windows Terminal in the project folder, optionally running `claude mcp login <login>` |
 | PUT    | /api/projects/:pid/connections/:name | `{ enabled?, desks?, mode? }`; mode is `ask`, `read` or `auto` |

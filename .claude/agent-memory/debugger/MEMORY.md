@@ -1,3 +1,4 @@
 - [Verify without servers](feedback_verify_without_servers.md) — 4747 under --watch: stop, or stage + one cp back; npm start: edit ok, no build; parallel agents; in-process route probe
 - [Write probes with Write tool](feedback_write_probes_with_write_tool.md) — Bash heredocs collapse `\\`; Python text edits turn CRLF files to LF; probes in src/__probe/
 - [claude auth status methods](reference_claude_auth_status.md) — authMethod values in the bundled CLI; a Console /login reports "claude.ai"
+- [Codex MCP facts](reference_codex_mcp_facts.md) — 0.161.0: .credentials.json, offline mcp logout, Windows env list, no resource-tool switch

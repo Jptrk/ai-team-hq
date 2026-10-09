@@ -6,7 +6,7 @@ import type { Notify } from '../hooks/useFlags';
 import { ConfirmInline } from '../ui/ConfirmInline';
 import { timeAgo } from '../util';
 import { AddConnectionModal } from './connections/AddConnectionModal';
-import { canSignIn, RowActions, type RowActionHandlers } from './connections/ConnectionActions';
+import { canSignIn, GptRow, RowActions, type RowActionHandlers } from './connections/ConnectionActions';
 
 interface Props {
   pid: string;
@@ -87,7 +87,7 @@ export function ConnectionsPanel({ pid, agents, ownerName, hasFolder, notify }: 
   }, [load]);
 
   // While a sign-in runs, follow it; and look again whenever you come back from the browser.
-  const signingIn = (data?.rows ?? []).some((r) => r.login && r.login.state !== 'failed');
+  const signingIn = (data?.rows ?? []).some((r) => (r.login && r.login.state !== 'failed') || (r.gpt?.login && r.gpt.login.state !== 'failed'));
   useEffect(() => {
     if (!signingIn) return;
     const t = window.setInterval(() => void load(), 2000);
@@ -99,15 +99,20 @@ export function ConnectionsPanel({ pid, agents, ownerName, hasFolder, notify }: 
     return () => window.removeEventListener('focus', onFocus);
   }, [load]);
 
-  // Say so when a sign-in finishes.
+  // Say so when a sign-in finishes, for Claude or for GPT.
   const wasSigningIn = useRef(new Set<string>());
+  const wasGptSigningIn = useRef(new Set<string>());
   useEffect(() => {
     const now = new Set<string>();
+    const gptNow = new Set<string>();
     for (const r of data?.rows ?? []) {
       if (r.login && r.login.state !== 'failed') now.add(r.name);
       else if (wasSigningIn.current.has(r.name) && !r.login && r.check?.state === 'connected') notify(`Logged in to ${r.name}`, { tone: 'success' });
+      if (r.gpt?.login && r.gpt.login.state !== 'failed') gptNow.add(r.name);
+      else if (wasGptSigningIn.current.has(r.name) && !r.gpt?.login && r.gpt?.state === 'signed-in') notify(`Signed in to ${r.name} for GPT`, { tone: 'success' });
     }
     wasSigningIn.current = now;
+    wasGptSigningIn.current = gptNow;
   }, [data, notify]);
 
   const check = async () => {
@@ -186,6 +191,9 @@ export function ConnectionsPanel({ pid, agents, ownerName, hasFolder, notify }: 
     check: (row) => checkOne(row),
     login: (row) => void act(row, () => api.loginConnection(pid, row.name)),
     cancelLogin: (row) => void act(row, () => api.cancelLogin(pid, row.name)),
+    gptLogin: (row) => void act(row, () => api.gptLoginConnection(pid, row.name)),
+    cancelGptLogin: (row) => void act(row, () => api.cancelGptLogin(pid, row.name)),
+    gptLogout: (row) => void act(row, () => api.gptLogoutConnection(pid, row.name), () => notify(`Signed out of ${row.name} for GPT`, { tone: 'success' })),
     logout: (row) => void act(row, () => api.logoutConnection(pid, row.name), () => notify(`Logged out of ${row.name}`, { tone: 'success' })),
     remove: (row) => {
       if (row.present && confirmRemove !== row.name) {
@@ -272,6 +280,7 @@ export function ConnectionsPanel({ pid, agents, ownerName, hasFolder, notify }: 
             <RowActions row={row} busy={busy.has(row.name)} confirming={confirmRemove === row.name} canTerminal={Boolean(data?.canTerminal)} on={handlers} />
           </div>
         )}
+        {row.gpt && row.present && <GptRow row={row} busy={busy.has(row.name)} on={handlers} />}
 
         {on && (
           <div className="conn-config">

@@ -20,7 +20,7 @@ interface Props {
 
 const MODELS: { id: Provider; title: string; sub: string }[] = [
   { id: 'claude', title: 'Claude', sub: 'Your Claude login or API key. Connections and web search work.' },
-  { id: 'gpt', title: 'GPT', sub: "Your ChatGPT plan, through HQ's Codex. No connections or web search yet." },
+  { id: 'gpt', title: 'GPT', sub: "Your ChatGPT plan, through HQ's Codex. Browser sign-in connections need a sign-in for GPT; claude.ai connectors stay Claude only." },
 ];
 
 const TEAMS: { id: TeamTemplate; title: string; desks: string }[] = [

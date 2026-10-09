@@ -15,7 +15,9 @@ import type {
   McpToolInfo,
   ProjectConnection,
 } from '../shared/types';
+import { projectProvider } from '../shared/types';
 import { configSecrets, discoverAll, discoverServers, gitRoot, isReadOnlyTool, openSession, probeServers, proxyConfigOf, type FoundServer } from './mcp';
+import { cancelGptLoginsNamed, codexLogout, forgetGpt, GptLoginError, gptRowOf, signOutGpt } from './codexMcpAuth';
 import { cancelLogin, cancelLoginsNamed, LoginError, loginOf, loginRunning, loginRunningIn, startLogin } from './mcpAuth';
 import { addArgs, claudeJsonPath, cliMessage, logoutArgs, openTerminal, removeArgs, runCli, scrub } from './mcpCli';
 import { folderExists } from './paths';
@@ -63,7 +65,7 @@ function defaultConnection(p: Project, info: McpServerInfo): ProjectConnection {
 }
 
 /** A server as discovery knows it. claude.ai connectors have no fingerprint. */
-type Known = { info: McpServerInfo; fingerprint?: string };
+type Known = { info: McpServerInfo; fingerprint?: string; config?: McpServerConfig };
 
 /** A saved connection that now points at a different server than the one you turned on. */
 function changedFrom(c: ProjectConnection, k: Known): boolean {
@@ -81,6 +83,18 @@ function shown(c: ProjectConnection): ProjectConnection {
   return rest;
 }
 
+/** A server's config for this project as Claude Code has it now, or null. For signing in to it for GPT. */
+export function foundConfig(p: Project, name: string): McpServerConfig | null {
+  return discoverServers(folderOf(p)).find((f) => f.info.name === name)?.config ?? null;
+}
+
+/** This project's file-configured servers, by name: for checking which wait for a sign-in on GPT. */
+export function foundServers(p: Project, only?: string[]): { name: string; config: McpServerConfig }[] {
+  return discoverServers(folderOf(p))
+    .filter((f) => !only || only.includes(f.info.name))
+    .map((f) => ({ name: f.info.name, config: f.config }));
+}
+
 export function listConnections(p: Project): ConnectionsResponse {
   const s = p.state;
   const checks = s.checks as Record<string, StoredCheck>;
@@ -90,6 +104,8 @@ export function listConnections(p: Project): ConnectionsResponse {
     if (!known.has(name) && check.info?.source === 'claude-ai') known.set(name, { info: check.info });
   }
   const saved = new Map(s.connections.map((c) => [c.name, c]));
+  // A GPT project's rows also say how each server works on GPT desks.
+  const gpt = projectProvider(p.meta) === 'gpt';
 
   const rows: ConnectionRow[] = [];
   for (const k of known.values()) {
@@ -99,6 +115,7 @@ export function listConnections(p: Project): ConnectionsResponse {
     if (c?.enabled && changedFrom(c, k)) row.changed = true;
     const login = loginOf(p.id, info.name);
     if (login) row.login = login;
+    if (gpt) row.gpt = gptRowOf(p, info, k.config);
     rows.push(row);
   }
   // Saved but gone from every config: keep them visible so they can be turned off.
@@ -487,8 +504,30 @@ export async function addConnection(p: Project, req: AddRequest, confirm: string
 }
 
 /**
+ * A server is gone: its GPT side goes too. A GPT sign-in still running stops, what Codex said about it is
+ * forgotten (in this project, or in every one when it was set up for all), and HQ's Codex signs out of it, unless
+ * a project still has a server Codex keeps the same sign-in for (one per server id and URL). Returns a warning when
+ * that sign-out failed. Exported for tests.
+ */
+export async function dropGptSignIn(p: Project, name: string, config: McpServerConfig | undefined, everywhere: boolean): Promise<string | null> {
+  cancelGptLoginsNamed(everywhere ? null : p.id, name);
+  forgetGpt(everywhere ? null : p.id, name);
+  if (!config || config.type !== 'http') return null;
+  const key = toolKey(name);
+  const url = config.url;
+  const stillUsed = allProjects().some((proj) => discoverServers(folderOf(proj)).some((f) => toolKey(f.info.name) === key && f.config.type === 'http' && f.config.url === url));
+  if (stillUsed) return null;
+  try {
+    await codexLogout(name, config);
+    return null;
+  } catch (e) {
+    return e instanceof Error ? `Removed, but ${e.message.replace(/\.$/, '')}. Its sign-in for GPT may still be in HQ's Codex home.` : null;
+  }
+}
+
+/**
  * Remove a server from the place `source` says, with `claude mcp remove`. That also clears its
- * saved sign-in. A row whose config is already gone is just forgotten.
+ * saved sign-in, for Claude and for GPT (dropGptSignIn). A row whose config is already gone is just forgotten.
  */
 export async function removeConnection(p: Project, name: string, source: string): Promise<ConnectionsResponse> {
   return locked(p, 'change', async () => {
@@ -497,6 +536,7 @@ export async function removeConnection(p: Project, name: string, source: string)
     if (row.source === 'claude-ai') throw new ConnectionError('claude.ai connectors are managed in claude.ai, Settings, Connectors.', 400);
     if (!row.present) {
       forget(p, name);
+      await dropGptSignIn(p, name, undefined, false);
       p.log('you', `Forgot ${name}`);
       p.commit();
       return listConnections(p);
@@ -506,6 +546,8 @@ export async function removeConnection(p: Project, name: string, source: string)
     if (loginRunning(everywhere ? null : p.id, name)) throw new ConnectionError(`A sign-in for ${name} is running. Cancel it first.`, 409);
     const scope = SOURCE_TO_SCOPE[row.source];
     if (!scope) throw new ConnectionError(`${name} can't be removed from here.`, 400);
+    // Its settings as they were, for signing HQ's Codex out of it once it is gone.
+    const config = discoverServers(folderOf(p)).find((f) => f.info.name === name)?.config;
 
     const r = await runCli(removeArgs(name, scope), { cwd: workDir(p) });
     if (r.code !== 0) throw new ConnectionError(cliMessage(r, 'Claude Code could not remove it.'), r.timedOut ? 504 : 400);
@@ -514,6 +556,8 @@ export async function removeConnection(p: Project, name: string, source: string)
     settleSaved();
 
     const warnings: string[] = [];
+    const gptWarning = await dropGptSignIn(p, name, config, everywhere);
+    if (gptWarning) warnings.push(gptWarning);
     const still = discoverServers(folderOf(p)).find((f) => f.info.name === name);
     if (still) warnings.push(`The ${name} in ${SOURCE_LABEL[still.info.source]} shows through now. It is off.`);
     else forget(p, name);
@@ -597,6 +641,22 @@ export async function logoutConnection(p: Project, name: string): Promise<Connec
     }
     p.state.checks[name] = { state: 'needs-login', checkedAt: now(), tools: [] };
     p.log('you', `Logged out of ${name}`);
+    p.commit();
+    return listConnections(p);
+  });
+}
+
+/** Sign HQ's Codex out of a server, for GPT desks (Sign out for GPT). GPT projects only; the route checks. */
+export async function gptLogoutConnection(p: Project, name: string): Promise<ConnectionsResponse> {
+  return locked(p, 'change', async () => {
+    const found = discoverServers(folderOf(p)).find((f) => f.info.name === name);
+    if (!found) throw new ConnectionError(`${name} is not set up for this project. Reload the page.`, 404);
+    try {
+      await signOutGpt(p, name, found.config);
+    } catch (e) {
+      if (e instanceof GptLoginError) throw new ConnectionError(e.message, e.status);
+      throw e;
+    }
     p.commit();
     return listConnections(p);
   });

@@ -33,6 +33,7 @@ import {
   startChatGptLogin,
   useChatGptLogin,
 } from './codexAuth';
+import { cancelGptLogin, checkGptLogins, GptLoginError, startGptLogin } from './codexMcpAuth';
 import { addComment } from './comments';
 import {
   addConnection,
@@ -40,6 +41,9 @@ import {
   checkConnections,
   ConnectionError,
   connectionWork,
+  foundConfig,
+  foundServers,
+  gptLogoutConnection,
   listConnections,
   loginConnection,
   logoutConnection,
@@ -1139,10 +1143,51 @@ project.post('/connections/check', jsonOnly, async (req, res) => {
   if (names !== undefined && (!Array.isArray(names) || !names.every((n) => typeof n === 'string') || names.length > 50)) {
     return res.status(400).json({ error: 'names must be a list of server names' });
   }
+  const p = P(res);
   try {
-    res.json(await checkConnections(P(res), names as string[] | undefined));
+    const checked = await checkConnections(p, names as string[] | undefined);
+    // A GPT project also asks Codex which servers wait for a sign-in for GPT.
+    if (projectProvider(p.meta) !== 'gpt') return res.json(checked);
+    await checkGptLogins(p, foundServers(p, names as string[] | undefined));
+    res.json({ ...listConnections(p), ...(checked.warnings ? { warnings: checked.warnings } : {}) });
   } catch (e) {
     connectionFailed(res, e, 'Check failed');
+  }
+});
+
+const NOT_GPT = 'Only a GPT project signs in to its connections for GPT desks.';
+
+/** Sign in to a server for GPT desks: HQ's Codex runs it, and the row shows the page to open. */
+project.post('/connections/:name/gpt-login', jsonOnly, (req, res) => {
+  const p = P(res);
+  if (projectProvider(p.meta) !== 'gpt') return res.status(400).json({ error: NOT_GPT });
+  const name = String(req.params.name);
+  const config = foundConfig(p, name);
+  if (!config) return res.status(404).json({ error: `${name} is not set up for this project. Reload the page.` });
+  try {
+    startGptLogin(p, name, config);
+    res.status(202).json(listConnections(p));
+  } catch (e) {
+    if (e instanceof GptLoginError) return res.status(e.status).json({ error: e.message });
+    connectionFailed(res, e, 'Could not start signing in');
+  }
+});
+
+/** Cancel a GPT sign-in, or dismiss a failed one. */
+project.delete('/connections/:name/gpt-login', jsonOnly, (req, res) => {
+  const p = P(res);
+  if (!cancelGptLogin(p.id, String(req.params.name))) return res.status(404).json({ error: 'No sign-in for GPT is running for it.' });
+  res.json(listConnections(p));
+});
+
+/** Sign HQ's Codex out of a server, for GPT desks: `codex mcp logout`. */
+project.post('/connections/:name/gpt-logout', jsonOnly, async (req, res) => {
+  const p = P(res);
+  if (projectProvider(p.meta) !== 'gpt') return res.status(400).json({ error: NOT_GPT });
+  try {
+    res.json(await gptLogoutConnection(p, String(req.params.name)));
+  } catch (e) {
+    connectionFailed(res, e, 'Could not sign out');
   }
 });
 

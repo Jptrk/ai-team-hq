@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import readline from 'node:readline';
 import { claudeEnv, HQ_ROOT } from './paths';
-import { findProgram, killTree } from './proc';
+import { findProgram, killTree, runProgram, type ProgramResult } from './proc';
 
 /**
  * HQ's own Codex, for GPT desks on your ChatGPT login.
@@ -63,6 +63,8 @@ export function codexHome(): string {
 /** Settings for every app-server HQ starts: the login lives in a file in HQ's Codex home, and nothing phones home or updates itself. */
 export const BASE_CONFIG = [
   'cli_auth_credentials_store="file"',
+  // Sign-ins to connections for GPT desks live in HQ's Codex home too, never in your keychain.
+  'mcp_oauth_credentials_store="file"',
   'check_for_update_on_startup=false',
   'analytics.enabled=false',
   'feedback.enabled=false',
@@ -133,6 +135,39 @@ export function codexEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessE
   return env;
 }
 
+/**
+ * Codex's environment plus a run's own variables (a desk's connections, codexMcp.ts). They only add: a name the
+ * environment already has, in any case on Windows, keeps its value, so a connection never changes Codex itself.
+ * Exported for tests.
+ */
+export function appServerEnv(vars: Record<string, string> = {}, base: NodeJS.ProcessEnv = codexEnv(), platform: NodeJS.Platform = process.platform): NodeJS.ProcessEnv {
+  const norm = (k: string) => (platform === 'win32' ? k.toUpperCase() : k);
+  const had = new Set(Object.keys(base).map(norm));
+  const env = { ...base };
+  for (const [k, v] of Object.entries(vars)) if (!had.has(norm(k))) env[k] = v;
+  return env;
+}
+
+export type CodexRun = (args: string[], env: NodeJS.ProcessEnv) => Promise<ProgramResult>;
+
+/** Tests only: run this instead of the codex program. Call with null to undo. */
+let codexRun: CodexRun | null = null;
+export function setCodexRunForTests(f: CodexRun | null): void {
+  codexRun = f;
+}
+
+/** Run the codex program once for a command that is not the app-server (`codex mcp logout`): in HQ's Codex home, no shell. */
+export function runCodex(args: string[], env: NodeJS.ProcessEnv): Promise<ProgramResult> {
+  if (codexRun) return codexRun(args, env);
+  let bin: string;
+  try {
+    bin = codexBin();
+  } catch (e) {
+    return Promise.resolve({ code: null, out: '', err: '', timedOut: false, truncated: false, startError: e instanceof Error ? e.message : 'Codex is missing.' });
+  }
+  return runProgram(bin, args, { cwd: codexHome(), env, timeoutMs: 30_000, cap: 64 * 1024 });
+}
+
 /** A JSON-RPC error Codex answered with. */
 export class RpcError extends Error {
   constructor(
@@ -167,6 +202,8 @@ export interface OpenOptions {
   cwd: string;
   /** `-c key=value` settings for this program. BASE_CONFIG when left out. */
   config?: string[];
+  /** More variables for this program: a desk's connections read their secrets from them (codexMcp.ts). They only add (appServerEnv). */
+  env?: Record<string, string>;
 }
 
 export type AppServerFactory = (opts: OpenOptions) => Promise<AppServer>;
@@ -190,7 +227,7 @@ async function spawnAppServer(opts: OpenOptions): Promise<AppServer> {
   const args = ['app-server', ...(opts.config ?? BASE_CONFIG).flatMap((c) => ['-c', c])];
   const child = spawn(codexBin(), args, {
     cwd: opts.cwd,
-    env: codexEnv(),
+    env: appServerEnv(opts.env),
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
     shell: false,

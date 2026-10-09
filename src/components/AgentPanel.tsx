@@ -162,7 +162,7 @@ export function AgentPanel({ agent, state, onClose, onOpenTicket, onOpenThread, 
             ) : (
               <p className="muted small">None. Turn them on under Connections.</p>
             )}
-            {provider === 'gpt' && connections.length > 0 && <p className="muted small">GPT desks don't use connections yet: these work once the project runs on Claude.</p>}
+            {provider === 'gpt' && connections.length > 0 && <p className="muted small">On GPT: Connections says which of these work there, and which need a sign-in for GPT first.</p>}
           </section>
         )}
 

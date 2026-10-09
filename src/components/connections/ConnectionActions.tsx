@@ -16,6 +16,10 @@ export interface RowActionHandlers {
   disarmRemove: (row: ConnectionRow) => void;
   terminalLogin: (row: ConnectionRow) => void;
   useNewSetup: (row: ConnectionRow) => void;
+  /** GPT projects: sign in to this server for GPT desks, stop that, or sign out of it. */
+  gptLogin: (row: ConnectionRow) => void;
+  cancelGptLogin: (row: ConnectionRow) => void;
+  gptLogout: (row: ConnectionRow) => void;
 }
 
 interface Props {
@@ -166,6 +170,71 @@ function LoginBox({ row, canTerminal, on }: { row: ConnectionRow; canTerminal: b
         <button type="button" className="btn btn-sm btn-ghost" onClick={() => on.cancelLogin(row)}>
           Cancel
         </button>
+      </div>
+    </div>
+  );
+}
+
+const GPT_LABEL: Record<NonNullable<ConnectionRow['gpt']>['state'], string> = {
+  ready: 'works',
+  'needs-login': 'needs a sign-in for GPT',
+  'signed-in': 'signed in for GPT',
+  'claude-only': 'Claude only',
+  unchecked: 'not checked yet',
+};
+
+/** A GPT project's row: how this server works on GPT desks, and its own sign-in for GPT when it needs one. */
+export function GptRow({ row, busy, on }: { row: ConnectionRow; busy: boolean; on: RowActionHandlers }) {
+  const gpt = row.gpt;
+  if (!gpt) return null;
+  const login = gpt.login;
+  const url = safeAuthUrl(login?.authUrl);
+  const signingIn = login && login.state !== 'failed';
+  return (
+    <div className="conn-gpt">
+      <p className="conn-note">
+        <strong>On GPT:</strong> {GPT_LABEL[gpt.state]}
+        {gpt.why ? ` (${gpt.why})` : ''}
+        {gpt.state === 'unchecked' && row.transport === 'http' ? '. Check to see whether it needs a sign-in for GPT.' : ''}
+        {gpt.state === 'needs-login' ? '. Claude\'s sign-in can\'t be used by GPT desks.' : ''}
+      </p>
+      {login?.state === 'failed' && (
+        <p className="conn-note bad" role="status">
+          {login.error ?? 'Signing in for GPT failed.'}
+        </p>
+      )}
+      {signingIn && (
+        <p className="conn-note">
+          <span role="status">
+            {login.state === 'starting' ? 'Starting the sign-in for GPT...' : `Sign in to ${row.name} in a browser on this PC, as you. HQ finishes on its own when you're done.`}
+          </span>
+          {login.state !== 'starting' && <> {timeLeft(login.expiresAt)} left.</>}
+        </p>
+      )}
+      <div className="conn-actions">
+        {signingIn && url && (
+          <a className="btn btn-sm btn-primary" href={url} target="_blank" rel="noopener noreferrer">
+            <ExternalLink size={14} aria-hidden /> Open sign-in page ({hostOf(url)})
+          </a>
+        )}
+        {signingIn || login?.state === 'failed' ? (
+          <button type="button" className="btn btn-sm btn-ghost" disabled={busy} onClick={() => on.cancelGptLogin(row)}>
+            {signingIn ? 'Cancel' : 'Dismiss'}
+          </button>
+        ) : gpt.state === 'needs-login' ? (
+          <button type="button" className="btn btn-sm btn-primary" disabled={busy} onClick={() => on.gptLogin(row)}>
+            Sign in for GPT
+          </button>
+        ) : gpt.state === 'signed-in' ? (
+          <>
+            <button type="button" className="btn btn-sm btn-ghost" disabled={busy} onClick={() => on.gptLogin(row)}>
+              Sign in again for GPT
+            </button>
+            <button type="button" className="btn btn-sm btn-ghost" disabled={busy} onClick={() => on.gptLogout(row)}>
+              Sign out for GPT
+            </button>
+          </>
+        ) : null}
       </div>
     </div>
   );

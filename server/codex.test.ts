@@ -22,6 +22,22 @@ delete process.env.ANTHROPIC_API_KEY;
 delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
 // No Claude login: HQ goes live on the ChatGPT login alone.
 process.env.CLAUDE_CONFIG_DIR = path.join(root, 'claude-config');
+// Web search on, as with HQ_WEB=1 in .env: ticket runs and chat replies get Codex's web tool.
+process.env.HQ_WEB = '1';
+// Connections, as Claude Code keeps them: a program on this PC with a variable, a server you sign in to in a
+// browser, one with a token header, and an SSE one GPT desks can't use.
+fs.mkdirSync(path.join(root, 'claude-config'), { recursive: true });
+fs.writeFileSync(
+  path.join(root, 'claude-config', '.claude.json'),
+  JSON.stringify({
+    mcpServers: {
+      tester: { type: 'stdio', command: 'node', args: ['C:\\tools\\tester.js', '--fast'], env: { TESTER_TOKEN: 'abc123' } },
+      webby: { type: 'http', url: 'https://mcp.example.test/mcp' },
+      tokened: { type: 'http', url: 'https://api.example.test/mcp/', headers: { Authorization: 'Bearer secret-xyz' } },
+      oldsse: { type: 'sse', url: 'https://sse.example.test/sse' },
+    },
+  }),
+);
 fs.mkdirSync(path.join(root, 'data', '.codex'), { recursive: true });
 fs.writeFileSync(path.join(root, 'data', 'settings.json'), JSON.stringify({ chatgptLogin: { at: new Date().toISOString() } }));
 fs.writeFileSync(path.join(root, 'data', '.codex', 'auth.json'), '{"auth_mode":"chatgpt"}');
@@ -36,6 +52,9 @@ const runner = await import('./runner/index');
 const claude = await import('./runner/claude');
 const codex = await import('./runner/codex');
 const tools = await import('./runner/codexTools');
+const { codexMcp, gptUnsupported } = await import('./codexMcp');
+const mcpAuth = await import('./codexMcpAuth');
+const conns = await import('./connections');
 const { readGptPatch, router } = await import('./routes');
 const autopilot = await import('./autopilot');
 const chat = await import('./chat');
@@ -483,7 +502,8 @@ test('a GPT ticket run: HQ tools work, the ticket closes, no dollar cost, the th
   assert.equal(run.summary, 'Done: the report is in reports/r.md.');
   assert.notEqual(item.status, 'in-progress', 'report_done closed it');
   const f = servers.at(-1)!;
-  assert.deepEqual(f.opts.config, codexServer.DESK_CONFIG);
+  assert.deepEqual(f.opts.config?.slice(0, codexServer.DESK_CONFIG.length), codexServer.DESK_CONFIG);
+  assert.ok(f.opts.config?.includes('web_search="live"'), 'HQ_WEB=1 turns on web search for a ticket run');
   assert.equal(f.opts.cwd, workspace);
   const start = f.calls.find((c) => c.method === 'thread/start')!.params;
   assert.equal(start.sandbox, 'read-only');
@@ -1077,6 +1097,598 @@ test('meta: live on ChatGPT, with GPT ready and the Claude login missing', () =>
   assert.equal(m.liveReady, true);
   assert.equal(m.auth, 'none');
   assert.deepEqual({ optedIn: m.gpt.optedIn, ready: m.gpt.ready }, { optedIn: true, ready: true });
+});
+
+// ---------- connections and the web ----------
+
+test('connections as Codex settings: programs, online servers and tokens; secrets only in variables', () => {
+  const allowed = ['tester', 'tokened', 'claude.ai Docs', 'oldsse'].map((name) => ({ name, key: name.replace(/[^A-Za-z0-9_-]/g, '_'), mode: 'ask' as const, tools: {} }));
+  const servers = {
+    tester: { type: 'stdio' as const, command: 'C:\\Program Files\\node.exe', args: ['x.js', 'say "hi"'], env: { TESTER_TOKEN: 'abc123' } },
+    tokened: { type: 'http' as const, url: 'https://api.example.test/mcp/', headers: { Authorization: 'Bearer secret-xyz', 'X-Team': 't1' } },
+    'claude.ai Docs': { type: 'claudeai-proxy', url: 'https://x', id: 'y' } as never,
+    oldsse: { type: 'sse' as const, url: 'https://sse.example.test/sse' },
+  };
+  const out = codexMcp(servers, allowed, { toolTimeoutMs: 900_000, base: { PATH: 'C:\\Windows' } });
+  assert.deepEqual(out.config, [
+    'mcp_servers.tester.command="C:\\\\Program Files\\\\node.exe"',
+    'mcp_servers.tester.args=["x.js","say \\"hi\\""]',
+    'mcp_servers.tester.env_vars=["TESTER_TOKEN"]',
+    'mcp_servers.tester.default_tools_approval_mode="prompt"',
+    'mcp_servers.tester.startup_timeout_sec=30',
+    'mcp_servers.tester.tool_timeout_sec=900',
+    'mcp_servers.tokened.url="https://api.example.test/mcp/"',
+    'mcp_servers.tokened.env_http_headers={"Authorization"="HQ_MCP_TOKENED_AUTHORIZATION_98B8D9D7","X-Team"="HQ_MCP_TOKENED_X_TEAM_08DFE7B6"}',
+    'mcp_servers.tokened.default_tools_approval_mode="prompt"',
+    'mcp_servers.tokened.startup_timeout_sec=30',
+    'mcp_servers.tokened.tool_timeout_sec=900',
+  ]);
+  assert.deepEqual(out.env, { TESTER_TOKEN: 'abc123', HQ_MCP_TOKENED_AUTHORIZATION_98B8D9D7: 'Bearer secret-xyz', HQ_MCP_TOKENED_X_TEAM_08DFE7B6: 't1' });
+  assert.ok(!out.config.join(' ').includes('secret-xyz') && !out.config.join(' ').includes('abc123'), 'no secret on a command line');
+  assert.deepEqual(out.allowed.map((a) => a.name), ['tester', 'tokened']);
+  assert.deepEqual(out.skipped.map((x) => x.name), ['claude.ai Docs', 'oldsse']);
+  assert.match(gptUnsupported({ type: 'claudeai-proxy' }) ?? '', /only works on Claude/);
+});
+
+test("connections that would change Codex itself, or clash, are left out with a reason", () => {
+  const allowed = ['a', 'b', 'c'].map((name) => ({ name, key: name, mode: 'ask' as const, tools: {} }));
+  const out = codexMcp(
+    {
+      a: { command: 'x', env: { SHARED: '1' } },
+      b: { command: 'y', env: { SHARED: '2' } },
+      c: { command: 'z', env: { OPENAI_API_KEY: 'sk-1' } },
+    },
+    allowed,
+  );
+  assert.deepEqual(out.allowed.map((x) => x.name), ['a']);
+  assert.match(out.skipped.find((x) => x.name === 'b')?.why ?? '', /sets SHARED differently/);
+  assert.match(out.skipped.find((x) => x.name === 'c')?.why ?? '', /OPENAI_API_KEY, which Codex reads itself/);
+  assert.equal(out.env.OPENAI_API_KEY, undefined);
+});
+
+test("a connection named hq is left out: HQ's own tools carry that name", () => {
+  const out = codexMcp({ hq: { command: 'node', args: ['evil.js'] }, tester: { command: 'node' } }, [
+    { name: 'hq', key: 'hq', mode: 'read', tools: {} },
+    { name: 'tester', key: 'tester', mode: 'ask', tools: {} },
+  ]);
+  assert.deepEqual(out.skipped, [{ name: 'hq', why: "hq is HQ's own name" }]);
+  assert.ok(!out.config.some((c) => c.startsWith('mcp_servers.hq.')));
+  assert.deepEqual(out.allowed.map((a) => a.name), ['tester']);
+});
+
+test('header variables: my-api and my_api get their own, each with its own value', () => {
+  const out = codexMcp(
+    {
+      'my-api': { type: 'http', url: 'https://third-party.example/mcp', headers: { Authorization: 'Bearer TOKEN-FOR-MY-API' } },
+      my_api: { type: 'http', url: 'https://internal.example/mcp', headers: { Authorization: 'Bearer TOKEN-FOR-INTERNAL' } },
+    },
+    [
+      { name: 'my-api', key: 'my-api', mode: 'ask', tools: {} },
+      { name: 'my_api', key: 'my_api', mode: 'ask', tools: {} },
+    ],
+  );
+  assert.deepEqual(out.skipped, []);
+  assert.deepEqual(out.env, { HQ_MCP_MY_API_AUTHORIZATION_605C39F2: 'Bearer TOKEN-FOR-MY-API', HQ_MCP_MY_API_AUTHORIZATION_73D83EED: 'Bearer TOKEN-FOR-INTERNAL' });
+  assert.ok(out.config.includes('mcp_servers.my-api.env_http_headers={"Authorization"="HQ_MCP_MY_API_AUTHORIZATION_605C39F2"}'));
+  assert.ok(out.config.includes('mcp_servers.my_api.env_http_headers={"Authorization"="HQ_MCP_MY_API_AUTHORIZATION_73D83EED"}'));
+});
+
+test("a connection's variables only add to Codex's environment: PATH, proxies, HQ's own values and case clashes are left out", () => {
+  const one = (env: Record<string, string>, base: NodeJS.ProcessEnv = {}, platform: NodeJS.Platform = 'win32') =>
+    codexMcp({ a: { command: 'node', env } }, [{ name: 'a', key: 'a', mode: 'ask', tools: {} }], { base, platform });
+  const path1 = one({ PATH: 'C:\\only-this' }, { Path: 'C:\\Windows' });
+  assert.equal(path1.skipped[0]?.why, 'it sets PATH, which would change Codex itself and every other connection');
+  assert.deepEqual(path1.env, {});
+  assert.match(one({ https_proxy: 'http://proxy.test:8080' }).skipped[0]?.why ?? '', /it sets https_proxy, which would change Codex itself/);
+  assert.match(one({ NODE_EXTRA_CA_CERTS: 'C:\\ca.pem' }).skipped[0]?.why ?? '', /NODE_EXTRA_CA_CERTS/);
+  assert.match(one({ TEMP: 'C:\\t' }).skipped[0]?.why ?? '', /it sets TEMP/, "TEMP is on Codex's list for every server, set or not");
+  // HQ's own value, as it is: nothing changes, so it is fine, and Codex passes it on from its own environment.
+  const same = one({ GITHUB_TOKEN: 'ghp_same', PATH: 'C:\\Windows' }, { GITHUB_TOKEN: 'ghp_same', Path: 'C:\\Windows' });
+  assert.deepEqual(same.skipped, []);
+  assert.deepEqual(same.env, {});
+  assert.ok(same.config.includes('mcp_servers.a.env_vars=["GITHUB_TOKEN","PATH"]'));
+  assert.match(one({ GITHUB_TOKEN: 'ghp_other' }, { GITHUB_TOKEN: 'ghp_mine' }).skipped[0]?.why ?? '', /GITHUB_TOKEN, which HQ's own environment has with another value/);
+  // Windows reads Api_Key and API_KEY as one variable.
+  const two = (platform: NodeJS.Platform) =>
+    codexMcp(
+      { a: { command: 'x', env: { Api_Key: '1' } }, b: { command: 'y', env: { API_KEY: '2' } } },
+      [
+        { name: 'a', key: 'a', mode: 'ask', tools: {} },
+        { name: 'b', key: 'b', mode: 'ask', tools: {} },
+      ],
+      { base: {}, platform },
+    );
+  assert.equal(two('win32').skipped[0]?.why, 'another connection sets API_KEY differently');
+  assert.deepEqual(two('linux').skipped, []);
+  // And the app-server's own environment never takes a connection's value over its own.
+  const env = codexServer.appServerEnv({ PATH: 'C:\\x', NEW_ONE: '1' }, { Path: 'C:\\Windows' }, 'win32');
+  assert.deepEqual(env, { Path: 'C:\\Windows', NEW_ONE: '1' });
+});
+
+test('which call an approval is about: by its arguments, then by the tool the message names; never a guess', () => {
+  const call = (id: string, tool: string, args: unknown) => ({ id, type: 'mcpToolCall', status: 'inProgress', server: 's', tool, arguments: args });
+  const read = call('A', 'get_frame', {});
+  const change = call('B', 'create_thing', { title: 'Launch' });
+  assert.equal(codex.mcpCallFor([read, change], {}, 'get_frame')?.id, 'A');
+  assert.equal(codex.mcpCallFor([read, change], { title: 'Launch' }, 'create_thing')?.id, 'B');
+  // Same arguments: the message's tool name tells them apart; a title that is no tool's name doesn't.
+  const other = call('C', 'create_thing', {});
+  assert.equal(codex.mcpCallFor([read, other], {}, 'create_thing')?.id, 'C');
+  assert.equal(codex.mcpCallFor([read, other], {}, 'Create a thing'), null);
+  // Keys in another order are the same arguments; the very same call twice answers the oldest.
+  assert.equal(codex.mcpCallFor([call('D', 't', { a: 1, b: [1, { c: 2 }] })], { b: [1, { c: 2 }], a: 1 }, undefined)?.id, 'D');
+  assert.equal(codex.mcpCallFor([call('E', 't', { x: 1 }), call('F', 't', { x: 1 })], { x: 1 }, 't')?.id, 'E');
+  assert.equal(codex.mcpCallFor([call('G', 't', { x: 1 })], { x: 2 }, 't'), null, 'other arguments: not this call');
+  assert.equal(codex.mcpCallFor([], {}, 't'), null);
+});
+
+/** Turn a connection on for the GPT desk, in this mode. */
+function connect(name: string, mode: 'ask' | 'read' | 'auto') {
+  p.state.connections = p.state.connections.filter((c) => c.name !== name);
+  p.state.connections.push({ name, source: 'user', enabled: true, desks: [desk.id], mode });
+}
+
+/** A connection tool call as Codex runs it: started, its approval asked, then ended as HQ answered. */
+async function mcpCall(f: Fake, id: string, server: string, tool: string, args: Record<string, unknown>, content: unknown[] = [{ type: 'text', text: 'ok' }]) {
+  f.emit('item/started', { threadId: 'th', turnId: 'tu-1', item: { type: 'mcpToolCall', id, server, tool, status: 'inProgress', arguments: args, result: null, error: null } });
+  const answer = await f.ask('mcpServer/elicitation/request', {
+    threadId: 'th',
+    turnId: 'tu-1',
+    serverName: server,
+    mode: 'form',
+    _meta: { codex_approval_kind: 'mcp_tool_call', tool_params: args },
+    message: `Allow the ${server} MCP server to run tool "${tool}"?`,
+    requestedSchema: { type: 'object', properties: {} },
+  });
+  const ok = answer.action === 'accept';
+  f.emit('item/completed', {
+    threadId: 'th',
+    turnId: 'tu-1',
+    item: { type: 'mcpToolCall', id, server, tool, status: ok ? 'completed' : 'failed', arguments: args, result: ok ? { content } : null, error: ok ? null : { message: 'user rejected MCP tool call' } },
+  });
+  return answer.action as string;
+}
+
+// 1x1 PNG, as a connected tool's screenshot.
+const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==';
+
+test('a GPT desk uses its connections: reads run, changes wait on Ask with the reason told, pictures can be attached', async () => {
+  connect('tester', 'ask');
+  connect('oldsse', 'ask');
+  const item = ticket(desk.id);
+  const answers: string[] = [];
+  let steered = '';
+  scenario = (f, method, params) => {
+    if (method === 'turn/steer') {
+      steered = params.input?.[0]?.text ?? '';
+      return {};
+    }
+    return deskTurn(async (ff) => {
+      answers.push(await mcpCall(ff, 'm1', 'tester', 'get_frame', {}, [{ type: 'text', text: 'here' }, { type: 'image', data: PNG, mimeType: 'image/png' }]));
+      answers.push(await mcpCall(ff, 'm2', 'tester', 'create_thing', { title: 'Launch' }));
+      const comment = await call(ff, 'comment_on_ticket', { text: 'Here is the frame.', screenshots: 1 });
+      assert.equal(comment.success, true, JSON.stringify(comment));
+      await call(ff, 'report_done', { summary: 'Looked at the frame and asked before creating anything.' });
+      return { status: 'completed' };
+    })(f, method, params);
+  };
+  runner.kickoff(p, item.id, 'manual');
+  await idle();
+  assert.equal(runOf(item).status, 'done', runOf(item).error);
+  assert.deepEqual(answers, ['accept', 'decline']);
+  assert.match(steered, /^HQ refused create_thing on tester: create_thing would post or change something on tester/);
+  const f = servers.at(-1)!;
+  assert.ok(f.opts.config?.includes('mcp_servers.tester.command="node"'));
+  assert.ok(f.opts.config?.includes('mcp_servers.tester.default_tools_approval_mode="prompt"'));
+  assert.equal(f.opts.env?.TESTER_TOKEN, 'abc123', 'the variable travels in the environment');
+  const dev = f.calls.find((c) => c.method === 'thread/start' || c.method === 'thread/resume')!.params.developerInstructions as string;
+  assert.match(dev, /mcp__<connection>__<tool>/);
+  assert.match(dev, /Not available to you here: oldsse \(an SSE server/);
+  assert.match(dev, /You can search the web/);
+  const attached = item.comments?.find((c) => c.text === 'Here is the frame.');
+  assert.equal(attached?.attachments?.length, 1, 'the screenshot went on the comment');
+  p.state.connections = [];
+});
+
+test('Auto runs a change and logs it; Read only runs a read and refuses a change', async () => {
+  connect('tester', 'auto');
+  // Claude's check listed tester's tools: Auto's delete check has what it needs.
+  p.state.checks.tester = { state: 'connected', checkedAt: new Date().toISOString(), tools: ['create_thing', 'delete_thing', 'list_things'].map((name) => ({ name, reads: name === 'list_things' })) };
+  const item = ticket(desk.id);
+  const answers: string[] = [];
+  scenario = deskTurn(async (f) => {
+    answers.push(await mcpCall(f, 'a1', 'tester', 'create_thing', { title: 'Launch plan' }));
+    answers.push(await mcpCall(f, 'a2', 'tester', 'delete_thing', { id: '7' }));
+    await call(f, 'report_done', { summary: 'Created the launch plan on tester for you.' });
+    return { status: 'completed' };
+  });
+  runner.kickoff(p, item.id, 'manual');
+  await idle();
+  assert.deepEqual(answers, ['accept', 'decline'], 'a delete still waits, even on Auto');
+  assert.ok(p.state.activity.some((a) => /Changed something on tester with create_thing \(title: Launch plan\)/.test(a.text)), 'the auto change is in the activity feed');
+
+  connect('tester', 'read');
+  const second = ticket(desk.id);
+  const more: string[] = [];
+  scenario = deskTurn(async (f) => {
+    more.push(await mcpCall(f, 'r1', 'tester', 'list_things', {}));
+    more.push(await mcpCall(f, 'r2', 'tester', 'create_thing', { title: 'x' }));
+    await call(f, 'report_done', { summary: 'Read the list of things on tester for you.' });
+    return { status: 'completed' };
+  });
+  runner.kickoff(p, second.id, 'manual');
+  await idle();
+  assert.deepEqual(more, ['accept', 'decline']);
+  p.state.connections = [];
+  delete p.state.checks.tester;
+});
+
+/** An approval request as Codex sends it for a connection's tool call. */
+const approval = (server: string, tool: string, args: unknown) => ({
+  threadId: 'th',
+  turnId: 'tu-1',
+  serverName: server,
+  mode: 'form',
+  _meta: { codex_approval_kind: 'mcp_tool_call', tool_params: args },
+  message: `Allow the ${server} MCP server to run tool "${tool}"?`,
+  requestedSchema: { type: 'object', properties: {} },
+});
+const started = (id: string, server: string, tool: string, args: unknown) => ({
+  threadId: 'th',
+  turnId: 'tu-1',
+  item: { type: 'mcpToolCall', id, server, tool, status: 'inProgress', arguments: args, result: null, error: null },
+});
+
+test('two calls in flight on one server each get their own verdict: the read runs, the change waits', async () => {
+  connect('tester', 'ask');
+  const item = ticket(desk.id);
+  const got: Record<string, string> = {};
+  scenario = deskTurn(async (f) => {
+    // Both started before either approval: the newest is the change, the first approval is the read's.
+    f.emit('item/started', started('A', 'tester', 'get_frame', {}));
+    f.emit('item/started', started('B', 'tester', 'create_thing', { title: 'Launch' }));
+    got.A = (await f.ask('mcpServer/elicitation/request', approval('tester', 'get_frame', {}))).action;
+    got.B = (await f.ask('mcpServer/elicitation/request', approval('tester', 'create_thing', { title: 'Launch' }))).action;
+    // The same arguments: the tool the message names tells them apart.
+    f.emit('item/started', started('C', 'tester', 'create_thing', {}));
+    f.emit('item/started', started('D', 'tester', 'list_things', {}));
+    got.D = (await f.ask('mcpServer/elicitation/request', approval('tester', 'list_things', {}))).action;
+    got.C = (await f.ask('mcpServer/elicitation/request', approval('tester', 'create_thing', {}))).action;
+    await call(f, 'report_done', { summary: 'Looked at the frame and asked before creating anything.' });
+    return { status: 'completed' };
+  });
+  runner.kickoff(p, item.id, 'manual');
+  await idle();
+  assert.deepEqual(got, { A: 'accept', B: 'decline', D: 'accept', C: 'decline' });
+  p.state.connections = [];
+});
+
+test("a form or page a server asks for gets no; an approval HQ can't tie to a running call gets no", async () => {
+  connect('tester', 'auto');
+  p.state.checks.tester = { state: 'connected', checkedAt: new Date().toISOString(), tools: [{ name: 'create_thing', reads: false }] };
+  const item = ticket(desk.id);
+  const answers: string[] = [];
+  scenario = deskTurn(async (f) => {
+    answers.push((await f.ask('mcpServer/elicitation/request', { serverName: 'tester', mode: 'url', url: 'https://x.test', message: 'Open this', _meta: null, elicitationId: 'e1' })).action);
+    answers.push((await f.ask('mcpServer/elicitation/request', { serverName: 'tester', mode: 'form', message: 'Allow it?', _meta: { codex_approval_kind: 'mcp_tool_call' }, requestedSchema: {} })).action);
+    // A change Auto would run, but no call of it has started: HQ judges calls, never a message alone.
+    answers.push((await f.ask('mcpServer/elicitation/request', approval('tester', 'create_thing', { title: 'Plan' }))).action);
+    // Two different calls with the same arguments, and a tool title that is neither's name: no guess.
+    f.emit('item/started', started('X', 'tester', 'create_thing', {}));
+    f.emit('item/started', started('Y', 'tester', 'list_things', {}));
+    answers.push((await f.ask('mcpServer/elicitation/request', approval('tester', 'Create a thing', {}))).action);
+    await call(f, 'report_done', { summary: 'Nothing to do on tester this time.' });
+    return { status: 'completed' };
+  });
+  runner.kickoff(p, item.id, 'manual');
+  await idle();
+  assert.deepEqual(answers, ['decline', 'decline', 'decline', 'decline']);
+  assert.ok(!p.state.activity.some((a) => /Changed something on tester/.test(a.text) && /Plan/.test(a.text)), 'nothing was logged as changed');
+  p.state.connections = [];
+  delete p.state.checks.tester;
+});
+
+test('a server named hq gets no to every call: the guard lets mcp__hq__ through as HQ\'s own', async () => {
+  const item = ticket(desk.id);
+  let answer = '';
+  scenario = deskTurn(async (f) => {
+    f.emit('item/started', started('H1', 'hq', 'delete_everything', { id: '1' }));
+    answer = (await f.ask('mcpServer/elicitation/request', approval('hq', 'delete_everything', { id: '1' }))).action;
+    await call(f, 'report_done', { summary: 'Nothing to do on hq this time at all.' });
+    return { status: 'completed' };
+  });
+  runner.kickoff(p, item.id, 'manual');
+  await idle();
+  assert.equal(answer, 'decline');
+});
+
+test('Auto with tool hints from Codex: changes run, a destructive one waits; with no hints at all, Auto acts as Ask', async () => {
+  mcpAuth.setGptLoginTestHooks();
+  // webby is signed in only for GPT: Claude's check has no tools for it, Codex's has them with their hints.
+  scenario = (_f, method) =>
+    method === 'mcpServerStatus/list'
+      ? {
+          data: [
+            {
+              name: 'webby',
+              authStatus: 'oAuth',
+              tools: {
+                update_card: { name: 'update_card', inputSchema: {}, annotations: { destructiveHint: false } },
+                sync_board: { name: 'sync_board', inputSchema: {}, annotations: { destructiveHint: true } },
+              },
+            },
+          ],
+          nextCursor: null,
+        }
+      : {};
+  await mcpAuth.checkGptLogins(p, [{ name: 'webby', config: { type: 'http', url: 'https://mcp.example.test/mcp' } }]);
+  assert.equal(mcpAuth.gptToolHints(p.id, 'webby', { type: 'http', url: 'https://mcp.example.test/mcp' })?.sync_board?.destructive, true);
+  assert.equal(mcpAuth.gptToolHints(p.id, 'webby', { type: 'http', url: 'https://elsewhere.test/mcp' }), undefined, 'hints are for the URL they came from');
+  connect('webby', 'auto');
+  const item = ticket(desk.id);
+  const answers: string[] = [];
+  let steered = '';
+  let dev = '';
+  const turn = deskTurn(async (f) => {
+    answers.push(await mcpCall(f, 'w1', 'webby', 'update_card', { id: 1, title: 'New title' }));
+    answers.push(await mcpCall(f, 'w2', 'webby', 'sync_board', { board: 'b1' }));
+    await call(f, 'report_done', { summary: 'Updated the card on webby for you.' });
+    return { status: 'completed' };
+  });
+  scenario = (f, method, params) => {
+    if (method === 'turn/steer') {
+      steered = params.input?.[0]?.text ?? '';
+      return {};
+    }
+    if (method === 'thread/start' || method === 'thread/resume') dev = params.developerInstructions;
+    return turn(f, method, params);
+  };
+  runner.kickoff(p, item.id, 'manual');
+  await idle();
+  assert.deepEqual(answers, ['accept', 'decline']);
+  assert.match(steered, /webby marks sync_board as able to overwrite or delete/);
+  assert.doesNotMatch(dev, /Auto acts as Ask/);
+
+  // tester: a program Claude never checked and Codex has no hints for. Auto can't tell its deletes, so it asks.
+  p.state.connections = [];
+  connect('tester', 'auto');
+  const second = ticket(desk.id);
+  const more: string[] = [];
+  const turn2 = deskTurn(async (f) => {
+    more.push(await mcpCall(f, 't1', 'tester', 'list_things', {}));
+    more.push(await mcpCall(f, 't2', 'tester', 'create_thing', { title: 'x' }));
+    await call(f, 'report_done', { summary: 'Read the list of things on tester for you.' });
+    return { status: 'completed' };
+  });
+  scenario = (f, method, params) => {
+    if (method === 'turn/steer') {
+      steered = params.input?.[0]?.text ?? '';
+      return {};
+    }
+    if (method === 'thread/start' || method === 'thread/resume') dev = params.developerInstructions;
+    return turn2(f, method, params);
+  };
+  runner.kickoff(p, second.id, 'manual');
+  await idle();
+  assert.deepEqual(more, ['accept', 'decline']);
+  assert.match(steered, /^HQ refused create_thing on tester: create_thing would post or change something on tester as the founder, so it needs approval first/);
+  assert.match(dev, /- Auto acts as Ask on tester until HQ knows its tools \(press Check on the Connections page\)\./);
+  assert.match(dev, /A rejected connection call that would change something needs approval: put exactly what you would do in a report under reports\//);
+  assert.ok(!p.state.activity.some((a) => /Changed something on tester with create_thing \(title: x\)/.test(a.text)));
+  p.state.connections = [];
+  mcpAuth.setGptLoginTestHooks();
+});
+
+test("a GPT project's Connections rows: what works on GPT, what needs a sign-in for GPT, what is Claude only", async () => {
+  mcpAuth.setGptLoginTestHooks();
+  let rows = (await api('GET', `/projects/${p.id}/connections`)).body.rows as { name: string; gpt?: { state: string; why?: string } }[];
+  const gpt = (name: string) => rows.find((r) => r.name === name)?.gpt;
+  assert.equal(gpt('tester')?.state, 'ready');
+  assert.equal(gpt('tokened')?.state, 'ready');
+  assert.equal(gpt('webby')?.state, 'unchecked');
+  assert.equal(gpt('oldsse')?.state, 'claude-only');
+  // Check asks Codex which servers wait for a sign-in: only the one with nothing to sign in with.
+  scenario = (_f, method) => (method === 'mcpServerStatus/list' ? { data: [{ name: 'webby', authStatus: 'notLoggedIn' }] } : {});
+  const before = servers.length;
+  await mcpAuth.checkGptLogins(p, [
+    { name: 'webby', config: { type: 'http', url: 'https://mcp.example.test/mcp' } },
+    { name: 'tokened', config: { type: 'http', url: 'https://api.example.test/mcp/', headers: { Authorization: 'Bearer secret-xyz' } } },
+    { name: 'tester', config: { type: 'stdio', command: 'node' } },
+  ]);
+  assert.equal(servers.length, before + 1);
+  const cfg = servers.at(-1)!.opts.config ?? [];
+  assert.ok(cfg.some((c) => c.startsWith('mcp_servers.webby.url=')) && !cfg.some((c) => c.includes('tokened') || c.includes('tester')), 'only the browser sign-in server is asked about');
+  rows = (await api('GET', `/projects/${pc.id}/connections`)).body.rows;
+  assert.equal(rows.find((r) => r.name === 'webby')?.gpt, undefined, 'a Claude project shows no GPT line');
+  rows = (await api('GET', `/projects/${p.id}/connections`)).body.rows;
+  assert.equal(gpt('webby')?.state, 'needs-login');
+  // What Codex says it can't tell is not checked; a server with no sign-in to speak of just works.
+  for (const [auth, state] of [
+    ['unknown', 'unchecked'],
+    ['unsupported', 'ready'],
+    ['bearerToken', 'ready'],
+    ['oAuth', 'signed-in'],
+  ]) {
+    scenario = (_f, method) => (method === 'mcpServerStatus/list' ? { data: [{ name: 'webby', authStatus: auth }] } : {});
+    await mcpAuth.checkGptLogins(p, [{ name: 'webby', config: { type: 'http', url: 'https://mcp.example.test/mcp' } }]);
+    rows = (await api('GET', `/projects/${p.id}/connections`)).body.rows;
+    assert.equal(gpt('webby')?.state, state, auth);
+  }
+  // A program a desk run would leave out (it sets a variable Codex reads itself) is Claude only, with the run's reason.
+  const info = { name: 'withenv', source: 'user' as const, transport: 'stdio' as const, target: 'node', auth: 'none' as const };
+  assert.deepEqual(mcpAuth.gptRowOf(p, info, { command: 'node', env: { OPENAI_API_KEY: 'sk-x' } }), { state: 'claude-only', why: 'it sets OPENAI_API_KEY, which Codex reads itself' });
+  assert.deepEqual(mcpAuth.gptRowOf(p, { ...info, name: 'hq' }, { command: 'node' }), { state: 'claude-only', why: "hq is HQ's own name" });
+  mcpAuth.setGptLoginTestHooks();
+});
+
+test('a Check that asked Codex before a sign-in landed never writes its older answer over it', async () => {
+  mcpAuth.setGptLoginTestHooks();
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  let asked = 0;
+  scenario = async (f, method, params) => {
+    if (method === 'mcpServerStatus/list') {
+      // The sign-in's own look at its server answers at once; the Check read "not signed in" and answers late.
+      if (params?.serverName === 'webby') return { data: [{ name: 'webby', authStatus: 'oAuth', tools: {} }], nextCursor: null };
+      asked++;
+      await gate;
+      return { data: [{ name: 'webby', authStatus: 'notLoggedIn' }], nextCursor: null };
+    }
+    if (method === 'mcpServer/oauth/login') {
+      setTimeout(() => f.emit('mcpServer/oauthLogin/completed', { name: 'webby', success: true }), 5);
+      return { authorizationUrl: 'https://auth.example.test/a' };
+    }
+    return {};
+  };
+  const config = { type: 'http' as const, url: 'https://mcp.example.test/mcp' };
+  const checking = mcpAuth.checkGptLogins(p, [{ name: 'webby', config }]);
+  for (let i = 0; i < 200 && !asked; i++) await sleep(2);
+  mcpAuth.startGptLogin(p, 'webby', config);
+  for (let i = 0; i < 200 && mcpAuth.gptLoginOf(p.id, 'webby'); i++) await sleep(5);
+  const info = { name: 'webby', source: 'user' as const, transport: 'http' as const, target: config.url, auth: 'oauth' as const };
+  assert.equal(mcpAuth.gptRowOf(p, info, config).state, 'signed-in');
+  release();
+  await checking;
+  assert.equal(mcpAuth.gptRowOf(p, info, config).state, 'signed-in', 'the older answer did not land');
+  mcpAuth.setGptLoginTestHooks();
+});
+
+test('sign in to a server for GPT: the page is shown, the sign-in lands, the row says signed in', async () => {
+  mcpAuth.setGptLoginTestHooks();
+  let finish!: () => void;
+  let timeoutSecs = 0;
+  scenario = (f, method, params) => {
+    if (method === 'mcpServer/oauth/login') {
+      assert.equal(params.name, 'webby');
+      timeoutSecs = params.timeoutSecs;
+      finish = () => f.emit('mcpServer/oauthLogin/completed', { name: 'webby', threadId: null, success: true });
+      return { authorizationUrl: 'https://auth.example.test/authorize?client_id=x', loginId: 'o1' };
+    }
+    return {};
+  };
+  const started = await api('POST', `/projects/${p.id}/connections/webby/gpt-login`);
+  assert.equal(started.status, 202);
+  for (let i = 0; i < 100 && mcpAuth.gptLoginOf(p.id, 'webby')?.state !== 'waiting'; i++) await sleep(2);
+  assert.equal(mcpAuth.gptLoginOf(p.id, 'webby')?.authUrl, 'https://auth.example.test/authorize?client_id=x');
+  assert.ok(timeoutSecs > 590 && timeoutSecs <= 600, `Codex waits as long as HQ does (${timeoutSecs} s)`);
+  assert.equal((await api('POST', `/projects/${p.id}/connections/webby/gpt-login`)).status, 409, 'one sign-in at a time');
+  finish();
+  for (let i = 0; i < 100 && mcpAuth.gptLoginOf(p.id, 'webby'); i++) await sleep(2);
+  const rows = (await api('GET', `/projects/${p.id}/connections`)).body.rows as { name: string; gpt?: { state: string } }[];
+  assert.equal(rows.find((r) => r.name === 'webby')?.gpt?.state, 'signed-in');
+  for (let i = 0; i < 100 && !servers.at(-1)!.closed; i++) await sleep(2);
+  assert.ok(servers.at(-1)!.closed);
+  assert.equal((await api('POST', `/projects/${p.id}/connections/nothere/gpt-login`)).status, 404);
+  assert.equal((await api('POST', `/projects/${p.id}/connections/tester/gpt-login`)).status, 400, 'a program on this PC has nothing to sign in to');
+  assert.equal((await api('POST', `/projects/${p.id}/connections/tokened/gpt-login`)).status, 400, 'a server with a token header has nothing to sign in to');
+  assert.equal((await api('POST', `/projects/${pc.id}/connections/webby/gpt-login`)).status, 400, 'a Claude project signs in for Claude');
+  mcpAuth.setGptLoginTestHooks();
+});
+
+test("a sign-in for GPT that fails never shows the server's own secrets", async () => {
+  mcpAuth.setGptLoginTestHooks();
+  scenario = (f, method) => {
+    if (method === 'mcpServer/oauth/login') {
+      setTimeout(() => f.emit('mcpServer/oauthLogin/completed', { name: 'webby', success: false, error: 'refused https://mcp.example.test/mcp?key=sekrit-123 for sekrit-123' }), 5);
+      return { authorizationUrl: 'https://auth.example.test/a' };
+    }
+    return {};
+  };
+  mcpAuth.startGptLogin(p, 'webby', { type: 'http', url: 'https://mcp.example.test/mcp?key=sekrit-123' });
+  for (let i = 0; i < 200 && mcpAuth.gptLoginOf(p.id, 'webby')?.state !== 'failed'; i++) await sleep(2);
+  const failed = mcpAuth.gptLoginOf(p.id, 'webby');
+  assert.equal(failed?.state, 'failed');
+  assert.match(failed?.error ?? '', /^Signing in failed: refused/);
+  assert.ok(!failed?.error?.includes('sekrit-123'), failed?.error);
+  mcpAuth.setGptLoginTestHooks();
+});
+
+test('sign out for GPT: Codex logs out of that server, the row needs a sign-in again; removing a server signs out too', async () => {
+  mcpAuth.setGptLoginTestHooks();
+  const ran: { args: string[]; env: NodeJS.ProcessEnv }[] = [];
+  codexServer.setCodexRunForTests(async (args, env) => {
+    ran.push({ args, env });
+    return { code: 0, out: "Removed OAuth credentials for 'webby'.", err: '', timedOut: false, truncated: false };
+  });
+  const creds = path.join(root, 'data', '.codex', '.credentials.json');
+  const config = { type: 'http' as const, url: 'https://mcp.example.test/mcp' };
+  const gptOf = async (name: string) => ((await api('GET', `/projects/${p.id}/connections`)).body.rows as { name: string; gpt?: { state: string } }[]).find((r) => r.name === name)?.gpt;
+  try {
+    scenario = (_f, method) => (method === 'mcpServerStatus/list' ? { data: [{ name: 'webby', authStatus: 'oAuth', tools: { x: { name: 'x' } } }] } : {});
+    await mcpAuth.checkGptLogins(p, [{ name: 'webby', config }]);
+    assert.equal((await gptOf('webby'))?.state, 'signed-in');
+    // Codex holds no sign-ins at all yet: nothing to run.
+    assert.equal((await api('POST', `/projects/${p.id}/connections/webby/gpt-logout`)).status, 200);
+    assert.equal(ran.length, 0);
+    assert.equal((await gptOf('webby'))?.state, 'needs-login');
+    // With Codex's sign-ins file: `codex mcp logout` for that server's id, with its settings, in HQ's Codex home.
+    fs.writeFileSync(creds, '{}');
+    await mcpAuth.checkGptLogins(p, [{ name: 'webby', config }]);
+    const out = await api('POST', `/projects/${p.id}/connections/webby/gpt-logout`);
+    assert.equal(out.status, 200);
+    assert.equal(ran.length, 1);
+    const args = ran[0].args;
+    assert.deepEqual(args.slice(0, 2), ['mcp', 'logout']);
+    assert.deepEqual(args.slice(-2), ['--', 'webby']);
+    assert.ok(args.includes('mcp_servers.webby.url="https://mcp.example.test/mcp"') && args.includes('mcp_oauth_credentials_store="file"'));
+    assert.equal(ran[0].env.CODEX_HOME, path.join(root, 'data', '.codex'));
+    assert.equal((out.body.rows as { name: string; gpt?: { state: string } }[]).find((r) => r.name === 'webby')?.gpt?.state, 'needs-login');
+    assert.equal(mcpAuth.gptToolHints(p.id, 'webby', config), undefined, 'its tool hints are gone too');
+    assert.ok(p.state.activity.some((a) => a.text === 'Signed out of webby for GPT desks'));
+    // What Codex says when it can't is shown, the server's secrets blanked.
+    codexServer.setCodexRunForTests(async () => ({ code: 1, out: '', err: 'WARNING: proceeding, even though we could not create PATH aliases\nError: store locked for secret-xyz', timedOut: false, truncated: false }));
+    await assert.rejects(
+      mcpAuth.codexLogout('webby', { type: 'http', url: 'https://mcp.example.test/mcp', headers: { Authorization: 'Bearer secret-xyz' } }),
+      (e: Error) => /^Codex could not sign out of webby: store locked for /.test(e.message) && !e.message.includes('secret-xyz') && !e.message.includes('PATH aliases'),
+    );
+    codexServer.setCodexRunForTests(async (args, env) => {
+      ran.push({ args, env });
+      return { code: 0, out: '', err: '', timedOut: false, truncated: false };
+    });
+    // Only GPT projects, and only a server you sign in to in a browser.
+    assert.equal((await api('POST', `/projects/${pc.id}/connections/webby/gpt-logout`)).status, 400);
+    assert.equal((await api('POST', `/projects/${p.id}/connections/tester/gpt-logout`)).status, 400);
+    // Removed: a GPT sign-in running for it stops, what Codex said goes, and Codex signs out, unless a project still has it.
+    ran.length = 0;
+    await mcpAuth.checkGptLogins(p, [{ name: 'webby', config }]);
+    scenario = (_f, method) => (method === 'mcpServer/oauth/login' ? { authorizationUrl: 'https://auth.example.test/a' } : {});
+    mcpAuth.startGptLogin(p, 'webby', config);
+    for (let i = 0; i < 100 && mcpAuth.gptLoginOf(p.id, 'webby')?.state !== 'waiting'; i++) await sleep(2);
+    assert.equal(await conns.dropGptSignIn(p, 'webby', config, false), null);
+    assert.equal(mcpAuth.gptLoginOf(p.id, 'webby'), undefined, 'the sign-in stopped');
+    assert.equal(ran.length, 0, 'webby is still set up for every project, so its sign-in stays');
+    assert.equal((await gptOf('webby'))?.state, 'unchecked', 'what Codex said is forgotten');
+    const gone = { type: 'http' as const, url: 'https://gone.example.test/mcp' };
+    assert.equal(await conns.dropGptSignIn(p, 'gone-srv', gone, true), null);
+    assert.equal(ran.length, 1);
+    assert.deepEqual(ran[0].args.slice(-2), ['--', 'gone-srv']);
+    codexServer.setCodexRunForTests(async () => ({ code: 1, out: '', err: 'Error: disk full', timedOut: false, truncated: false }));
+    assert.match((await conns.dropGptSignIn(p, 'gone-srv', gone, true)) ?? '', /^Removed, but Codex could not sign out of gone-srv: disk full\./);
+    assert.equal(await conns.dropGptSignIn(p, 'prog', { command: 'node' }, false), null, 'a program has no sign-in');
+  } finally {
+    codexServer.setCodexRunForTests(null);
+    fs.rmSync(creds, { force: true });
+    mcpAuth.setGptLoginTestHooks();
+  }
+});
+
+test('a sign-in page that is not a web page is never shown; cancel ends the sign-in', async () => {
+  mcpAuth.setGptLoginTestHooks();
+  scenario = (_f, method) => (method === 'mcpServer/oauth/login' ? { authorizationUrl: 'javascript:alert(1)' } : {});
+  mcpAuth.startGptLogin(p, 'webby', { type: 'http', url: 'https://mcp.example.test/mcp' });
+  for (let i = 0; i < 100 && mcpAuth.gptLoginOf(p.id, 'webby')?.state !== 'failed'; i++) await sleep(2);
+  assert.equal(mcpAuth.gptLoginOf(p.id, 'webby')?.state, 'failed');
+  assert.equal(mcpAuth.gptLoginOf(p.id, 'webby')?.authUrl, undefined);
+  mcpAuth.setGptLoginTestHooks();
+  scenario = (_f, method) => (method === 'mcpServer/oauth/login' ? { authorizationUrl: 'https://auth.example.test/a' } : {});
+  mcpAuth.startGptLogin(p, 'webby', { type: 'http', url: 'https://mcp.example.test/mcp' });
+  for (let i = 0; i < 100 && mcpAuth.gptLoginOf(p.id, 'webby')?.state !== 'waiting'; i++) await sleep(2);
+  const f = servers.at(-1)!;
+  assert.equal((await api('DELETE', `/projects/${p.id}/connections/webby/gpt-login`)).status, 200);
+  for (let i = 0; i < 100 && !f.closed; i++) await sleep(2);
+  assert.ok(f.closed);
+  assert.equal(mcpAuth.gptLoginOf(p.id, 'webby'), undefined);
+  mcpAuth.setGptLoginTestHooks();
 });
 
 // ---------- signing in ----------

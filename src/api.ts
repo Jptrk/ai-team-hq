@@ -160,6 +160,11 @@ export const api = {
     request<ConnectionsResponse>(`${pp(pid)}/connections/${encodeURIComponent(name)}?source=${encodeURIComponent(source)}`, json('DELETE')),
   loginConnection: (pid: string, name: string) => request<ConnectionsResponse>(`${pp(pid)}/connections/${encodeURIComponent(name)}/login`, json('POST', {})),
   cancelLogin: (pid: string, name: string) => request<ConnectionsResponse>(`${pp(pid)}/connections/${encodeURIComponent(name)}/login`, json('DELETE')),
+  /** Sign in to a server for GPT desks: HQ's Codex runs it; the row shows the page to open. */
+  gptLoginConnection: (pid: string, name: string) => request<ConnectionsResponse>(`${pp(pid)}/connections/${encodeURIComponent(name)}/gpt-login`, json('POST', {})),
+  cancelGptLogin: (pid: string, name: string) => request<ConnectionsResponse>(`${pp(pid)}/connections/${encodeURIComponent(name)}/gpt-login`, json('DELETE')),
+  /** Sign HQ's Codex out of a server: GPT desks need a new sign-in for it. */
+  gptLogoutConnection: (pid: string, name: string) => request<ConnectionsResponse>(`${pp(pid)}/connections/${encodeURIComponent(name)}/gpt-logout`, json('POST', {})),
   logoutConnection: (pid: string, name: string) => request<ConnectionsResponse>(`${pp(pid)}/connections/${encodeURIComponent(name)}/logout`, json('POST', {})),
   /** Windows Terminal in the project folder, optionally running `claude mcp login <login>`. */
   openTerminal: (pid: string, login?: string) => request<{ ok: true }>(`${pp(pid)}/terminal`, json('POST', login ? { login } : {})),
