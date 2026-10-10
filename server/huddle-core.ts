@@ -1,6 +1,7 @@
 import { estimateHuddleRuns, HUDDLE_KIND_LABEL, MAX_HUDDLE_DESKS, MAX_HUDDLE_ROUNDS, MAX_HUDDLE_TOPIC, MAX_TEAM_NOTES, MIN_HUDDLE_DESKS } from '../shared/huddle';
 import type { Agent, Huddle, HuddleCard, HuddleKind, HuddleLane, HuddleProposal, HuddleSummary, State, WorkItem } from '../shared/types';
 import { leadOf } from './agents';
+import { limit } from './limits';
 import { now, today, uid, type Project } from './store';
 
 /**
@@ -8,13 +9,8 @@ import { now, today, uid, type Project } from './store';
  * tickets or team notes when the founder approves them. No runner here; server/huddles.ts drives rounds.
  */
 
-/** Huddles a project can start per day. 0 turns them off; a value that is not a number means the default 5. */
-export function huddlesPerDay(raw: string | undefined): number {
-  const n = raw?.trim() ? Number(raw) : NaN;
-  return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 5;
-}
-
-export const HUDDLES_PER_DAY = huddlesPerDay(process.env.HQ_HUDDLES_PER_DAY);
+/** Huddles a project can start per day now (Accounts page, or HQ_HUDDLES_PER_DAY). */
+export const huddleCap = (): number => limit('huddlesPerDay');
 export const MAX_NOTES = MAX_TEAM_NOTES;
 const MAX_KEPT = 30;
 /** Past this, the oldest go even with proposals still waiting, so the 3-second poll stays small. */
@@ -87,10 +83,10 @@ export function validateHuddle(s: State, raw: unknown): { input: HuddleInput; fa
 }
 
 /** Null when another huddle can start today, or why not. */
-export function canStartToday(s: State, day = today(), cap = HUDDLES_PER_DAY): string | null {
+export function canStartToday(s: State, day = today(), cap = huddleCap()): string | null {
   if (s.huddleDay.day !== day) s.huddleDay = { day, started: 0 };
-  if (cap <= 0) return 'Huddles are turned off (HQ_HUDDLES_PER_DAY=0).';
-  return s.huddleDay.started >= cap ? `This project already ran ${cap} huddles today. That is the daily limit (HQ_HUDDLES_PER_DAY).` : null;
+  if (cap <= 0) return 'Huddles are turned off: Huddles per project per day is 0 (Limits, on the Accounts page).';
+  return s.huddleDay.started >= cap ? `This project already ran ${cap} huddles today. That is the daily limit (Limits, on the Accounts page).` : null;
 }
 
 /** Drop the oldest huddles past `keep`, only those `ok` lets go. Never one that is running. */

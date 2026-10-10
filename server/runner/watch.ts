@@ -1,3 +1,5 @@
+import { LIMITS, type LimitKey } from '../../shared/limits';
+
 /**
  * When a desk run is stopped, and why, in words the founder can act on.
  *
@@ -22,24 +24,20 @@ function ms(v: string | undefined, fallback: number): number {
   return v !== undefined && v.trim() !== '' && Number.isFinite(n) && n > 0 ? Math.round(n) : fallback;
 }
 
-export function limitsFromEnv(env: NodeJS.ProcessEnv = process.env): WatchLimits {
-  return {
-    idleMs: ms(env.HQ_RUN_IDLE_MS, 8 * 60_000),
-    toolIdleMs: ms(env.HQ_TOOL_IDLE_MS, 20 * 60_000),
-    capMs: ms(env.HQ_RUN_TIMEOUT_MS, 40 * 60_000),
-  };
-}
-
 /** How long one connection tool call may take (HQ_MCP_TOOL_TIMEOUT_MS, 15 minutes). An explicit 0 leaves it to Claude Code. */
 export function mcpToolTimeoutFromEnv(v: string | undefined): number {
   if (v !== undefined && v.trim() !== '' && Number(v) === 0) return 0;
   return ms(v, 15 * 60_000);
 }
 
-/** Limits that undo the point of the watch, said once at startup. HQ_RUN_TIMEOUT_MS used to be the only limit, at 10 minutes. */
+/**
+ * Limits that undo the point of the watch, said once at startup. HQ_RUN_TIMEOUT_MS used to be the only limit, at 10
+ * minutes. It names the row and the .env setting, not where the value came from: the Accounts page wins either way.
+ */
 export function limitsWarning(limits: WatchLimits): string | null {
   if (limits.capMs <= 10 * 60_000 || limits.capMs < limits.toolIdleMs) {
-    return `HQ_RUN_TIMEOUT_MS is ${duration(limits.capMs)}: that caps every run, however busy, before a quiet tool call (HQ_TOOL_IDLE_MS, ${duration(limits.toolIdleMs)}) would stop it. Raise it or remove it from .env (default 40 minutes).`;
+    const cap = LIMITS.runTimeoutMs;
+    return `${cap.label} (${cap.env}) is ${duration(limits.capMs)}: that caps every run, however busy, before a quiet tool call (${LIMITS.toolIdleMs.label}, ${duration(limits.toolIdleMs)}) would stop it. Raise it under Limits on the Accounts page (default ${duration(cap.default)}).`;
   }
   return null;
 }
@@ -54,11 +52,14 @@ export function duration(ms: number): string {
   return `${m} minute${m === 1 ? '' : 's'}`;
 }
 
+/** The limit's row under Limits, for a message that says which one stopped a run. */
+export const limitRow = (key: LimitKey): string => `${LIMITS[key].label}, on the Accounts page`;
+
 /** Why a run was stopped. Never words the retry checks look for (budget, session, too large, image). */
 export const stopText = {
-  idle: (ms: number) => `Stopped: no progress for ${duration(ms)} (HQ_RUN_IDLE_MS)`,
-  tool: (ms: number) => `Stopped: a tool call gave no result for ${duration(ms)} (HQ_TOOL_IDLE_MS)`,
-  cap: (ms: number) => `Stopped after ${duration(ms)}, the most one run may take (HQ_RUN_TIMEOUT_MS)`,
+  idle: (ms: number) => `Stopped: no progress for ${duration(ms)} (${limitRow('runIdleMs')})`,
+  tool: (ms: number) => `Stopped: a tool call gave no result for ${duration(ms)} (${limitRow('toolIdleMs')})`,
+  cap: (ms: number) => `Stopped after ${duration(ms)}, the most one run may take (${limitRow('runTimeoutMs')})`,
   you: 'Stopped by you',
 };
 
@@ -118,7 +119,7 @@ export class RunWatch {
   }
 }
 
-/** Claude refused because of a usage limit or an account problem. until: when a usage limit resets, if Claude said. */
+/** Claude or ChatGPT refused because of a usage limit or an account problem. until: when a usage limit resets, if the model said. */
 export interface UsageLimit {
   kind: 'usage' | 'account';
   until?: string;

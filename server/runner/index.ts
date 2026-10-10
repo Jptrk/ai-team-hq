@@ -1,19 +1,19 @@
-import type { Agent, Attachment, ItemStatus, Meta, Run, RunReason, RunnerName, WorkItem } from '../../shared/types';
-import { projectProvider } from '../../shared/types';
+import type { Agent, Attachment, ItemStatus, Meta, Provider, Run, RunReason, RunnerName, WorkItem } from '../../shared/types';
+import { projectProvider, PROVIDERS } from '../../shared/types';
 import { refreshStatuses, settleInstructions } from '../agents';
 import { clearWaiting, findThread, markRead, needsWake, note, pauseForFailure, unreadFor } from '../chat';
 import { rewindCursor } from '../cursor';
 import { unansweredComment, unansweredImages } from '../comments';
 import { hasClaudeLogin } from '../claudeAuth';
 import { gptOptIn, gptReady, hasChatGptLogin } from '../codexAuth';
-import { autoGate, countCost, countStart, globalHold, heldCount, setModelGate, holdItem, holdWake, holdWords, noteAutoFailure, noteAutoSuccess, pauseInfo, pickStarts, queuedAuto, usageHoldExpired, usageHoldFrom, type HeldFor } from '../autopilot';
+import { autoGate, countCost, countStart, globalHold, heldCount, setModelGate, holdItem, holdWake, holdWords, noteAutoFailure, noteAutoSuccess, pauseInfo, pickStarts, queuedAuto, expiredHolds, usageHoldFrom, type HeldFor } from '../autopilot';
 import { clearSignoff, qaDeskOf, queuedQaRun, rerouteQa } from '../qa';
 import { setPaused, settings, setUsageHold } from '../settings';
 import { allProjects, now, uid, type Project } from '../store';
 import { claudeRunner, MODEL, runCost } from './claude';
 import { codexRunner, isGptSession } from './codex';
 import { goalState, planDue, plannerOf } from '../goal';
-import { CONCURRENCY, enqueue } from './queue';
+import { concurrency, enqueue } from './queue';
 import type { AgentRunner, RunHooks, RunInput } from './types';
 import type { UsageLimit } from './watch';
 
@@ -319,8 +319,9 @@ async function execute(p: Project, run: Run, agent: Agent, input: Omit<RunInput,
   agent.lastActive = now();
   p.commit();
 
+  // The model this run is on: a limit it reports holds that model's projects, whether the run closed out or failed.
+  const provider = projectProvider(p.meta);
   try {
-    const provider = projectProvider(p.meta);
     if (provider === 'gpt') run.provider = 'gpt';
     // A desk whose project switched models can't resume the other model's session: it starts a new one.
     if (agent.sessionId && (provider === 'gpt') !== isGptSession(agent)) {
@@ -341,10 +342,10 @@ async function execute(p: Project, run: Run, agent: Agent, input: Omit<RunInput,
     // Autopilot's own run went fine: the failure count starts over. Any run that worked on a ticket takes it off Autopilot's skip list.
     if (run.auto && (run.reason === 'auto' || run.reason === 'plan')) noteAutoSuccess(p);
     if (input.item?.autoSkip && input.reason !== 'comment' && input.reason !== 'message') delete input.item.autoSkip;
-    // Closed out, then Claude's limit stopped it: what the team starts next still waits for the limit.
+    // Closed out, then the model's limit stopped it: what the team starts next in its projects still waits for the limit.
     if (out.usage) {
       try {
-        limitRefused(out.usage);
+        limitRefused(out.usage, provider);
       } catch (e) {
         console.error(`[hq] ${p.meta.key} usage hold:`, e instanceof Error ? e.message : e);
       }
@@ -356,10 +357,10 @@ async function execute(p: Project, run: Run, agent: Agent, input: Omit<RunInput,
     run.costUsd = charge(agent, err.outcome?.sessionId, err.outcome?.costUsd, err.outcome?.extraCostUsd);
     run.turns = err.outcome?.turns;
     stopped = cancelled.has(run.id);
-    // Claude refused (usage limit, account): automatic work everywhere waits, and the team's own start waits with it.
+    // The model refused (usage limit, account): automatic work in its projects waits, and the team's own start waits with it.
     if (err.usage) {
       try {
-        limitRefused(err.usage);
+        limitRefused(err.usage, provider);
       } catch (e) {
         console.error(`[hq] ${p.meta.key} usage hold:`, e instanceof Error ? e.message : e);
       }
@@ -385,7 +386,7 @@ async function execute(p: Project, run: Run, agent: Agent, input: Omit<RunInput,
     if (run.auto && !hold && (run.reason === 'auto' || run.reason === 'plan')) {
       noteAutoFailure(p, run.reason === 'auto' ? input.item : undefined, stopped ? 'Stopped by you.' : `Its run failed: ${run.error}`, !stopped);
     }
-    // A plan that Claude's limit stopped never planned: the lead plans again once the limit clears.
+    // A plan that the model's limit stopped never planned: the lead plans again once the limit clears.
     if (input.reason === 'plan' && err.usage) replan(p);
     p.log(agent.id, `Hit a problem${input.item ? ` on ${p.ticket(input.item)} "${input.item.title}"` : ''}: ${run.error}`);
     console.error(`[hq] ${p.meta.key} run ${run.id} for ${agent.name} failed:`, err.message);
@@ -729,7 +730,7 @@ export function deliver(p: Project, threadId: string, ids: string[], opts: Deliv
   return queued;
 }
 
-/** Queued runs the team started, held now: HQ was paused (or Claude refused) while they waited. Running ones finish. */
+/** Queued runs the team started, held now: HQ was paused (or the project's model refused) while they waited. Running ones finish. */
 export function holdQueued(p: Project): number {
   const hold = autoGate(p);
   if (!hold) return 0;
@@ -755,12 +756,12 @@ const oldestHold = (a: WorkItem, b: WorkItem) => a.autoHold!.at.localeCompare(b.
 
 /**
  * Starts what you gave while HQ was idle, oldest first, as your own clicks: a project's daily limits don't hold them,
- * only HQ's Pause or Claude's usage or account hold, and then each says that is what it waits for. Starts that no longer
+ * only HQ's Pause or the project's model's usage or account hold, and then each says that is what it waits for. Starts that no longer
  * fit their ticket are dropped; a comment of yours a later start took the place of is answered after it.
  */
 function releaseYours(p: Project): number {
   const s = p.state;
-  const gate = globalHold() ?? modelHold(p);
+  const gate = globalHold(Date.now(), projectProvider(p.meta)) ?? modelHold(p);
   let n = 0;
   let touched = false;
   for (const item of s.items.filter((i) => i.autoHold?.mine).sort(oldestHold)) {
@@ -896,7 +897,7 @@ const ticking = new Set<string>();
 function freeSlots(): number {
   let busy = 0;
   for (const q of allProjects()) busy += q.state.runs.filter((r) => r.status === 'queued' || r.status === 'running').length;
-  return Math.max(0, CONCURRENCY - busy);
+  return Math.max(0, concurrency() - busy);
 }
 
 /**
@@ -949,28 +950,42 @@ export function pauseAll(): void {
 }
 
 /**
- * Resume clears the reason shown: your Pause if you paused, otherwise Claude's usage or account hold (Resume now).
- * A usage limit that is still on stays after you lift your own Pause, so held work is not sent into it.
+ * Resume clears the reason shown: your Pause if you paused. Otherwise every model's account problem (you signed in
+ * again), and the usage limits only when the notice is about them (Resume now). A usage limit that is still on stays
+ * after you lift your Pause or fix a login, so held work is not sent into it.
  */
 export function resumeAll(): void {
-  if (settings().paused) setPaused(false);
-  else setUsageHold(null);
+  const s = settings();
+  if (s.paused) setPaused(false);
+  else {
+    const usage = pauseInfo()?.by === 'usage';
+    for (const provider of PROVIDERS) {
+      const hold = s.usageHolds?.[provider];
+      if (hold && (hold.kind === 'account' || usage)) setUsageHold(provider, null);
+    }
+  }
   eachProject('resume', autoTick);
 }
 
-/** Claude or ChatGPT refused a run: hold automatic work everywhere until the limit resets (or you resume, for an account problem). */
-function limitRefused(limit: UsageLimit): void {
-  const first = !settings().usageHold;
-  setUsageHold(usageHoldFrom(limit));
-  if (first) console.warn(`[hq] A run was refused: ${limit.text} Automatic work waits${limit.kind === 'account' ? ' until you resume' : ''}.`);
+const MODEL_NAME = { claude: 'Claude', gpt: 'ChatGPT' } as const;
+const PROJECTS_OF = { claude: 'Claude', gpt: 'GPT' } as const;
+
+/**
+ * Claude or ChatGPT refused a run: hold automatic work in that model's projects until the limit resets (or you resume,
+ * for an account problem). The other model's projects carry on.
+ */
+function limitRefused(limit: UsageLimit, provider: Provider): void {
+  const first = !settings().usageHolds?.[provider];
+  setUsageHold(provider, usageHoldFrom(limit));
+  if (first) console.warn(`[hq] A run was refused: ${limit.text} Automatic work in ${PROJECTS_OF[provider]} projects waits${limit.kind === 'account' ? ' until you resume' : ''}.`);
   eachProject('usage hold', holdQueued);
 }
 
 /** The minute sweep, live only: a usage limit that has reset clears, and every project gets a pass. One project's error never stops the rest. */
 export function autoSweep(nowMs = Date.now()): void {
-  if (usageHoldExpired(nowMs)) {
-    setUsageHold(null);
-    console.info('[hq] Usage limit reset: held work starts again.');
+  for (const provider of expiredHolds(nowMs)) {
+    setUsageHold(provider, null);
+    console.info(`[hq] ${MODEL_NAME[provider]} usage limit reset: held work starts again.`);
   }
   for (const p of allProjects()) {
     try {

@@ -6,6 +6,8 @@ import { codexMcp } from '../codexMcp';
 import { gptToolHints } from '../codexMcpAuth';
 import { codexEnv, DESK_CONFIG, openAppServer, type AppServer } from '../codexServer';
 import { runtimeServers, type AllowedServer } from '../connections';
+import { limit, watchLimits } from '../limits';
+import type { LimitKey } from '../../shared/limits';
 import { settings } from '../settings';
 import { now } from '../store';
 import {
@@ -33,13 +35,14 @@ import {
   ticketPrompt,
   type HqTools,
   type RunContext,
+  type RunMode,
 } from './claude';
 import { ALL_FILE_TOOLS, FILE_TOOL_SPECS, READ_ONLY_TOOLS, runFileTool, type FileToolName, type ToolReply } from './codexTools';
 import { attachmentPath, imageMarker, splitImages } from './content';
 import { setLastTool, toolKind } from './liveTools';
 import { isCaptureTool, keepLinkedShots, keepShots, toolImageLinksIn, toolImagesIn, toolResultIdsIn } from './screenshots';
 import type { AgentRunner, RunInput, RunOutcome } from './types';
-import { limitsFromEnv, mcpToolTimeoutFromEnv, RunWatch, stopText, type UsageLimit } from './watch';
+import { limitRow, mcpToolTimeoutFromEnv, RunWatch, stopText, type UsageLimit, type WatchLimits } from './watch';
 
 /**
  * GPT desks: each run is a turn of a Codex thread (codex app-server, see codexServer.ts) on your ChatGPT login.
@@ -59,10 +62,7 @@ import { limitsFromEnv, mcpToolTimeoutFromEnv, RunWatch, stopText, type UsageLim
  * Codex keeps threads in HQ's Codex home (data/.codex/sessions).
  */
 
-const WATCH = limitsFromEnv();
-const MAX_CALLS = Number(process.env.HQ_GPT_MAX_TOOL_CALLS ?? 80);
-const MSG_MAX_CALLS = Number(process.env.HQ_GPT_MSG_MAX_TOOL_CALLS ?? 24);
-const PLAN_MAX_CALLS = Number(process.env.HQ_GPT_PLAN_MAX_TOOL_CALLS ?? 40);
+// Tool calls per run and when a run stops are HQ's limits: the Accounts page, or .env (server/limits.ts). Read once per run.
 /** How long Codex gets to wind a turn down after HQ asked it to stop, before HQ ends it. */
 const STOP_GRACE_MS = 15_000;
 const WEB = process.env.HQ_WEB === '1';
@@ -261,8 +261,14 @@ interface Attempt {
   resume?: string;
   model?: string;
   effort?: string;
+  /** The run's limits, read once at its start: the tool-call cap, the row it comes from, and when the run stops. */
   maxCalls: number;
+  callsKey: LimitKey;
+  watch: WatchLimits;
 }
+
+/** The tool-call limit for a kind of run: chat replies, planning, or the rest (tickets, QA checks, huddle turns). */
+const callsKeyOf = (mode: RunMode): LimitKey => (mode === 'message' ? 'gptReplyCalls' : mode === 'plan' ? 'gptPlanCalls' : 'gptTicketCalls');
 
 /** dropThread: the thread grew past what the model takes, so the desk's next run starts a new one. */
 type Failure = Error & { outcome?: RunOutcome; usage?: UsageLimit; dropThread?: boolean };
@@ -287,7 +293,7 @@ async function runTurn(input: RunInput, ctx: RunContext, a: Attempt, signal: Abo
   let calls = 0;
   let reply = '';
   let rates: unknown;
-  let limit: UsageLimit | undefined;
+  let usage: UsageLimit | undefined;
   /** Codex said the thread no longer fits the model's context window. */
   let full = false;
   let stopping: 'you' | 'watch' | 'cap' | null = null;
@@ -330,7 +336,7 @@ async function runTurn(input: RunInput, ctx: RunContext, a: Attempt, signal: Abo
     const ended = early.find((t) => t.id === id);
     if (ended) finished(ended);
   };
-  const watch = new RunWatch(WATCH, deadline - Date.now(), () => stop('watch'));
+  const watch = new RunWatch(a.watch, deadline - Date.now(), () => stop('watch'));
   const onAbort = () => stop('you');
   signal.addEventListener('abort', onAbort, { once: true });
 
@@ -534,7 +540,7 @@ async function runTurn(input: RunInput, ctx: RunContext, a: Attempt, signal: Abo
         rates = params?.rateLimits;
         noteRateLimits(rates);
       } else if (method === 'error' && params?.willRetry !== true) {
-        limit = gptLimitOf(params?.error, rates) ?? limit;
+        usage = gptLimitOf(params?.error, rates) ?? usage;
         if (params?.error?.codexErrorInfo === 'contextWindowExceeded') full = true;
       } else if (method === 'turn/started') {
         learnTurn(params?.turn?.id);
@@ -574,7 +580,7 @@ async function runTurn(input: RunInput, ctx: RunContext, a: Attempt, signal: Abo
     if (!turnId) throw new Error('Codex started the turn without an id.');
     const ended = await Promise.race([done, s.exited.then(() => null)]);
     const outcome: RunOutcome = { summary: reply, costUsd: 0, turns: calls, sessionId: freshSession ? undefined : threadId };
-    if (ended?.status === 'completed' && !stopping) return limit ? { ...outcome, usage: limit } : outcome;
+    if (ended?.status === 'completed' && !stopping) return usage ? { ...outcome, usage } : outcome;
     full ||= ended?.error?.codexErrorInfo === 'contextWindowExceeded';
     // A thread too long for the model can't go on: the run hands back no thread, and the desk's next run starts a new one.
     if (full) outcome.sessionId = undefined;
@@ -585,12 +591,12 @@ async function runTurn(input: RunInput, ctx: RunContext, a: Attempt, signal: Abo
         : stopping === 'watch'
           ? (watch.why ?? 'Stopped by HQ.')
           : stopping === 'cap'
-            ? `Stopped after ${a.maxCalls} tool calls, the most one run may make (HQ_GPT_MAX_TOOL_CALLS)`
+            ? `Stopped after ${a.maxCalls} tool calls, the most one run may make (${limitRow(a.callsKey)})`
             : null;
-    limit = gptLimitOf(ended?.error, rates) ?? limit;
+    usage = gptLimitOf(ended?.error, rates) ?? usage;
     const said = ended ? (ended.error?.message?.slice(0, 400) ?? `The turn ended ${ended.status ?? 'without a result'}.`) : 'Codex stopped before the turn finished.';
-    const text = why ?? limit?.text ?? (full ? `${said} The conversation is too long for the model: the desk's next run starts a new one.` : said);
-    throw Object.assign(new Error(text), { outcome, ...(limit && !why ? { usage: limit } : {}), ...(full ? { dropThread: true } : {}) });
+    const text = why ?? usage?.text ?? (full ? `${said} The conversation is too long for the model: the desk's next run starts a new one.` : said);
+    throw Object.assign(new Error(text), { outcome, ...(usage && !why ? { usage } : {}), ...(full ? { dropThread: true } : {}) });
   } catch (e) {
     const err = e as Failure;
     if (!err.outcome) {
@@ -669,8 +675,11 @@ export const codexRunner: AgentRunner = {
       agent.sessionTotalUsd = undefined;
     }
     let fresh = !resume;
-    const deadline = Date.now() + WATCH.capMs;
-    const maxCalls = mode === 'message' ? MSG_MAX_CALLS : mode === 'plan' ? PLAN_MAX_CALLS : MAX_CALLS;
+    // Read once, with the deadline: the run keeps the limits it started with.
+    const watch = watchLimits();
+    const deadline = Date.now() + watch.capMs;
+    const callsKey = callsKeyOf(mode);
+    const maxCalls = limit(callsKey);
     let dropThread = false;
     const remember = () => {
       if (freshSession) return;
@@ -684,7 +693,7 @@ export const codexRunner: AgentRunner = {
     };
     let outcome: RunOutcome;
     try {
-      outcome = await runTurn(input, ctx, { developer, tools, config, env: mcp.env, hq, resume, model: s.gptModel, effort: s.gptEffort, maxCalls }, signal, deadline, (id, isFresh) => {
+      outcome = await runTurn(input, ctx, { developer, tools, config, env: mcp.env, hq, resume, model: s.gptModel, effort: s.gptEffort, maxCalls, callsKey, watch }, signal, deadline, (id, isFresh) => {
         fresh = isFresh;
         if (freshSession) return;
         // The thread's id goes with its key at once, so a desk never pairs a GPT thread with a Claude session's key.

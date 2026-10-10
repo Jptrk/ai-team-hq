@@ -1,5 +1,6 @@
 import type { Agent, Attachment, ItemStatus, Run, State, WorkItem } from '../shared/types';
 import { addComment } from './comments';
+import { limit } from './limits';
 import { now } from './store';
 
 /**
@@ -11,11 +12,8 @@ import { now } from './store';
  * The runner wakes the desks; this only moves the ticket.
  */
 
-/** Fixes the owner gets after a QA fail before the ticket comes to you instead. */
-export const QA_MAX_FIXES = (() => {
-  const raw = Number(process.env.HQ_QA_MAX_FIXES);
-  return process.env.HQ_QA_MAX_FIXES?.trim() && Number.isFinite(raw) ? Math.max(0, Math.floor(raw)) : 2;
-})();
+/** Fixes the owner gets after a QA fail before the ticket comes to you instead (Accounts page, or HQ_QA_MAX_FIXES). */
+export const qaMaxFixes = (): number => limit('qaMaxFixes');
 /** Changed files kept per ticket. */
 const MAX_CHANGED = 50;
 const MAX_ISSUES = 10;
@@ -147,7 +145,8 @@ export function recordQaResult(s: State, item: WorkItem, by: string, v: QaVerdic
   }
 
   const fails = prev.fails + 1;
-  if (fails > QA_MAX_FIXES) {
+  const maxFixes = qaMaxFixes();
+  if (fails > maxFixes) {
     // Too many rounds: you decide instead of another fix.
     item.status = 'needs-you';
     item.qa = { ...prev, by, fails, result: 'fail', ready: true, escalated: true };
@@ -164,7 +163,7 @@ export function recordQaResult(s: State, item: WorkItem, by: string, v: QaVerdic
   item.status = 'sent-back';
   item.qa = { ...prev, by, fails, result: 'fail', ready: false, escalated: false };
   addComment(item, { from: by, kind: 'qa', title: 'Failed QA', text: body, ...images });
-  item.history.push({ ts: now(), text: `Failed QA (${name}). Back to the owner, fix ${fails} of ${QA_MAX_FIXES}` });
+  item.history.push({ ts: now(), text: `Failed QA (${name}). Back to the owner, fix ${fails} of ${maxFixes}` });
   return 'rework';
 }
 

@@ -284,7 +284,7 @@ test('verdict: a fail goes back to the owner with the issues, until it has faile
   fresh();
   const t = ticket();
   const fail = { result: 'fail' as const, summary: 'Close, but not done.', issues: ['`src/cart.ts`: total ignores the discount', '  '] };
-  for (let round = 1; round <= qa.QA_MAX_FIXES; round++) {
+  for (let round = 1; round <= qa.qaMaxFixes(); round++) {
     qa.sendToQa(p.state, t);
     assert.equal(qa.recordQaResult(p.state, t, 'ivy', fail), 'rework');
     assert.equal(t.status, 'sent-back');
@@ -297,10 +297,10 @@ test('verdict: a fail goes back to the owner with the issues, until it has faile
   assert.equal(t.status, 'needs-you');
   assert.equal(t.qa?.escalated, true);
   assert.equal(t.comments!.at(-1)!.kind, 'decision');
-  assert.match(t.comments!.at(-1)!.title!, new RegExp(`Failed QA ${qa.QA_MAX_FIXES + 1} times`));
+  assert.match(t.comments!.at(-1)!.title!, new RegExp(`Failed QA ${qa.qaMaxFixes() + 1} times`));
   assert.equal(qa.closesOnApprove(t), true, 'approving accepts it as it is');
   qa.backToWork(t);
-  assert.deepEqual({ ...t.qa }, { fails: 0, round: qa.QA_MAX_FIXES + 1, by: 'ivy', result: 'fail', ready: false, escalated: false, reworkOf: 'signoff' });
+  assert.deepEqual({ ...t.qa }, { fails: 0, round: qa.qaMaxFixes() + 1, by: 'ivy', result: 'fail', ready: false, escalated: false, reworkOf: 'signoff' });
 });
 
 test('verdict: refused when the ticket left QA, with no summary, or a fail without issues', () => {

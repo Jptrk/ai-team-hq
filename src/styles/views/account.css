@@ -160,4 +160,69 @@
   .gpt-model {
     flex-wrap: wrap;
   }
+
+  /* ---------- Limits ---------- */
+  .limits-intro {
+    margin-bottom: var(--space-2);
+  }
+  .limit-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 170px;
+    gap: var(--space-3);
+    align-items: start;
+  }
+  .limit-row + .limit-row {
+    padding-top: var(--space-3);
+    border-top: 1px solid var(--border);
+  }
+  .limit-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+  .limit-label {
+    font-weight: 600;
+  }
+  .limit-source .mono {
+    overflow-wrap: anywhere;
+  }
+  .limit-input {
+    display: grid;
+    grid-template-columns: 12px minmax(0, 1fr) 26px;
+    align-items: center;
+    gap: 6px;
+  }
+  .limit-input .input {
+    min-width: 0;
+    text-align: right;
+  }
+  /* "Fix the values marked in red": a value out of range. */
+  .limit-input .input[aria-invalid='true'],
+  .limit-input .input[aria-invalid='true']:hover {
+    border-color: var(--danger);
+  }
+  .limit-input .input[aria-invalid='true']:focus {
+    outline-color: var(--danger);
+  }
+  .limit-unit {
+    font-size: var(--fs-sm);
+    color: var(--text-subtle);
+  }
+  .limits-actions {
+    position: sticky;
+    bottom: 0;
+    margin-top: var(--space-3);
+    padding: var(--space-3) 0;
+    background: var(--surface);
+  }
+
+  @media (max-width: 720px) {
+    .limit-row {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .limit-input {
+      max-width: 220px;
+    }
+  }
 }

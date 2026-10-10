@@ -11,3 +11,5 @@
 - [GPT connections review checks](gpt-connections-review-checks.md) — MCP approval matching on Codex, connection env leaking into Codex, `hq`-named server, header var collisions
 - [Project removal fs checks](project-removal-fs-checks.md) — Node 24 cpSync follows junctions/crashes on cycles, rmSync no EPERM retry, stale Project after id reuse
 - [Login review checks](login-review-checks.md) — /API case bypass of requestGuard, loopback-only limiter is global, await-gap login races, port-shared cookies
+- [Limits review checks](limits-review-checks.md) — live values in systemPromptFor change Claude session keys, queue fillSlots invariant, retry deadline mix
+- [Usage hold review checks](usage-hold-review-checks.md) — per-model holds: hard-coded Claude copy, Resume clears other model, stale README GPT limits

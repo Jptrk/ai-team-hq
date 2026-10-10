@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { estimateHuddleRuns, HUDDLE_KIND_HINT, HUDDLE_KIND_LABEL, MAX_HUDDLE_DESKS, MAX_HUDDLE_ROUNDS, MAX_HUDDLE_TOPIC, MIN_HUDDLE_DESKS } from '../../../shared/huddle';
+import { LIMITS } from '../../../shared/limits';
 import type { Agent, HuddleKind } from '../../../shared/types';
 import type { HuddleBody } from '../../api';
 import { Modal } from '../../shell/Modal';
@@ -175,7 +176,7 @@ export function HuddleSetup({ open, agents, live, idle = false, startedToday, li
                 : 'Sim mode: canned replies, no model calls.'}
           </span>
           <span className="muted">
-            {limit <= 0 ? 'Huddles are turned off (HQ_HUDDLES_PER_DAY=0).' : left > 0 ? `${left} of ${limit} huddles left today.` : `No huddles left today (limit ${limit}).`}
+            {limit <= 0 ? `Huddles are turned off: ${LIMITS.huddlesPerDay.label} is 0 (Limits, on the Accounts page).` : left > 0 ? `${left} of ${limit} huddles left today.` : `No huddles left today (limit ${limit}).`}
           </span>
         </div>
 

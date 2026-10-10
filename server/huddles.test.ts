@@ -23,6 +23,7 @@ const engine = await import('./huddles');
 const claude = await import('./runner/claude');
 const runner = await import('./runner');
 const { estimateHuddleRuns, MAX_TEAM_NOTES } = await import('../shared/huddle');
+const { limitFromEnv } = await import('../shared/limits');
 
 store.initStore({ emptySeed: false });
 const p = store.getProject('hq')!;
@@ -260,7 +261,7 @@ test('engine: one huddle at a time, and the daily limit answers 429', async () =
   engine.stopHuddleRun(p, h.id);
   release();
   await settle(h.id);
-  p.state.huddleDay = { day: store.today(), started: core.HUDDLES_PER_DAY };
+  p.state.huddleDay = { day: store.today(), started: core.huddleCap() };
   const capped = engine.startHuddle(p, retro(), slow);
   assert.ok('error' in capped && capped.status === 429);
 });
@@ -611,16 +612,17 @@ test('fallbacks: text from a turn that skipped its tool is capped', () => {
   assert.equal(h.entries.at(-1)!.text, 'Short and kept');
 });
 
-test('limits: HQ_HUDDLES_PER_DAY falls back to 5 unless it is a number; 0 turns huddles off', () => {
-  assert.equal(core.huddlesPerDay(undefined), 5);
-  assert.equal(core.huddlesPerDay(''), 5);
-  assert.equal(core.huddlesPerDay('lots'), 5);
-  assert.equal(core.huddlesPerDay('3'), 3);
-  assert.equal(core.huddlesPerDay('2.7'), 2);
-  assert.equal(core.huddlesPerDay('0'), 0);
-  assert.equal(core.huddlesPerDay('-4'), 0);
+test('limits: HQ_HUDDLES_PER_DAY counts only when it is a number; 0 turns huddles off', () => {
+  assert.equal(limitFromEnv('huddlesPerDay', undefined), null);
+  assert.equal(limitFromEnv('huddlesPerDay', ''), null);
+  assert.equal(limitFromEnv('huddlesPerDay', 'lots'), null);
+  assert.equal(limitFromEnv('huddlesPerDay', '3'), 3);
+  assert.equal(limitFromEnv('huddlesPerDay', '2.7'), 2);
+  assert.equal(limitFromEnv('huddlesPerDay', '0'), 0);
+  assert.equal(limitFromEnv('huddlesPerDay', '-4'), 0);
+  assert.equal(core.huddleCap(), 5, 'nothing set: the default');
   fresh();
-  assert.match(String(core.canStartToday(p.state, store.today(), 0)), /turned off \(HQ_HUDDLES_PER_DAY=0\)/);
+  assert.match(String(core.canStartToday(p.state, store.today(), 0)), /turned off: Huddles per project per day is 0/);
 });
 
 test('poll: decided proposals come without their text; at most 50 huddles are kept', () => {

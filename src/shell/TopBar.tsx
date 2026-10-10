@@ -5,7 +5,7 @@ import { api } from '../api';
 import { usePopover } from '../hooks/usePopover';
 import type { Theme, ThemePref } from '../hooks/useTheme';
 import { Avatar } from '../ui/Avatar';
-import { clockTime, EFFORT_LABEL, effortLabel, goLiveHint, pauseLabel, pauseText, runnerLabel } from '../util';
+import { clockTime, EFFORT_LABEL, effortLabel, goLiveHint, pauseLabel, pauseText, pauseTitle, runnerLabel } from '../util';
 import { TopBarSearch, type SearchHandle } from './TopBarSearch';
 
 interface Props {
@@ -110,8 +110,9 @@ function EffortPicker({ meta, onMeta }: { meta: Meta; onMeta: (meta: Meta) => vo
 }
 
 /**
- * Pause for everything the team starts on its own, in every project. Paused (by you, or by Claude's usage limit),
- * it becomes an amber pill whose popover says why and resumes. Pausing never asks: it only stops work starting.
+ * Pause for everything the team starts on its own, in every project. Paused (by you, or by a model's usage limit or
+ * account problem), it becomes an amber pill whose popover says why and resumes. Pausing never asks: it only stops work
+ * starting.
  */
 function AutoControl({ meta, onMeta }: { meta: Meta; onMeta: (meta: Meta) => void }) {
   const pop = usePopover<HTMLDivElement>();
@@ -172,7 +173,7 @@ function AutoControl({ meta, onMeta }: { meta: Meta; onMeta: (meta: Meta) => voi
       </button>
       {pop.open && (
         <div className="popover status-popover" role="dialog" aria-label="Paused">
-          <p className="popover-title">{paused.by === 'you' ? 'The team is paused' : paused.by === 'usage' ? "Claude's usage limit" : 'Claude account problem'}</p>
+          <p className="popover-title">{pauseTitle(paused)}</p>
           <p className="muted small">{pauseText(paused)}</p>
           <p className="muted small">
             Since {clockTime(paused.at)}.{' '}

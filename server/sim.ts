@@ -1,5 +1,5 @@
 import type { WorkItem } from '../shared/types';
-import { hasQa, signoffOn } from '../shared/types';
+import { hasQa, projectProvider, signoffOn } from '../shared/types';
 import { leadOf, refreshStatuses, settleInstructions } from './agents';
 import { autoGate, countStart, globalHold, pickStarts } from './autopilot';
 import { createGoalTicket, goalState, planDue, plannerOf, recordGoalStatus } from './goal';
@@ -195,8 +195,8 @@ function tickProject(p: Project): void {
   const s = p.state;
   const finish = { qa: hasQa(p.meta.template), signoff: signoffOn(p.meta) };
   tickComments(p);
-  // Paused: the team starts nothing on its own. Answers to your comments still come.
-  if (globalHold()) {
+  // Paused, or this project's model held: the team starts nothing on its own. Answers to your comments still come.
+  if (globalHold(Date.now(), projectProvider(p.meta))) {
     settleInstructions(s);
     refreshStatuses(s);
     p.commit();

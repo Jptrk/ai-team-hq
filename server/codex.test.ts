@@ -58,6 +58,7 @@ const conns = await import('./connections');
 const { readGptPatch, router } = await import('./routes');
 const autopilot = await import('./autopilot');
 const chat = await import('./chat');
+const { enqueue } = await import('./runner/queue');
 const { safeOpenAiUrl, chatGptPlanLabel } = await import('../shared/account');
 
 // ---------- a fake Codex: each app-server HQ starts follows the scenario the test set ----------
@@ -575,10 +576,90 @@ test('a used-up ChatGPT plan fails the run and holds automatic work until it res
   const run = runOf(item);
   assert.equal(run.status, 'failed');
   assert.match(run.error ?? '', /ChatGPT's 5-hour limit reached/);
-  const hold = settings.settings().usageHold;
+  const hold = settings.settings().usageHolds?.gpt;
   assert.equal(hold?.kind, 'usage');
   assert.equal(hold?.until, new Date(resets * 1000).toISOString());
-  settings.setUsageHold(null);
+  assert.equal(settings.settings().usageHolds?.claude, undefined, 'only GPT projects wait');
+  assert.equal(autopilot.globalHold(Date.now(), 'claude'), null, "ChatGPT's limit never holds a Claude project");
+  assert.equal(runner.meta().paused?.provider, 'gpt');
+  settings.clearUsageHolds();
+});
+
+test("ChatGPT's limit holds the team's queued start in the GPT project; a Claude project's queued start stays in line", async () => {
+  // Claude can run for this test, so only the limit could hold the Claude project's work.
+  process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-token';
+  settings.setClaudeLogin(true);
+  // The Claude desk is busy with a job of the test's own: its project's start waits in line and never reaches Claude.
+  let freeClaude!: () => void;
+  const claudeBusy = enqueue(`${pc.id}:${claudeDesk.id}`, () => new Promise<void>((r) => (freeClaude = r)));
+  const busyItem = ticket(desk.id);
+  const theirs = ticket(desk.id);
+  const claudeItem = ticket(claudeDesk.id, {}, pc);
+  let claudeQueued: ReturnType<typeof runner.kickoff> = null;
+  let letGo!: () => void;
+  const held = new Promise<void>((r) => (letGo = r));
+  const resets = Math.floor(Date.now() / 1000) + 3600;
+  scenario = deskTurn(async (f) => {
+    await held;
+    f.emit('account/rateLimits/updated', { rateLimits: { primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: resets } } });
+    return { status: 'failed', error: { message: "You've hit your usage limit.", codexErrorInfo: 'usageLimitExceeded' } };
+  });
+  try {
+    assert.equal(runner.modelProblem(pc), null);
+    const before = servers.length;
+    runner.kickoff(p, busyItem.id, 'manual');
+    await serverAsked(before, 'turn/start');
+    const gptQueued = runner.kickoff(p, theirs.id, 'handoff', undefined, [], { auto: true })!;
+    claudeQueued = runner.kickoff(pc, claudeItem.id, 'handoff', undefined, [], { auto: true });
+    assert.deepEqual([gptQueued.status, claudeQueued?.status], ['queued', 'queued']);
+    letGo();
+    for (let i = 0; i < 400 && runOf(busyItem).status !== 'failed'; i++) await sleep(5);
+    assert.equal(runOf(busyItem).status, 'failed');
+    assert.equal(settings.settings().usageHolds?.gpt?.kind, 'usage');
+    assert.equal(settings.settings().usageHolds?.claude, undefined);
+    assert.equal(gptQueued.status, 'done', "the GPT project's queued start is held at once");
+    assert.match(gptQueued.summary ?? '', /^Skipped: held: ChatGPT's 5-hour limit reached/);
+    assert.deepEqual({ reason: theirs.autoHold?.reason, why: theirs.autoHold?.why }, { reason: 'handoff', why: 'usage' });
+    assert.equal(claudeQueued?.status, 'queued', "the Claude project's start stays in line");
+    assert.equal(claudeItem.autoHold, undefined);
+    assert.equal(autopilot.autoGate(pc), null, "the team's next start in the Claude project may go too");
+    assert.equal(autopilot.autoGate(p)?.kind, 'usage');
+  } finally {
+    // Never a real Claude run: the Claude start leaves the line before the desk frees up.
+    if (claudeQueued?.status === 'queued') Object.assign(claudeQueued, { status: 'done', summary: 'Skipped: test' });
+    letGo();
+    for (let i = 0; i < 400 && !freeClaude; i++) await sleep(5);
+    freeClaude();
+    await claudeBusy;
+    await idle();
+    pc.state.runs = pc.state.runs.filter((r) => r !== claudeQueued);
+    settings.setClaudeLogin(false);
+    delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    settings.clearUsageHolds();
+    for (const item of [busyItem, theirs, claudeItem]) {
+      delete item.autoHold;
+      item.status = 'done';
+    }
+  }
+});
+
+test("ChatGPT's limit right after the desk closed out: the run is done, and the limit still holds GPT projects only", async () => {
+  const item = ticket(desk.id);
+  const resets = Math.floor(Date.now() / 1000) + 3600;
+  scenario = deskTurn(async (f) => {
+    await call(f, 'report_done', { summary: 'Finished the ticket before the limit hit.' });
+    f.emit('account/rateLimits/updated', { rateLimits: { primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: resets } } });
+    return { status: 'failed', error: { message: "You've hit your usage limit.", codexErrorInfo: 'usageLimitExceeded' } };
+  });
+  runner.kickoff(p, item.id, 'manual');
+  await idle();
+  const run = runOf(item);
+  assert.equal(run.status, 'done', run.error);
+  assert.match(run.summary ?? '', /^Closed out, then stopped: ChatGPT's 5-hour limit reached/);
+  assert.equal(settings.settings().usageHolds?.gpt?.until, new Date(resets * 1000).toISOString(), 'the success path holds by the project model');
+  assert.equal(settings.settings().usageHolds?.claude, undefined);
+  assert.deepEqual({ by: runner.meta().paused?.by, provider: runner.meta().paused?.provider }, { by: 'usage', provider: 'gpt' });
+  settings.clearUsageHolds();
 });
 
 test('Stop interrupts the turn; the run says you stopped it', async () => {
@@ -862,7 +943,7 @@ test('a Claude project waits while HQ is live on ChatGPT alone and Claude was ne
   assert.match(item.history.at(-1)!.text, /runs on Claude and HQ has no Claude login/);
   assert.equal(autopilot.autoGate(pc)?.kind, 'model', "the team's own starts wait at the same gate");
   assert.equal(autopilot.autoGate(p), null);
-  assert.equal(settings.settings().usageHold, undefined);
+  assert.equal(settings.settings().usageHolds, undefined);
   const state = await api('GET', `/projects/${pc.id}/state`);
   assert.match(state.body.modelProblem ?? '', /runs on Claude/, 'the page says why');
   delete item.autoHold;
@@ -875,7 +956,7 @@ test('a Claude project with Claude turned on but no Claude login also waits whil
     const item = ticket(claudeDesk.id, {}, pc);
     assert.equal(runner.kickoff(pc, item.id, 'manual'), null);
     assert.equal(item.autoHold?.why, 'model');
-    assert.equal(settings.settings().usageHold, undefined, 'no account hold, so GPT desks keep working');
+    assert.equal(settings.settings().usageHolds, undefined, 'no account hold, so GPT desks keep working');
     delete item.autoHold;
   } finally {
     settings.setClaudeLogin(false);

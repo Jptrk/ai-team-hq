@@ -1,5 +1,5 @@
 import type { Agent, AutoState, AutoStatus, Hold, PauseInfo, ProjectMeta, Run, RunReason, State, Thread, WorkItem } from '../shared/types';
-import { autoLimitsOf, localDay } from '../shared/types';
+import { autoLimitsOf, localDay, projectProvider, PROVIDERS, type Provider } from '../shared/types';
 import { clearWaiting, note } from './chat';
 import { goalStatusOf } from './goal';
 import type { UsageLimit } from './runner/watch';
@@ -15,19 +15,29 @@ import { now, type Project } from './store';
  * Your own clicks never go through the gate.
  */
 
-/** How long automatic work waits when Claude reports a usage limit without saying when it resets. */
+/** How long automatic work in a model's projects waits when it reports a usage limit without saying when it resets. */
 const USAGE_RETRY_MS = 30 * 60_000;
 
 function usageActive(u: UsageHold | undefined, nowMs: number): u is UsageHold {
   return Boolean(u && (u.kind === 'account' || !u.until || Date.parse(u.until) > nowMs));
 }
 
-/** Why nothing automatic may start in any project: your Pause, or Claude's refusal while it lasts. */
-export function globalHold(nowMs = Date.now()): Hold | null {
-  const s = settings();
-  if (s.paused) return { kind: 'paused', text: 'HQ is paused' };
-  const u = s.usageHold;
-  if (usageActive(u, nowMs)) return { kind: u.kind, text: u.text, ...(u.until ? { until: u.until } : {}) };
+/** A model's hold now: its usage limit until it resets, or its account problem until you resume. */
+function holdOf(provider: Provider, nowMs: number): UsageHold | null {
+  const u = settings().usageHolds?.[provider];
+  return usageActive(u, nowMs) ? u : null;
+}
+
+/**
+ * Why nothing automatic may start: your Pause, or a model's refusal while it lasts. provider: for that model's
+ * projects, so ChatGPT's limit never holds a Claude project. None: any model's hold counts.
+ */
+export function globalHold(nowMs = Date.now(), provider?: Provider): Hold | null {
+  if (settings().paused) return { kind: 'paused', text: 'HQ is paused' };
+  for (const model of provider ? [provider] : PROVIDERS) {
+    const u = holdOf(model, nowMs);
+    if (u) return { kind: u.kind, text: u.text, ...(u.until ? { until: u.until } : {}) };
+  }
   return null;
 }
 
@@ -85,7 +95,7 @@ export function setModelGate(gate: (p: Project) => Hold | null): void {
 
 /** Why the team may not start anything on its own in this project right now, or null when it may. */
 export function autoGate(p: Project, nowMs = Date.now(), queued = 0): Hold | null {
-  return globalHold(nowMs) ?? modelGate(p) ?? projectHold(p, nowMs, queued);
+  return globalHold(nowMs, projectProvider(p.meta)) ?? modelGate(p) ?? projectHold(p, nowMs, queued);
 }
 
 /** The team's runs queued in this project and not started yet. */
@@ -107,22 +117,37 @@ export function autoStatus(p: Project, nowMs = Date.now()): AutoStatus {
   };
 }
 
-/** For the page: why HQ holds automatic work, or null. */
+/** For the page: why HQ holds automatic work, or null. One model's hold names that model; both at once read as one notice listing each. */
 export function pauseInfo(nowMs = Date.now()): PauseInfo | null {
   const s = settings();
   if (s.paused) return { by: 'you', at: s.paused.at };
-  const u = s.usageHold;
-  if (usageActive(u, nowMs)) return { by: u.kind, at: u.at, reason: u.text, ...(u.until ? { until: u.until } : {}) };
-  return null;
+  const held = PROVIDERS.flatMap((provider) => {
+    const u = holdOf(provider, nowMs);
+    return u ? [{ provider, u }] : [];
+  });
+  if (held.length === 1) {
+    const { provider, u } = held[0];
+    return { by: u.kind, at: u.at, reason: u.text, provider, ...(u.until ? { until: u.until } : {}) };
+  }
+  if (!held.length) return null;
+  // Both models: everything waits, and each model's projects carry on once its own hold clears (holds), so there is no
+  // one until. An account problem makes it an account notice: its Resume clears that and leaves a usage limit on.
+  const account = held.some((h) => h.u.kind === 'account');
+  const at = held.map((h) => h.u.at).sort((a, b) => Date.parse(a) - Date.parse(b))[0];
+  const holds = held.map(({ provider, u }) => ({ provider, by: u.kind, ...(u.kind === 'usage' && u.until ? { until: u.until } : {}) }));
+  return { by: account ? 'account' : 'usage', at, reason: held.map((h) => h.u.text).join(' '), holds };
 }
 
-/** A usage limit whose reset time has passed: the sweep clears it and held work starts again. */
-export function usageHoldExpired(nowMs = Date.now()): boolean {
-  const u = settings().usageHold;
-  return Boolean(u && u.kind === 'usage' && u.until && Date.parse(u.until) <= nowMs);
+/** Models whose usage limit has reset: the sweep clears their hold and their projects' held work starts again. */
+export function expiredHolds(nowMs = Date.now()): Provider[] {
+  const holds = settings().usageHolds ?? {};
+  return PROVIDERS.filter((provider) => {
+    const u = holds[provider];
+    return Boolean(u && u.kind === 'usage' && u.until && Date.parse(u.until) <= nowMs);
+  });
 }
 
-/** The hold Claude's refusal puts on automatic work. A usage limit with no reset time is tried again after half an hour. */
+/** The hold a model's refusal puts on automatic work in its projects. A usage limit with no reset time is tried again after half an hour. */
 export function usageHoldFrom(limit: UsageLimit, nowMs = Date.now()): UsageHold {
   const at = new Date(nowMs).toISOString();
   if (limit.kind === 'account') return { kind: 'account', at, text: limit.text };
@@ -139,7 +164,7 @@ const START_WORDS: Partial<Record<RunReason, string>> = {
 /** What a start is held for: a gate (Hold), or login while HQ is idle without a Claude login to run on. */
 export type HeldFor = Pick<Hold, 'text'> & { kind: Hold['kind'] | 'login' };
 
-/** A hold's words inside a sentence: Claude's limit texts are sentences of their own, so their full stop goes. */
+/** A hold's words inside a sentence: a model's limit texts are sentences of their own, so their full stop goes. */
 export function holdWords(hold: Pick<Hold, 'text'>): string {
   return hold.text.replace(/\.\s*$/, '');
 }

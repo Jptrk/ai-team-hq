@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { isEffortLevel, type EffortLevel } from '../shared/types';
+import { checkLimit, isLimitKey, type LimitKey, type LimitsPatch } from '../shared/limits';
+import { isEffortLevel, PROVIDERS, type EffortLevel, type Provider } from '../shared/types';
 
 /**
  * Settings for all of HQ, every project: data/settings.json. Read once, then kept in memory.
@@ -11,8 +12,11 @@ export interface HqSettings {
   effort?: EffortLevel;
   /** You pressed Pause: nothing the team starts on its own runs until you resume. */
   paused?: { at: string };
-  /** Claude refused a run: a usage limit (clears by itself at until) or an account problem (waits for Resume). */
-  usageHold?: UsageHold;
+  /**
+   * A model refused a run: a usage limit (clears by itself at until) or an account problem (waits for Resume). Kept per
+   * model, so ChatGPT's limit holds GPT projects only and Claude's holds Claude projects only.
+   */
+  usageHolds?: Partial<Record<Provider, UsageHold>>;
   /** You signed in to your Claude account from HQ: desks run live on it from the next start, without HQ_RUNNER in .env. */
   claudeLogin?: { at: string };
   /** You signed in to ChatGPT from HQ (or said yes to its login): GPT desks run on it. */
@@ -26,6 +30,8 @@ export interface HqSettings {
    * projects are real, so without a login HQ stays idle instead of running the sim, which fakes work in them.
    */
   wentLive?: { at: string };
+  /** Limits you set on the Accounts page. They win over .env (see shared/limits.ts). */
+  limits?: Partial<Record<LimitKey, number>>;
 }
 
 export interface UsageHold {
@@ -51,10 +57,18 @@ export function parseSettings(raw: unknown): HqSettings {
   if (isEffortLevel(r.effort)) out.effort = r.effort;
   const paused = r.paused as { at?: unknown } | undefined;
   if (paused && typeof paused === 'object' && isTime(paused.at)) out.paused = { at: paused.at };
-  const hold = r.usageHold as Partial<Record<keyof UsageHold, unknown>> | undefined;
-  if (hold && typeof hold === 'object' && (hold.kind === 'usage' || hold.kind === 'account') && isTime(hold.at) && typeof hold.text === 'string') {
-    out.usageHold = { kind: hold.kind, at: hold.at, text: hold.text.slice(0, 300), ...(isTime(hold.until) ? { until: hold.until } : {}) };
+  const holds: Partial<Record<Provider, UsageHold>> = {};
+  const byModel = r.usageHolds as Record<string, unknown> | undefined;
+  if (byModel && typeof byModel === 'object') {
+    for (const provider of PROVIDERS) {
+      const hold = parseHold(byModel[provider]);
+      if (hold) holds[provider] = hold;
+    }
   }
+  // A file from before holds were per model: one hold for everything. Its words say whose limit it was.
+  const old = parseHold(r.usageHold);
+  if (old) holds[/chatgpt/i.test(old.text) ? 'gpt' : 'claude'] ??= old;
+  if (Object.keys(holds).length) out.usageHolds = holds;
   const login = r.claudeLogin as { at?: unknown } | undefined;
   if (login && typeof login === 'object' && isTime(login.at)) out.claudeLogin = { at: login.at };
   const gpt = r.chatgptLogin as { at?: unknown } | undefined;
@@ -63,7 +77,23 @@ export function parseSettings(raw: unknown): HqSettings {
   if (isGptName(r.gptEffort)) out.gptEffort = r.gptEffort;
   const went = r.wentLive as { at?: unknown } | undefined;
   if (went && typeof went === 'object' && isTime(went.at)) out.wentLive = { at: went.at };
+  const limits = r.limits as Record<string, unknown> | undefined;
+  if (limits && typeof limits === 'object') {
+    const kept: Partial<Record<LimitKey, number>> = {};
+    for (const [key, v] of Object.entries(limits)) {
+      if (!isLimitKey(key)) continue;
+      const n = checkLimit(key, v);
+      if (n !== null) kept[key] = n;
+    }
+    if (Object.keys(kept).length) out.limits = kept;
+  }
   return out;
+}
+
+function parseHold(raw: unknown): UsageHold | null {
+  const hold = raw as Partial<Record<keyof UsageHold, unknown>> | undefined;
+  if (!hold || typeof hold !== 'object' || (hold.kind !== 'usage' && hold.kind !== 'account') || !isTime(hold.at) || typeof hold.text !== 'string') return null;
+  return { kind: hold.kind, at: hold.at, text: hold.text.slice(0, 300), ...(isTime(hold.until) ? { until: hold.until } : {}) };
 }
 
 export function settings(): HqSettings {
@@ -137,16 +167,39 @@ export function setGpt(change: { model?: string | null; effort?: string | null }
   return save(next);
 }
 
+/** Sets limits from the next check on. Null goes back to .env or the default. Values must already pass checkLimit. */
+export function setLimits(patch: LimitsPatch): HqSettings {
+  const limits: Partial<Record<LimitKey, number>> = { ...settings().limits };
+  for (const [key, v] of Object.entries(patch) as [LimitKey, number | null | undefined][]) {
+    if (v === null) delete limits[key];
+    else if (v !== undefined) limits[key] = v;
+  }
+  const next: HqSettings = { ...settings() };
+  if (Object.keys(limits).length) next.limits = limits;
+  else delete next.limits;
+  return save(next);
+}
+
 /** HQ started live: noted once, and kept (see HqSettings.wentLive). */
 export function noteWentLive(at = new Date().toISOString()): HqSettings {
   const s = settings();
   return s.wentLive ? s : save({ ...s, wentLive: { at } });
 }
 
-/** Claude refused a run (or the hold cleared): automatic work waits while it lasts. */
-export function setUsageHold(hold: UsageHold | null): HqSettings {
+/** Claude or ChatGPT refused a run (or its hold cleared): that model's projects wait while it lasts. */
+export function setUsageHold(provider: Provider, hold: UsageHold | null): HqSettings {
+  const holds: Partial<Record<Provider, UsageHold>> = { ...settings().usageHolds };
+  if (hold) holds[provider] = hold;
+  else delete holds[provider];
   const next: HqSettings = { ...settings() };
-  if (hold) next.usageHold = hold;
-  else delete next.usageHold;
+  if (Object.keys(holds).length) next.usageHolds = holds;
+  else delete next.usageHolds;
+  return save(next);
+}
+
+/** Every model's hold goes at once. Resume clears them one model at a time (resumeAll); tests start clean with this. */
+export function clearUsageHolds(): HqSettings {
+  const next: HqSettings = { ...settings() };
+  delete next.usageHolds;
   return save(next);
 }

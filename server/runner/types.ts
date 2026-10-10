@@ -39,7 +39,7 @@ export interface RunOutcome {
   sessionId?: string;
   /** What a failed first attempt cost, when the run was retried in a fresh session. costUsd is the retry's alone. */
   extraCostUsd?: number;
-  /** Claude's limit stopped it after it had closed out: automatic work should still wait for it. */
+  /** The model's limit stopped it after it had closed out: automatic work in its projects should still wait for it. */
   usage?: UsageLimit;
 }
 

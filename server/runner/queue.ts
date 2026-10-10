@@ -1,10 +1,13 @@
 /**
  * Serial queue per desk with a global concurrency cap.
- * One desk never runs two tasks at once; at most HQ_CONCURRENCY desks run in parallel across all projects.
+ * One desk never runs two tasks at once; at most concurrency() desks run in parallel across all projects.
  * Keys are "<project>:<agent>" so the same agent id in two projects gets two queues.
  */
 
-export const CONCURRENCY = Math.max(1, Number(process.env.HQ_CONCURRENCY ?? 2));
+import { limit } from '../limits';
+
+/** Desks that may run at once (Accounts page, or HQ_CONCURRENCY). A change counts from the next free slot. */
+export const concurrency = (): number => limit('concurrency');
 
 const chains = new Map<string, Promise<void>>();
 let active = 0;
@@ -13,7 +16,7 @@ const waitingFirst: (() => void)[] = [];
 const waiting: (() => void)[] = [];
 
 async function acquire(first: boolean): Promise<void> {
-  if (active < CONCURRENCY) {
+  if (active < concurrency()) {
     active += 1;
     return;
   }
@@ -22,9 +25,20 @@ async function acquire(first: boolean): Promise<void> {
 }
 
 function release(): void {
-  const next = waitingFirst.shift() ?? waiting.shift();
+  // You lowered the limit below what runs: this slot closes instead of passing on.
+  const next = active > concurrency() ? undefined : (waitingFirst.shift() ?? waiting.shift());
   if (next) next();
   else active -= 1;
+}
+
+/** You raised the limit: jobs waiting for a slot start now, not at the next release. */
+export function fillSlots(): void {
+  while (active < concurrency()) {
+    const next = waitingFirst.shift() ?? waiting.shift();
+    if (!next) return;
+    active += 1;
+    next();
+  }
 }
 
 export interface EnqueueOptions {

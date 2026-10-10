@@ -9,7 +9,7 @@ import {
   closeThread,
   createThread,
   findThread,
-  HOP_LIMIT,
+  hopLimit,
   messagesOf,
   noticeHandoff,
   postFounderMessage,
@@ -56,13 +56,15 @@ import {
 import { jsonOnly, sentJson } from './http';
 import { parseAddRequest } from '../shared/mcpSpec';
 import { MAX_STEER } from '../shared/huddle';
-import { addSteer, decideProposal, findHuddle, HUDDLES_PER_DAY, MAX_NOTES, notesConflict, pendingProposals, stripHuddle } from './huddle-core';
+import { addSteer, decideProposal, findHuddle, huddleCap, MAX_NOTES, notesConflict, pendingProposals, stripHuddle } from './huddle-core';
 import { resumeHuddleRun, startHuddle, stopHuddleRun } from './huddles';
 import { checkFolder, folderExists, KEY_PATTERN, suggestKey } from './paths';
 import { backToWork, closesOnApprove, moveByHand, qaDeskOf, rerouteAllQa, setQaDesk } from './qa';
 import { resolveReport } from './runner/claude';
 import { autoGate, autoStatus, haltedHold, resumeProject } from './autopilot';
-import { isGptName, setEffort, setGpt, settings } from './settings';
+import { isGptName, setEffort, setGpt, setLimits, settings } from './settings';
+import { limitsView, readLimitsPatch } from './limits';
+import { fillSlots } from './runner/queue';
 import { cancelPreview, changeSkillDesks, installSkills, listLibrary, previewSkills, projectSkills, removeSkill, setScriptsAllowed, setSkillDesks, SkillError } from './skills';
 import { officeState } from './office';
 import { autoTick, cancelRun, claudeAtStart, deliver, isIdle, isLive, kickoff, loginOptIn, meta, modelProblem, mootRun, notLiveText, pauseAll, restartToGoLive, resumeAll } from './runner';
@@ -236,6 +238,27 @@ router.patch('/settings', jsonOnly, (req, res) => {
     return res.status(500).json({ error: 'Could not save the setting.' });
   }
   res.json({ ...meta(), owner: ownerName() });
+});
+
+/** HQ's limits for every project: their values, and where each comes from (Accounts page, .env, or the default). */
+router.get('/limits', (_req, res) => {
+  res.json(limitsView());
+});
+
+/** Change limits: a value in range, or null to go back to .env or the default. Answers with every limit. */
+router.patch('/limits', jsonOnly, (req, res) => {
+  const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? (req.body as Record<string, unknown>) : {};
+  const { patch, error } = readLimitsPatch(body);
+  if (!patch) return res.status(400).json({ error });
+  try {
+    setLimits(patch);
+  } catch (e) {
+    console.error('[hq] limits:', e instanceof Error ? e.message : 'error');
+    return res.status(500).json({ error: 'Could not save the limits.' });
+  }
+  // More desks may run at once: those waiting for a slot start now.
+  if ('concurrency' in patch) fillSlots();
+  res.json(limitsView());
 });
 
 // ---------- your Claude account ----------
@@ -652,7 +675,7 @@ project.get('/state', (_req, res) => {
   // Messages stay out of the 3-second poll; a thread's messages load when it opens. Same for a huddle's board and transcript.
   // What the team does on its own goes as a status (why it waits, today's count), not the raw held wakes.
   const { messages: _messages, huddles, auto: _auto, ...rest } = p.state;
-  const body: StateResponse = { ...rest, huddles: huddles.map(stripHuddle), office: officeState(p), huddleLimit: HUDDLES_PER_DAY, meta: meta(), project: p.meta, auto: autoStatus(p), modelProblem: modelProblem(p) };
+  const body: StateResponse = { ...rest, huddles: huddles.map(stripHuddle), office: officeState(p), huddleLimit: huddleCap(), meta: meta(), project: p.meta, auto: autoStatus(p), modelProblem: modelProblem(p) };
   res.json(body);
 });
 
@@ -661,7 +684,7 @@ project.get('/state', (_req, res) => {
 function threadBody(p: Project, threadId: string): ThreadResponse | null {
   const thread = findThread(p.state, threadId);
   if (!thread) return null;
-  return { thread, messages: messagesOf(p.state, thread.id), hopLimit: HOP_LIMIT };
+  return { thread, messages: messagesOf(p.state, thread.id), hopLimit: hopLimit() };
 }
 
 /** Open a thread. Marks it read for Patrick. */

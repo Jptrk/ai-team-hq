@@ -1,3 +1,4 @@
+import type { LimitsPatch, LimitsResponse } from '../shared/limits';
 import type { AddRequest } from '../shared/mcpSpec';
 import type {
   AccountResponse,
@@ -122,6 +123,10 @@ export const api = {
   meta: () => request<Meta & { owner: string }>('/api/meta'),
   /** Settings for all of HQ. Answers with the new meta. */
   setSettings: (body: { effort?: EffortLevel | null; paused?: boolean }) => request<Meta & { owner: string }>('/api/settings', json('PATCH', body)),
+  /** HQ's limits for every project, and where each value comes from. */
+  limits: () => request<LimitsResponse>('/api/limits'),
+  /** A value, or null to go back to .env or the default. Answers with every limit. */
+  setLimits: (patch: LimitsPatch) => request<LimitsResponse>('/api/limits', json('PATCH', patch)),
   /** Your Claude account: who is signed in on this PC, and any sign-in running. `check` asks Claude Code again. */
   account: (check = false) => request<AccountResponse>(`/api/account${check ? '?check=1' : ''}`),
   /** Starts signing in to your Claude account. The answer carries the sign-in page once Claude Code has it. */

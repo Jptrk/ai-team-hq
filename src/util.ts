@@ -1,4 +1,4 @@
-import type { Agent, AgentStatus, AutoHold, AutoStatus, Comment, EffortLevel, ItemStatus, Meta, PauseInfo, Run, RunReason, WorkItem } from '../shared/types';
+import type { Agent, AgentStatus, AutoHold, AutoStatus, Comment, EffortLevel, ItemStatus, Meta, ModelHold, PauseInfo, Provider, Run, RunReason, WorkItem } from '../shared/types';
 
 /** "15:00" in your time, or "Mon 09:00" when it is not today (a weekly limit). 24-hour, as the server's own texts. */
 export function clockTime(iso: string, nowMs = Date.now()): string {
@@ -37,18 +37,49 @@ export function holdText(h: Pick<AutoHold, 'reason' | 'why'>): string {
   return `${what} waits: ${HOLD_WHY[h.why]}. It starts by itself once that clears.`;
 }
 
-/** The header's paused control, in a few words. */
-export function pauseLabel(p: Pick<PauseInfo, 'by' | 'until'>): string {
+const MODEL_NAME: Record<Provider, string> = { claude: 'Claude', gpt: 'ChatGPT' };
+const PROJECTS_OF: Record<Provider, string> = { claude: 'Claude', gpt: 'GPT' };
+
+/** The header's paused control, in a few words. A model's limit names the model; both models' limits at once are plural. */
+export function pauseLabel(p: Pick<PauseInfo, 'by' | 'until' | 'provider' | 'holds'>): string {
   if (p.by === 'you') return 'Paused';
-  if (p.by === 'account') return 'Account problem';
-  return p.until ? `Usage limit · until ${clockTime(p.until)}` : 'Usage limit';
+  if (p.by === 'account') return p.provider ? `${MODEL_NAME[p.provider]} account problem` : 'Account problem';
+  const what = p.provider ? `${MODEL_NAME[p.provider]} limit` : p.holds ? 'Usage limits' : 'Usage limit';
+  return p.until ? `${what} · until ${clockTime(p.until)}` : what;
 }
 
-/** What the pause means, for its popover and the banner. */
-export function pauseText(p: Pick<PauseInfo, 'by' | 'until' | 'reason'>): string {
+/** The title of the paused pill's popover. A model's hold names the model; both models at once read neutral. */
+export function pauseTitle(p: Pick<PauseInfo, 'by' | 'provider'>): string {
+  if (p.by === 'you') return 'The team is paused';
+  if (p.by === 'account') return p.provider ? `${MODEL_NAME[p.provider]} account problem` : 'Account problem';
+  return p.provider ? `${MODEL_NAME[p.provider]}'s usage limit` : 'Usage limits';
+}
+
+/** When one model's projects carry on, in a notice for both models. */
+function carriesOn(h: ModelHold): string {
+  const projects = `${PROJECTS_OF[h.provider]} projects`;
+  if (h.by === 'account') return `${projects} wait until you resume.`;
+  return h.until ? `${projects} carry on by themselves at ${clockTime(h.until)}.` : `${projects} carry on by themselves once the limit resets.`;
+}
+
+/**
+ * What the pause means, for its popover and the banner. One model's hold says the other model's projects carry on;
+ * both at once say when each model's projects carry on.
+ */
+export function pauseText(p: Pick<PauseInfo, 'by' | 'until' | 'reason' | 'provider' | 'holds'>): string {
   if (p.by === 'you') return 'The team starts nothing on its own: no hand-offs, chat replies between desks or QA checks. Your own clicks still work, and runs already going finish.';
-  if (p.by === 'account') return `${p.reason ?? 'A login reported an account problem.'} Nothing the team starts on its own runs until you resume.`;
-  return `${p.reason ?? 'A usage limit was reached.'} Nothing the team starts on its own runs until then${p.until ? `; it carries on by itself at ${clockTime(p.until)}` : ''}.`;
+  if (!p.provider && p.holds?.length) return `${p.reason ?? 'Both models reported a limit.'} Nothing the team starts on its own runs for now. ${p.holds.map(carriesOn).join(' ')}`;
+  const where = p.provider ? ` in ${PROJECTS_OF[p.provider]} projects` : '';
+  const others = p.provider ? ` ${PROJECTS_OF[p.provider === 'gpt' ? 'claude' : 'gpt']} projects carry on.` : '';
+  if (p.by === 'account') return `${p.reason ?? 'A login reported an account problem.'} Nothing the team starts on its own${where} runs until you resume.${others}`;
+  return `${p.reason ?? 'A usage limit was reached.'} Nothing the team starts on its own${where} runs until then${p.until ? `; it carries on by itself at ${clockTime(p.until)}` : ''}.${others}`;
+}
+
+/** This model's account problem holds work: after you sign in to it again, Resume starts that work. */
+export function accountHeld(p: Pick<PauseInfo, 'by' | 'provider' | 'holds'> | null | undefined, provider: Provider): boolean {
+  if (!p || p.by !== 'account') return false;
+  if (p.holds) return p.holds.some((h) => h.provider === provider && h.by === 'account');
+  return !p.provider || p.provider === provider;
 }
 
 export const EFFORT_LABEL: Record<EffortLevel, string> = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Max' };

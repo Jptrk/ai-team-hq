@@ -31,7 +31,7 @@ export function useHqData(pid: string | null) {
     }
   }, []);
 
-  // Meta changes without this page: the server pauses itself when Claude's usage limit is hit, and another tab can resume.
+  // Meta changes without this page: the server holds a model's projects when its usage limit is hit, and another tab can resume.
   const loadMeta = useCallback(() => {
     const rev = metaRev.current;
     void api.meta().then(

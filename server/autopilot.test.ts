@@ -1,6 +1,6 @@
 /**
- * What the team starts on its own, and Pause: hand-offs, chat wakes and QA checks held while HQ is paused or Claude
- * refuses, released on Resume, kept across a restart; your own starts never held. Desks run on a fake runner here.
+ * What the team starts on its own, and Pause: hand-offs, chat wakes and QA checks held while HQ is paused or the
+ * project's model refuses, released on Resume, kept across a restart; your own starts never held. Desks run on a fake runner here.
  * Run: npm run test:auto. Works in a throwaway folder under the OS temp dir; makes no Claude calls.
  */
 import assert from 'node:assert/strict';
@@ -19,7 +19,7 @@ const store = await import('./store');
 const chat = await import('./chat');
 const runner = await import('./runner/index');
 const settings = await import('./settings');
-const { autoGate, countCost, freeDesks, nextMidnight, pickStarts } = await import('./autopilot');
+const { autoGate, countCost, freeDesks, globalHold, nextMidnight, pickStarts } = await import('./autopilot');
 const claudeMod = await import('./runner/claude');
 const { ticketPrompt } = claudeMod;
 const goal = await import('./goal');
@@ -51,7 +51,7 @@ async function fresh(): Promise<void> {
   await idle();
   p.state = store.migrateState(JSON.parse(JSON.stringify(base)) as State, 'dev');
   settings.setPaused(false);
-  settings.setUsageHold(null);
+  settings.clearUsageHolds();
   script = okRun;
   started.length = 0;
 }
@@ -257,9 +257,9 @@ test('chat: a held wake waits while you have the thread paused, and is dropped o
   assert.equal(s.auto.heldWakes.length, 0, 'closed: dropped');
 });
 
-// ---------- Claude refuses ----------
+// ---------- a model refuses ----------
 
-test("usage: Claude's limit holds automatic work everywhere, re-holds the team's start, and clears at its reset", async () => {
+test("usage: Claude's limit holds automatic work in Claude projects, re-holds the team's start, and clears at its reset", async () => {
   await fresh();
   const theirs = ticket('leo');
   const later = ticket('sam');
@@ -269,10 +269,12 @@ test("usage: Claude's limit holds automatic work everywhere, re-holds the team's
   };
   runner.kickoff(p, theirs.id, 'handoff', undefined, [], { auto: true });
   await idle();
-  assert.equal(settings.settings().usageHold?.until, until);
+  assert.equal(settings.settings().usageHolds?.claude?.until, until);
+  assert.equal(settings.settings().usageHolds?.gpt, undefined, "Claude's limit is Claude's only");
   const meta = runner.meta();
   assert.equal(meta.paused?.by, 'usage');
   assert.equal(meta.paused?.until, until);
+  assert.equal(meta.paused?.provider, 'claude');
   assert.equal(theirs.autoHold?.reason, 'handoff', 'held again, not failed');
   assert.equal(theirs.autoHold?.why, 'usage');
   assert.equal(
@@ -285,7 +287,7 @@ test("usage: Claude's limit holds automatic work everywhere, re-holds the team's
   started.length = 0;
   runner.autoSweep(Date.now() + 2 * 3_600_000);
   await idle();
-  assert.equal(settings.settings().usageHold, undefined, 'cleared once it reset');
+  assert.equal(settings.settings().usageHolds, undefined, 'cleared once it reset');
   assert.deepEqual(started.map((s) => s.itemId).sort(), [theirs.id, later.id].sort());
 });
 
@@ -301,7 +303,7 @@ test('usage: your own run fails with the reason, and still holds what the team s
   assert.equal(run.status, 'failed');
   assert.equal(run.error, "Claude's usage limit reached.");
   assert.ok(yours.history.some((h) => h.text === "Run failed: Claude's usage limit reached."));
-  const hold = settings.settings().usageHold!;
+  const hold = settings.settings().usageHolds!.claude!;
   assert.equal(hold.kind, 'usage');
   assert.ok(Date.parse(hold.until!) > Date.now() + 25 * 60_000, 'no reset time given: tried again in half an hour');
   assert.equal(autoGate(p)?.kind, 'usage');
@@ -309,12 +311,132 @@ test('usage: your own run fails with the reason, and still holds what the team s
 
 test('account: a login or billing problem holds until you resume, not until a clock runs out', async () => {
   await fresh();
-  settings.setUsageHold({ kind: 'account', at: new Date().toISOString(), text: 'Claude reported a billing problem.' });
+  settings.setUsageHold('claude', { kind: 'account', at: new Date().toISOString(), text: 'Claude reported a billing problem.' });
   runner.autoSweep(Date.now() + 30 * 24 * 3_600_000);
   assert.equal(runner.meta().paused?.by, 'account');
   assert.equal(autoGate(p)?.text, 'Claude reported a billing problem.');
   runner.resumeAll();
   assert.equal(runner.meta().paused, null);
+});
+
+test("usage: ChatGPT's limit holds GPT projects only; a Claude project's hand-off still starts", async () => {
+  await fresh();
+  const until = new Date(Date.now() + 3_600_000).toISOString();
+  settings.setUsageHold('gpt', { kind: 'usage', at: new Date().toISOString(), text: "ChatGPT's usage limit reached.", until });
+  assert.equal(globalHold(Date.now(), 'gpt')?.kind, 'usage');
+  assert.equal(autoGate(p), null, 'this is a Claude project');
+  const item = ticket('leo');
+  runner.kickoff(p, item.id, 'handoff', undefined, [], { auto: true });
+  await idle();
+  assert.equal(item.autoHold, undefined, 'not held');
+  assert.ok(started.some((s) => s.itemId === item.id), 'the Claude desk ran');
+  assert.deepEqual({ by: runner.meta().paused?.by, provider: runner.meta().paused?.provider }, { by: 'usage', provider: 'gpt' });
+  runner.autoSweep(Date.now() + 2 * 3_600_000);
+  assert.equal(settings.settings().usageHolds, undefined, 'cleared once it reset');
+});
+
+test("usage: both models held at once read as one notice with each model's reset; each clears at its own", async () => {
+  await fresh();
+  const early = new Date(Date.now() + 3_600_000).toISOString();
+  const late = new Date(Date.now() + 7_200_000).toISOString();
+  // Held at different times, written as a hand-edited file may (08:00 UTC, then 09:00 UTC), so a string sort gets the
+  // order wrong: the notice says since the first.
+  const first = '2026-10-10T10:00:00+02:00';
+  settings.setUsageHold('claude', { kind: 'usage', at: first, text: "Claude's 5-hour limit reached.", until: early });
+  settings.setUsageHold('gpt', { kind: 'usage', at: '2026-10-10T09:00:00.000Z', text: "ChatGPT's usage limit reached.", until: late });
+  const paused = runner.meta().paused!;
+  assert.deepEqual({ by: paused.by, at: paused.at, until: paused.until, provider: paused.provider }, { by: 'usage', at: first, until: undefined, provider: undefined }, 'no one time fits both');
+  assert.deepEqual(paused.holds, [
+    { provider: 'claude', by: 'usage', until: early },
+    { provider: 'gpt', by: 'usage', until: late },
+  ]);
+  assert.equal(paused.reason, "Claude's 5-hour limit reached. ChatGPT's usage limit reached.");
+  runner.autoSweep(Date.parse(early) + 1000);
+  assert.deepEqual(Object.keys(settings.settings().usageHolds ?? {}), ['gpt'], "Claude's reset first; ChatGPT's still holds");
+  assert.equal(autoGate(p), null);
+  runner.resumeAll();
+  assert.equal(settings.settings().usageHolds, undefined, 'Resume now clears the limit it names');
+});
+
+test("resume: Resume on one model's account problem leaves the other model's usage limit on; Resume now then clears it", async () => {
+  await fresh();
+  const at = new Date().toISOString();
+  const until = new Date(Date.now() + 3_600_000).toISOString();
+  settings.setUsageHold('claude', { kind: 'account', at, text: 'Claude reported a billing problem.' });
+  settings.setUsageHold('gpt', { kind: 'usage', at, text: "ChatGPT's usage limit reached.", until });
+  const paused = runner.meta().paused!;
+  assert.equal(paused.by, 'account', 'an account notice: its button is Resume');
+  assert.deepEqual(paused.holds, [
+    { provider: 'claude', by: 'account' },
+    { provider: 'gpt', by: 'usage', until },
+  ]);
+  // You signed in to Claude again and pressed Resume.
+  runner.resumeAll();
+  assert.deepEqual(Object.keys(settings.settings().usageHolds ?? {}), ['gpt'], "ChatGPT's limit is still on, so held GPT work is not sent into it");
+  assert.deepEqual({ by: runner.meta().paused?.by, provider: runner.meta().paused?.provider, until: runner.meta().paused?.until }, { by: 'usage', provider: 'gpt', until });
+  assert.equal(autoGate(p), null, 'Claude projects carry on');
+  runner.resumeAll();
+  assert.equal(runner.meta().paused, null, 'Resume now on the limit clears it');
+});
+
+test("usage: Claude's limit holds a queued team start in the Claude project only; a GPT project's queued one still runs", async () => {
+  await fresh();
+  const pg = store.createProject({ name: 'Ads app', key: 'AA', path: null, access: 'read', template: 'dev', provider: 'gpt' });
+  const gDesk = pg.state.agents.find((a) => !a.isHuman)!.id;
+  const gTicket = (): WorkItem => {
+    const item: WorkItem = { id: `wi_a${++n}`, number: 100 + n, kind: 'fyi', status: 'todo', title: `Ticket ${n}`, summary: '', from: 'nora', assignee: gDesk, dated: '2026-10-06', links: [], history: [] };
+    pg.state.items.unshift(item);
+    return item;
+  };
+  const settled = async (done: () => boolean) => {
+    for (let i = 0; i < 400 && !done(); i++) await new Promise((r) => setTimeout(r, 5));
+    assert.ok(done(), 'never settled');
+  };
+  const busy = ticket('leo');
+  const theirs = ticket('leo');
+  const gBusy = gTicket();
+  const gTheirs = gTicket();
+  const claudeRun = blocking();
+  const gptRun = blocking();
+  const limit = "Claude's 5-hour limit reached. It resets at 15:00.";
+  script = async (input, signal) => {
+    if (input.item?.id === busy.id) {
+      await claudeRun.script(input, signal);
+      throw Object.assign(new Error(limit), { usage: { kind: 'usage', until: new Date(Date.now() + 3_600_000).toISOString(), text: limit } });
+    }
+    if (input.item?.id === gBusy.id) return gptRun.script(input, signal);
+    return okRun(input, signal);
+  };
+  try {
+    // Each project's desk is busy, and the team's hand-off waits behind it.
+    runner.kickoff(p, busy.id, 'manual');
+    runner.kickoff(pg, gBusy.id, 'manual');
+    await new Promise((r) => setTimeout(r, 20));
+    const queued = runner.kickoff(p, theirs.id, 'handoff', undefined, [], { auto: true })!;
+    const gQueued = runner.kickoff(pg, gTheirs.id, 'handoff', undefined, [], { auto: true })!;
+    assert.deepEqual([queued.status, gQueued.status], ['queued', 'queued']);
+    claudeRun.release();
+    await settled(() => runsFor(busy.id)[0]?.status === 'failed');
+    assert.equal(settings.settings().usageHolds?.claude?.kind, 'usage');
+    assert.equal(settings.settings().usageHolds?.gpt, undefined);
+    assert.equal(queued.status, 'done', "the Claude project's queued start is held at once");
+    assert.match(queued.summary ?? '', /^Skipped: held: Claude's 5-hour limit reached/);
+    assert.equal(theirs.autoHold?.why, 'usage');
+    assert.equal(gQueued.status, 'queued', "the GPT project's start stays in line");
+    assert.equal(gTheirs.autoHold, undefined);
+    assert.equal(autoGate(pg), null);
+    gptRun.release();
+    await settled(() => !pg.state.runs.some((r) => r.status === 'queued' || r.status === 'running'));
+    assert.deepEqual({ status: gQueued.status, summary: gQueued.summary }, { status: 'done', summary: 'ok' });
+    assert.ok(started.some((s) => s.itemId === gTheirs.id && s.auto), "the GPT project's hand-off ran");
+    assert.ok(!started.some((s) => s.itemId === theirs.id), "the Claude project's did not");
+  } finally {
+    claudeRun.release();
+    gptRun.release();
+    await idle();
+    for (const item of pg.state.items) item.status = 'done';
+    pg.flush();
+  }
 });
 
 // ---------- restart ----------
@@ -421,7 +543,8 @@ test('yours: writing to a desk, or asking for a QA check, that joins a waiting t
 });
 
 test('queue: your runs wait for a slot first come, first served, ahead of the team’s', async () => {
-  const { enqueue, CONCURRENCY } = await import('./runner/queue');
+  const { enqueue, concurrency } = await import('./runner/queue');
+  const CONCURRENCY = concurrency();
   const order: string[] = [];
   const gates: (() => void)[] = [];
   const hold = (name: string) => () => new Promise<void>((r) => gates.push(() => (order.push(name), r())));
@@ -440,7 +563,7 @@ test('queue: your runs wait for a slot first come, first served, ahead of the te
 
 test('resume: lifting your Pause leaves a usage limit that is still on; Resume now on it clears it', async () => {
   await fresh();
-  settings.setUsageHold({ kind: 'usage', at: new Date().toISOString(), text: "Claude's 5-hour limit reached. It resets at 15:00.", until: new Date(Date.now() + 3_600_000).toISOString() });
+  settings.setUsageHold('claude', { kind: 'usage', at: new Date().toISOString(), text: "Claude's 5-hour limit reached. It resets at 15:00.", until: new Date(Date.now() + 3_600_000).toISOString() });
   runner.pauseAll();
   assert.equal(runner.meta().paused?.by, 'you');
   runner.resumeAll();
@@ -712,14 +835,14 @@ test('autopilot: a failed run leaves its ticket for you and the desk moves on; 3
   await autopilotOn();
   const tickets = [ticket('leo', { number: 50 }), ticket('leo', { number: 51 }), ticket('leo', { number: 52 }), ticket('leo', { number: 53 })];
   script = async () => {
-    throw new Error('Stopped: no progress for 8 minutes (HQ_RUN_IDLE_MS)');
+    throw new Error('Stopped: no progress for 8 minutes (Quiet limit, on the Accounts page)');
   };
   runner.autoTick(p);
   await idle();
   await idle();
   assert.deepEqual(
     tickets.slice(0, 3).map((t) => t.autoSkip?.why),
-    Array(3).fill('Its run failed: Stopped: no progress for 8 minutes (HQ_RUN_IDLE_MS)'),
+    Array(3).fill('Its run failed: Stopped: no progress for 8 minutes (Quiet limit, on the Accounts page)'),
   );
   assert.equal(p.state.auto.halted?.why, '3 automatic runs failed in a row');
   assert.equal(tickets[3].status, 'todo', 'stopped before the fourth');
@@ -769,7 +892,7 @@ test('autopilot: you stopping its run leaves the ticket for you, but is no strik
 test('autopilot: hand-offs, chats and QA that fail are not Autopilot’s failures, and its stop never holds them', async () => {
   await fresh();
   script = async () => {
-    throw new Error('Stopped: no progress for 8 minutes (HQ_RUN_IDLE_MS)');
+    throw new Error('Stopped: no progress for 8 minutes (Quiet limit, on the Accounts page)');
   };
   const items = [ticket('leo'), ticket('sam'), ticket('omar')];
   for (const item of items) runner.kickoff(p, item.id, 'handoff', undefined, [], { auto: true });

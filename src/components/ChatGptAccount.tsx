@@ -5,7 +5,7 @@ import type { ChatGptLogin, ChatGptResponse, ChatGptWindow, Meta } from '../../s
 import { api } from '../api';
 import type { Notify } from '../hooks/useFlags';
 import { ConfirmInline, refocus } from '../ui/ConfirmInline';
-import { clockTime } from '../util';
+import { accountHeld, clockTime } from '../util';
 import { hostOf, timeLeft } from './connections/addForm';
 
 interface Props {
@@ -72,7 +72,8 @@ export function ChatGptAccount({ notify, onChanged, meta }: Props) {
     if (!data.signedInAt || data.signedInAt === seenSignIn.current.at) return;
     seenSignIn.current = { at: data.signedInAt };
     const who = data.account?.email ? `Signed in to ChatGPT as ${data.account.email}` : 'Signed in to ChatGPT';
-    notify(meta?.paused?.by === 'account' ? `${who}. Press Resume to start held work.` : who, { tone: 'success' });
+    // Only when ChatGPT's account problem (its login failed) holds work: a Claude one waits for a Claude sign-in.
+    notify(accountHeld(meta?.paused, 'gpt') ? `${who}. Press Resume to start held work.` : who, { tone: 'success' });
     onChanged();
   }, [data, meta, notify, onChanged]);
 

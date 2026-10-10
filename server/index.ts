@@ -5,7 +5,9 @@ import path from 'node:path';
 import { router } from './routes';
 import { autoSweep, isIdle, isLive, loginOptIn, meta } from './runner';
 import { noteWentLive, settings } from './settings';
-import { limitsFromEnv, limitsWarning } from './runner/watch';
+import { limitsWarning } from './runner/watch';
+import { watchLimits } from './limits';
+import { envLimitWarnings } from '../shared/limits';
 import { startSim } from './sim';
 import { sweepAttachments } from './attachments';
 import { backfillFingerprints } from './connections';
@@ -113,8 +115,10 @@ app.listen(PORT, '127.0.0.1', () => {
             ? '[hq] runner=sim (no model calls). Desks may run on your login now: restart HQ to go live.'
             : "[hq] runner=sim (no model calls). Go live from HQ's Accounts page with your Claude or ChatGPT login (or put an ANTHROPIC_API_KEY in .env), then restart.",
   );
-  const limits = limitsWarning(limitsFromEnv());
+  const limits = limitsWarning(watchLimits());
   if (live && limits) console.warn(`[hq] ${limits}`);
+  // .env limits HQ ignored or pulled into range, once each: what .env says and the value that counts.
+  for (const line of envLimitWarnings(process.env, settings().limits)) console.warn(`[hq] ${line}`);
   // Ask Claude Code who is signed in, so the Accounts page answers at once (and a Mac keychain login counts).
   void checkAccount().catch(() => undefined);
   // The same for ChatGPT, only once you said yes to it: it starts HQ's Codex.

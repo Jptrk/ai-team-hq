@@ -128,7 +128,7 @@ export interface WorkItem {
   origin?: 'goal';
 }
 
-/** Why automatic work can't start now. paused: you; usage / account: Claude refused; halted: Autopilot failed 3 times in a row; runs / usd: the project's daily limit. */
+/** Why automatic work can't start now. paused: you; usage / account: the project's model refused; halted: Autopilot failed 3 times in a row; runs / usd: the project's daily limit. */
 /** model: the project's model can't run now (no login for it, or it is switched off). */
 export type HoldKind = 'paused' | 'usage' | 'account' | 'halted' | 'runs' | 'usd' | 'model';
 
@@ -751,11 +751,28 @@ export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 export type EffortLevel = (typeof EFFORT_LEVELS)[number];
 export const isEffortLevel = (v: unknown): v is EffortLevel => typeof v === 'string' && (EFFORT_LEVELS as readonly string[]).includes(v);
 
-/** Why HQ holds automatic work. by: you pressed Pause; usage: Claude's usage limit (clears by itself at until); account: a login or billing problem. */
+/**
+ * Why HQ holds automatic work. by: you pressed Pause; usage: a model's usage limit (clears by itself at until); account:
+ * a login or billing problem. provider: the model whose limit it is, so only its projects wait. Missing: everything
+ * waits (your Pause, or both models at once).
+ */
 export interface PauseInfo {
   by: 'you' | 'usage' | 'account';
   at: string;
   reason?: string;
+  until?: string;
+  provider?: Provider;
+  /**
+   * Both models held at once: each one's hold, so the page says when each model's projects carry on. by is account when
+   * either is an account problem (Resume clears those first); until is then left out, as no one time fits both.
+   */
+  holds?: ModelHold[];
+}
+
+/** One model's hold inside a notice for both: its usage limit (until: when it resets) or its account problem. */
+export interface ModelHold {
+  provider: Provider;
+  by: 'usage' | 'account';
   until?: string;
 }
 
@@ -791,7 +808,7 @@ export interface Meta {
   /** The effort every Claude desk run uses, one setting for all of HQ. Null: the model's own default. */
   effort: EffortLevel | null;
   gpt: GptMeta;
-  /** Nothing the team starts on its own runs, in any project: you paused HQ, or Claude refused (usage limit, account). */
+  /** Nothing the team starts on its own runs: in any project when you paused HQ, or in a model's projects when it refused (usage limit, account). */
   paused: PauseInfo | null;
   /** Starts and chat wakes waiting for HQ to resume or a limit to clear, across all projects. */
   held: number;

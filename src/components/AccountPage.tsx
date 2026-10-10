@@ -6,8 +6,10 @@ import { api } from '../api';
 import type { Notify } from '../hooks/useFlags';
 import { PageHeader } from '../shell/PageHeader';
 import { ConfirmInline, refocus } from '../ui/ConfirmInline';
+import { accountHeld } from '../util';
 import { ChatGptAccount } from './ChatGptAccount';
 import { HqLoginCard } from './HqLoginCard';
+import { LimitsSettings } from './LimitsSettings';
 import { hostOf, timeLeft } from './connections/addForm';
 
 interface Props {
@@ -112,7 +114,8 @@ export function AccountPage({ notify, onChanged, meta, loginName }: Props) {
     if (!data.signedInAt || data.signedInAt === seenSignIn.current.at) return;
     seenSignIn.current = { at: data.signedInAt };
     const who = data.account?.email ? `Signed in as ${data.account.email}` : 'Signed in to Claude';
-    notify(meta?.paused?.by === 'account' ? `${who}. Press Resume to start held work.` : who, { tone: 'success' });
+    // Only when Claude's account problem holds work: a ChatGPT one waits for a ChatGPT sign-in.
+    notify(accountHeld(meta?.paused, 'claude') ? `${who}. Press Resume to start held work.` : who, { tone: 'success' });
     onChanged();
   }, [data, meta, notify, onChanged]);
 
@@ -166,6 +169,8 @@ export function AccountPage({ notify, onChanged, meta, loginName }: Props) {
         ) : (
           <p className="muted">Asking Claude Code who is signed in...</p>
         )}
+        {/* Limits don't wait on Claude Code. The same key as below keeps what you typed once the page has loaded. */}
+        <LimitsSettings key="limits" notify={notify} />
       </section>
     );
   }
@@ -356,6 +361,8 @@ export function AccountPage({ notify, onChanged, meta, loginName }: Props) {
       </div>
 
       <ChatGptAccount notify={notify} onChanged={onChanged} meta={meta} />
+
+      <LimitsSettings key="limits" notify={notify} />
     </section>
   );
 }

@@ -3,8 +3,9 @@
  *   npm run test:timeouts
  */
 import assert from 'node:assert/strict';
+import { LIMITS as HQ_LIMITS, limitFromEnv, type LimitKey } from '../shared/limits';
 import { runEnv } from './runner/claude';
-import { duration, explainFailure, limitsFromEnv, limitsWarning, mcpToolTimeoutFromEnv, nextUsage, RunWatch, stopText, usageLimitOf, type UsageLimit } from './runner/watch';
+import { duration, explainFailure, limitsWarning, mcpToolTimeoutFromEnv, nextUsage, RunWatch, stopText, usageLimitOf, type UsageLimit, type WatchLimits } from './runner/watch';
 
 const cases: [string, () => void | Promise<void>][] = [];
 const test = (name: string, fn: () => void | Promise<void>) => cases.push([name, fn]);
@@ -106,8 +107,9 @@ test('words: no stop text or limit text looks like a failure the runner retries 
     ...['authentication_failed', 'oauth_org_not_allowed', 'account_on_hold', 'verification_required', 'billing_error'].map((error) => usageLimitOf({ type: 'assistant', error })!.text),
   ];
   for (const t of texts) for (const r of retries) assert.equal(r.test(t), false, `${t} matches ${r}`);
-  assert.equal(stopText.idle(8 * 60_000), 'Stopped: no progress for 8 minutes (HQ_RUN_IDLE_MS)');
-  assert.equal(stopText.cap(40 * 60_000), 'Stopped after 40 minutes, the most one run may take (HQ_RUN_TIMEOUT_MS)');
+  assert.equal(stopText.idle(8 * 60_000), 'Stopped: no progress for 8 minutes (Quiet limit, on the Accounts page)');
+  assert.equal(stopText.tool(20 * 60_000), 'Stopped: a tool call gave no result for 20 minutes (Tool call limit, on the Accounts page)');
+  assert.equal(stopText.cap(40 * 60_000), 'Stopped after 40 minutes, the most one run may take (Whole run, on the Accounts page)');
 });
 
 test('usage: a rejected rate limit says which limit and when it resets (24-hour clock), in seconds or milliseconds', () => {
@@ -165,10 +167,16 @@ test('failure: the watch, your Stop, Claude’s limit, or the SDK’s own words 
   assert.deepEqual(explainFailure('Prompt is too long', { watch: null, stopped: false }), { text: 'Prompt is too long' });
 });
 
+/** The run limits as .env would set them, with the defaults for what it leaves out. */
+function fromEnv(env: Record<string, string>): WatchLimits {
+  const one = (key: LimitKey) => limitFromEnv(key, env[HQ_LIMITS[key].env]) ?? HQ_LIMITS[key].default;
+  return { idleMs: one('runIdleMs'), toolIdleMs: one('toolIdleMs'), capMs: one('runTimeoutMs') };
+}
+
 test('env: limits come from HQ_RUN_IDLE_MS, HQ_TOOL_IDLE_MS and HQ_RUN_TIMEOUT_MS; junk keeps the defaults', () => {
-  assert.deepEqual(limitsFromEnv({}), { idleMs: 8 * 60_000, toolIdleMs: 20 * 60_000, capMs: 40 * 60_000 });
-  assert.deepEqual(limitsFromEnv({ HQ_RUN_IDLE_MS: '300000', HQ_TOOL_IDLE_MS: '600000.4', HQ_RUN_TIMEOUT_MS: '3600000' }), { idleMs: 300_000, toolIdleMs: 600_000, capMs: 3_600_000 });
-  assert.deepEqual(limitsFromEnv({ HQ_RUN_IDLE_MS: 'soon', HQ_TOOL_IDLE_MS: '-5', HQ_RUN_TIMEOUT_MS: '' }), { idleMs: 8 * 60_000, toolIdleMs: 20 * 60_000, capMs: 40 * 60_000 });
+  assert.deepEqual(fromEnv({}), { idleMs: 8 * 60_000, toolIdleMs: 20 * 60_000, capMs: 40 * 60_000 });
+  assert.deepEqual(fromEnv({ HQ_RUN_IDLE_MS: '300000', HQ_TOOL_IDLE_MS: '600000.4', HQ_RUN_TIMEOUT_MS: '3600000' }), { idleMs: 300_000, toolIdleMs: 600_000, capMs: 3_600_000 });
+  assert.deepEqual(fromEnv({ HQ_RUN_IDLE_MS: 'soon', HQ_TOOL_IDLE_MS: '-5', HQ_RUN_TIMEOUT_MS: '' }), { idleMs: 8 * 60_000, toolIdleMs: 20 * 60_000, capMs: 40 * 60_000 });
   assert.equal(duration(8 * 60_000), '8 minutes');
   assert.equal(duration(60_000), '1 minute');
   assert.equal(duration(45_000), '45 seconds');
@@ -176,10 +184,12 @@ test('env: limits come from HQ_RUN_IDLE_MS, HQ_TOOL_IDLE_MS and HQ_RUN_TIMEOUT_M
 });
 
 test('env: an old 10-minute HQ_RUN_TIMEOUT_MS, or a cap under the tool window, is warned about at startup', () => {
-  assert.match(limitsWarning(limitsFromEnv({ HQ_RUN_TIMEOUT_MS: '600000' }))!, /^HQ_RUN_TIMEOUT_MS is 10 minutes: /);
-  assert.match(limitsWarning(limitsFromEnv({ HQ_RUN_TIMEOUT_MS: '900000' }))!, /HQ_TOOL_IDLE_MS, 20 minutes/);
-  assert.equal(limitsWarning(limitsFromEnv({ HQ_RUN_TIMEOUT_MS: '1800000' })), null, '30 minutes is fine');
-  assert.equal(limitsWarning(limitsFromEnv({})), null);
+  assert.match(limitsWarning(fromEnv({ HQ_RUN_TIMEOUT_MS: '600000' }))!, /^Whole run \(HQ_RUN_TIMEOUT_MS\) is 10 minutes: /);
+  assert.match(limitsWarning(fromEnv({ HQ_RUN_TIMEOUT_MS: '900000' }))!, /\(Tool call limit, 20 minutes\)/);
+  assert.match(limitsWarning(fromEnv({ HQ_RUN_TIMEOUT_MS: '600000' }))!, /Raise it under Limits on the Accounts page \(default 40 minutes\)\.$/);
+  assert.doesNotMatch(limitsWarning(fromEnv({ HQ_RUN_TIMEOUT_MS: '600000' }))!, /\.env/, 'the value may be yours from the Accounts page, not .env');
+  assert.equal(limitsWarning(fromEnv({ HQ_RUN_TIMEOUT_MS: '1800000' })), null, '30 minutes is fine');
+  assert.equal(limitsWarning(fromEnv({})), null);
 });
 
 test('env: MCP tool calls get a time limit, unless you set MCP_TOOL_TIMEOUT yourself', () => {

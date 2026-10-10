@@ -68,7 +68,7 @@ function fresh(): void {
   runner.setIdleForTests(true);
   p.state = store.migrateState(JSON.parse(JSON.stringify(base)) as State, 'dev');
   settings.setPaused(false);
-  settings.setUsageHold(null);
+  settings.clearUsageHolds();
   started.length = 0;
 }
 
@@ -174,6 +174,27 @@ test('paused when it goes live: yours waits for Resume, and says it waits for th
     started.map((x) => [x.reason, x.agentId, x.auto]),
     [['approved', 'sam', false]],
   );
+});
+
+test("a model's limit when it goes live: Claude's makes yours in this Claude project wait; ChatGPT's alone does not", async () => {
+  fresh();
+  const item = ticket('leo');
+  runner.kickoff(p, item.id, 'instruction');
+  goLive();
+  const at = new Date().toISOString();
+  const until = new Date(Date.now() + 3_600_000).toISOString();
+  settings.setUsageHold('claude', { kind: 'usage', at, text: "Claude's 5-hour limit reached.", until });
+  assert.equal(runner.releaseHolds(p), 0);
+  assert.deepEqual({ why: item.autoHold?.why, mine: item.autoHold?.mine }, { why: 'usage', mine: true }, 'it says it waits for the limit');
+  settings.setUsageHold('claude', null);
+  settings.setUsageHold('gpt', { kind: 'usage', at, text: "ChatGPT's usage limit reached.", until });
+  assert.equal(runner.releaseHolds(p), 1, "ChatGPT's limit holds GPT projects only");
+  await settle();
+  assert.deepEqual(
+    started.map((x) => [x.reason, x.agentId, x.itemId, x.auto]),
+    [['instruction', 'leo', item.id, false]],
+  );
+  assert.equal(item.autoHold, undefined);
 });
 
 test('a comment held, then a decision takes its place: the comment still gets its answer after the work', async () => {

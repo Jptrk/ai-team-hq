@@ -19,7 +19,7 @@ import { fitWithin, imageFiles } from './lib/images';
 import { cleanMarkdown, escapeTypedText, looksLikeDiffOrTerminal, looksLikeMarkdown, needsPlainEditor } from './lib/markdownPaste';
 import { attachmentUrl, isAttachmentUrl, isReportUrl, reportFileName, resolveReportHref } from './markdown/reportLinks';
 import { parseRoute, projectPath } from './route';
-import { awaitsSignoff, clockTime, latestDecision, readableInk, autoTodayText, effortLabel, goalLabel, goLiveHint, holdText, pauseLabel, pauseText, runnerLabel, signoffVerdict, waitingSummary, waitingTitle } from './util';
+import { accountHeld, awaitsSignoff, clockTime, latestDecision, readableInk, autoTodayText, effortLabel, goalLabel, goLiveHint, holdText, pauseLabel, pauseText, pauseTitle, runnerLabel, signoffVerdict, waitingSummary, waitingTitle } from './util';
 import { MCP_PRESETS, presetArgs, presetDefaults } from '../shared/mcpPresets';
 import { buildSpec, safeAuthUrl } from '../shared/mcpSpec';
 import type { ConnectionRow, SkillMeta } from '../shared/types';
@@ -695,6 +695,17 @@ test('pause and holds: what the header and a held ticket say', () => {
   assert.match(pauseText({ by: 'you' }), /^The team starts nothing on its own/);
   assert.match(pauseText({ by: 'usage', reason: "Claude's 5-hour limit reached.", until: '2026-10-06T07:00:00.000Z' }), /^Claude's 5-hour limit reached\. .*carries on by itself at /);
   assert.match(pauseText({ by: 'account', reason: 'Claude reported a billing problem.' }), /until you resume\.$/);
+  // One model's limit: named, and the other model's projects carry on.
+  assert.match(pauseLabel({ by: 'usage', provider: 'gpt', until: soon }), /^ChatGPT limit · until /);
+  assert.equal(pauseLabel({ by: 'account', provider: 'claude' }), 'Claude account problem');
+  assert.match(
+    pauseText({ by: 'usage', provider: 'gpt', reason: "ChatGPT's usage limit reached.", until: '2026-10-06T07:00:00.000Z' }),
+    /^ChatGPT's usage limit reached\. Nothing the team starts on its own in GPT projects runs until then; it carries on by itself at .+\. Claude projects carry on\.$/,
+  );
+  assert.equal(
+    pauseText({ by: 'account', provider: 'claude', reason: 'Claude reported a billing problem.' }),
+    'Claude reported a billing problem. Nothing the team starts on its own in Claude projects runs until you resume. GPT projects carry on.',
+  );
   assert.equal(holdText({ reason: 'handoff', why: 'paused' }), 'The hand-off waits: HQ is paused. It starts by itself once that clears.');
   assert.equal(holdText({ reason: 'qa', why: 'usd' }), "The QA check waits: this project's spend for today is used up. It starts by itself once that clears.");
   // Neutral: the server's hold text in history and notes names the cause (switch off, or no login).
@@ -704,6 +715,54 @@ test('pause and holds: what the header and a held ticket say', () => {
   assert.equal(goalLabel({ status: 'stalled', planning: false }), 'Stalled');
   assert.equal(autoTodayText({ runs: 6, maxRuns: 40, usd: 4.1, maxUsd: 25 }), 'Today 6/40 runs · $4.10 of $25');
   assert.equal(holdText({ reason: 'auto', why: 'restart' }), "Autopilot's start was cut off by a server restart. It starts again by itself.");
+});
+
+test("pause: the popover title names the model; both models at once say when each model's projects carry on", () => {
+  assert.equal(pauseTitle({ by: 'you' }), 'The team is paused');
+  assert.equal(pauseTitle({ by: 'usage', provider: 'gpt' }), "ChatGPT's usage limit");
+  assert.equal(pauseTitle({ by: 'usage', provider: 'claude' }), "Claude's usage limit");
+  assert.equal(pauseTitle({ by: 'account', provider: 'gpt' }), 'ChatGPT account problem');
+  assert.equal(pauseTitle({ by: 'usage' }), 'Usage limits', 'no model: neutral');
+  assert.equal(pauseTitle({ by: 'account' }), 'Account problem');
+  const soon = new Date(Date.now() + 60_000).toISOString();
+  const later = new Date(Date.now() + 120_000).toISOString();
+  // Both usage limits: no one time for everything, each model's own reset instead.
+  const both = {
+    by: 'usage' as const,
+    reason: "Claude's 5-hour limit reached. ChatGPT's usage limit reached.",
+    holds: [
+      { provider: 'claude' as const, by: 'usage' as const, until: soon },
+      { provider: 'gpt' as const, by: 'usage' as const, until: later },
+    ],
+  };
+  assert.equal(pauseLabel(both), 'Usage limits');
+  assert.equal(
+    pauseText(both),
+    `Claude's 5-hour limit reached. ChatGPT's usage limit reached. Nothing the team starts on its own runs for now. Claude projects carry on by themselves at ${clockTime(soon)}. GPT projects carry on by themselves at ${clockTime(later)}.`,
+  );
+  // One model's account problem and the other's limit: only the account side waits for you.
+  const mixed = {
+    by: 'account' as const,
+    reason: "Claude reported a billing problem. ChatGPT's usage limit reached.",
+    holds: [
+      { provider: 'claude' as const, by: 'account' as const },
+      { provider: 'gpt' as const, by: 'usage' as const },
+    ],
+  };
+  assert.equal(pauseLabel(mixed), 'Account problem');
+  assert.equal(pauseTitle(mixed), 'Account problem');
+  assert.equal(
+    pauseText(mixed),
+    "Claude reported a billing problem. ChatGPT's usage limit reached. Nothing the team starts on its own runs for now. Claude projects wait until you resume. GPT projects carry on by themselves once the limit resets.",
+  );
+  // A sign-in toast says Resume starts held work only for that model's account problem.
+  assert.equal(accountHeld(mixed, 'claude'), true);
+  assert.equal(accountHeld(mixed, 'gpt'), false, "ChatGPT's side is a usage limit");
+  assert.equal(accountHeld({ by: 'account', provider: 'gpt' }, 'gpt'), true);
+  assert.equal(accountHeld({ by: 'account', provider: 'gpt' }, 'claude'), false);
+  assert.equal(accountHeld({ by: 'usage', provider: 'claude' }, 'claude'), false);
+  assert.equal(accountHeld({ by: 'you' }, 'claude'), false);
+  assert.equal(accountHeld(null, 'claude'), false);
 });
 
 console.log(`ui: ${passed} tests passed`);

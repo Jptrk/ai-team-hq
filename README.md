@@ -22,7 +22,7 @@ The header pill says **Not live**, a banner says what to do (sign in, or turn th
 HQ), and huddles don't start. Instructions, approvals, comments and chat messages wait on their ticket or
 thread ("HQ has no login to run desks on"), keeping your note, images and team-notes choice, and
 start by themselves once HQ restarts live. They start as your own clicks: a project's daily limits don't
-hold them, only Pause (they wait for **Resume**, and say so) or Claude's usage limit.
+hold them, only Pause (they wait for **Resume**, and say so) or the usage limit of the project's model.
 
 ## Run it
 
@@ -710,6 +710,9 @@ On a project made from the **Dev team** template, finished work is checked befor
 | --- | ------- | ---- |
 | `HQ_QA_MAX_FIXES` | 2 | Fixes after a QA fail before the ticket comes to you instead |
 
+You can also set this on the Accounts page, under [Limits](#limits-on-the-accounts-page): **Fixes after a
+failed QA check**.
+
 ## Chat (desks talking to each other)
 
 The **Chat** tab shows threads between desks, and you. Messages do real work: each message to
@@ -750,6 +753,9 @@ a desk wakes it for a live run, which spends usage.
 | `HQ_CHAT_DAILY_RUNS` | 30 | Desk-to-desk wakes per project per day |
 | `HQ_MSG_MAX_TURNS` | 12 | Turn cap for a message run |
 | `HQ_MSG_MAX_BUDGET_USD` | 1 | Estimated-cost cap for a message run |
+
+You can also set all four on the Accounts page, under [Limits](#limits-on-the-accounts-page): the first two
+under **Desk chat**, the message-run caps as **Turns per chat reply** and **Budget per chat reply**.
 
 In sim mode, desks answer with canned replies, so the tab works without spending usage.
 
@@ -817,6 +823,9 @@ refused, so the new note isn't lost. Copy your text, press **Cancel**, and edit 
 | `HQ_HUDDLES_PER_DAY` | 5 | Huddles a project can start per day. `0` turns huddles off |
 | `HQ_SIM_HUDDLE_MS` | 900 | Sim mode: about how long a canned huddle turn takes |
 
+You can also set `HQ_HUDDLES_PER_DAY` on the Accounts page, under [Limits](#limits-on-the-accounts-page):
+**Huddles per project per day**.
+
 ## Autopilot, Goal mode and Pause
 
 The team can work on its own, and you can stop it with one button.
@@ -827,7 +836,8 @@ Turn it on with the **Autopilot** switch on the board (it asks first), or in **P
 Then a free desk starts its next To do ticket by itself, oldest first, and goes on to the next one
 when it is done. A desk counts as free when it is not off shift, has nothing queued or running,
 is not in a running huddle, is not on an active ticket, and has fewer than 2 decisions waiting on
-you. Autopilot only fills free run slots (`HQ_CONCURRENCY`), so it never takes a slot ahead of your
+you. Autopilot only fills free run slots (**Desks running at once** under
+[Limits](#limits-on-the-accounts-page), or `HQ_CONCURRENCY`), so it never takes a slot ahead of your
 own clicks (a click for a desk that is mid-run still waits for that run, as always).
 
 - **A failed Autopilot run** leaves its ticket for you: it shows **Auto-skipped** on the card and
@@ -878,9 +888,13 @@ banner says so; **Resume** carries on where it stopped.
   with the reason in the ticket) or, for a chat wake, in the thread ("Sam sees this once it clears").
   It starts by itself once the reason clears. A start that no longer fits its ticket (you moved
   it, or marked it done) is dropped, with a line in the ticket's history.
-- **Claude's usage limit** holds automatic work the same way, in every project, until the reset
-  time Claude reports (half an hour when it gives none). The pill says "Usage limit · until 15:00";
-  **Resume now** tries sooner. A login or billing problem waits for your Resume.
+- **A usage limit** holds automatic work the same way, but only in that model's projects: Claude's
+  limit holds Claude projects, ChatGPT's holds GPT projects, and the other model's projects carry on.
+  It lasts until the reset time the model reports (half an hour when it gives none). The pill names
+  the model ("ChatGPT limit · until 15:00"); **Resume now** clears the limits it names and tries sooner.
+  With both models held, the notice says when each model's projects carry on.
+- **A login or billing problem** waits for your **Resume**, also only in that model's projects. That
+  Resume clears account problems only: a usage limit still on for the other model stays until it resets.
 - **Restarts.** A team-started run cut off by a server restart starts again by itself, once; a
   second time it is left for you. Runs you started keep their old behaviour.
 - A minute sweep (`HQ_AUTO_SWEEP_MS`) clears a usage limit that has reset and starts what waits.
@@ -891,6 +905,9 @@ banner says so; **Resume** carries on where it stopped.
 | `HQ_AUTO_SWEEP_MS` | 60000 | How often HQ checks for held work, Autopilot picks and goal planning (live mode) |
 | `HQ_PLAN_MAX_TURNS` | 20 | Turns one goal planning run may take |
 | `HQ_PLAN_MAX_BUDGET_USD` | 1.5 | Estimated spend one goal planning run may take |
+
+You can also set the two planning limits on the Accounts page, under [Limits](#limits-on-the-accounts-page):
+**Turns per planning run** and **Budget per planning run**.
 
 ## Go live
 
@@ -934,8 +951,8 @@ of a Claude subscription, desks spend API credits on it. Claude Code reports a C
 with your subscription.
 
 **Signing out while live.** HQ picked live at start, so it stays live, and desk runs fail without a
-login. The first failure puts HQ on an account hold (**Account problem** in the header): automatic
-work waits. Sign in again on the Claude account page, then press **Resume**. A restart without a login
+login. The first failure puts HQ on an account hold (**Claude account problem** in the header): automatic
+work in Claude projects waits. Sign in again on the Claude account page, then press **Resume**. A restart without a login
 starts HQ **not live** (no sim, see above). While GPT projects can run, nothing starts in a Claude
 project instead: its work waits, with no account hold, so GPT projects keep working, and starts by
 itself once you sign in again (see [GPT desks](#gpt-desks-your-chatgpt-plan)).
@@ -978,7 +995,8 @@ What happens on an instruction:
 
 1. The router in `server/agents.ts` picks the desk.
 2. `server/runner/index.ts` queues a run. One run per desk at a time, `HQ_CONCURRENCY` desks in
-   parallel across all projects.
+   parallel across all projects (**Desks running at once** under [Limits](#limits-on-the-accounts-page)
+   wins over it).
 3. `server/runner/claude.ts` starts an Agent SDK `query()`:
    - `cwd` = `workspaces/<project>/<agent>/`, created on first run with `ROLE.md`, `memory.md`, `reports/`.
    - The linked folder is passed as `additionalDirectories`.
@@ -998,7 +1016,8 @@ What happens on an instruction:
      it marked deleted) and in its history. At most 50 per run, and a folder of at most 2000 files.
    - Session id is saved per desk and resumed next run, so a desk remembers earlier tasks.
    - Caps: `HQ_MAX_BUDGET_USD` per run, `HQ_MAX_TURNS`, and the time limits in
-     [How long a run may take](#how-long-a-run-may-take).
+     [How long a run may take](#how-long-a-run-may-take). All of them can also be set under
+     [Limits](#limits-on-the-accounts-page) on the Accounts page.
 4. The agent either finishes (`report_done`) or hands you a decision (`raise_for_decision`).
 5. Approve / Send back / Instruct each start a follow-up run with your note. Hold does nothing.
 
@@ -1032,7 +1051,8 @@ More effort means slower runs and more usage. Pick it in the header: click the `
   [Sessions and the prompt cache](#sessions-and-the-prompt-cache)). A small one just resumes.
 - **The run limits still hold.** Extra high and Max reach `HQ_MSG_MAX_BUDGET_USD` (chat replies),
   `HQ_MAX_BUDGET_USD` and `HQ_RUN_TIMEOUT_MS` sooner. If runs stop with "Reached maximum budget",
-  raise those or pick a lower level.
+  raise those (under [Limits](#limits-on-the-accounts-page) on the Accounts page, or in `.env`) or pick
+  a lower level.
 - `xhigh` and `max` need a model that has them; `claude-opus-5` has all five, and Claude Code runs
   them at `high` on a model without them. A level picked in HQ beats `CLAUDE_CODE_EFFORT_LEVEL`.
   On a wide window the header pill shows the level when one is set: `LIVE · claude-opus-5 · medium effort`.
@@ -1087,11 +1107,12 @@ What is different from a Claude desk:
   daily dollar limit doesn't count them (the daily run limit does). A Plus plan runs out fast with
   several busy desks.
 - **Limits.** When the plan's limit is hit, the run fails with which window ran out and when it resets,
-  and HQ holds **all** automatic work until then, Claude desks' too, the same hold Claude's limit puts on.
-  Your own clicks still start runs.
+  and automatic work in GPT projects waits until then; Claude projects carry on. Your own clicks still
+  start runs.
 - **A run is capped by tool calls**, not dollars: `HQ_GPT_MAX_TOOL_CALLS` (80) for ticket runs and QA
   checks, `HQ_GPT_MSG_MAX_TOOL_CALLS` (24) for chat replies, `HQ_GPT_PLAN_MAX_TOOL_CALLS` (40) for
-  planning. The time limits in [How long a run may take](#how-long-a-run-may-take) hold too.
+  planning. The time limits in [How long a run may take](#how-long-a-run-may-take) hold too. You can
+  also set the three caps on the Accounts page, under [Limits](#limits-on-the-accounts-page) (**GPT desk runs**).
 - **Switching a project's model** starts every desk in it on a new conversation on the other model
   (`memory.md` carries what matters). HQ refuses it while any desk there is running or queued.
 - **A project whose model can't run waits; nothing fails.** A GPT project with no ChatGPT login (or the
@@ -1187,7 +1208,68 @@ See `.env.example`. `HQ_RUNNER=sim` forces sim mode even with a key.
 
 Code work reads a lot of files, so it costs more per run than email drafting. A read of a
 monorepo landed near $2.50 on the SDK's estimate. If code tasks hit "Reached maximum budget",
-raise `HQ_MAX_BUDGET_USD`. On a subscription the figure is an estimate, not a charge.
+raise **Budget per ticket run** under [Limits](#limits-on-the-accounts-page) (or `HQ_MAX_BUDGET_USD` in
+`.env`). On a subscription the figure is an estimate, not a charge.
+
+### Limits on the Accounts page
+
+You can change HQ's run limits while it runs, with no restart. Open **Accounts** (`#/account`):
+**Limits** is the last section. The limits are for every project.
+
+Which value counts, first match wins:
+
+1. The value you set on the Accounts page.
+2. The one in `.env`.
+3. HQ's default.
+
+Each row says where its value comes from:
+
+- **Set here.** You set it on this page. **Reset** goes back to the `.env` value, or to HQ's default
+  when `.env` has none.
+- **From .env (`HQ_…`).** `.env` sets it. The row also shows HQ's default.
+- **HQ's default. In .env: `HQ_…`.** Nothing sets it. The row names the `.env` setting for it.
+
+Type a new value and press **Save change** (**Save N changes** for several); **Discard** drops what you
+typed. A value out of range is marked in red, and nothing saves until you fix it.
+
+- **When it counts.** **Desks running at once** counts at once: raise it and runs waiting for a slot
+  start straight away; lower it and slots close as running runs end. Every other limit counts from its
+  next check or the next run. A run already going keeps the limits it started with.
+- **Times** show in minutes on the page. `.env`, `data/settings.json` and the API keep them in
+  milliseconds.
+- **Where it is kept.** What you set is saved in `data/settings.json`, under `limits`. `.env` is not
+  changed.
+- **`.env` values out of range** are pulled into the range. One that isn't a number counts as not set,
+  and so does a time of 0 or less. HQ says so at startup, with the value that counts.
+- **A warning.** When **Whole run** is shorter than **Tool call limit**, the page says so: a slow tool
+  call is cut off by the whole-run limit first.
+- **Not here.** Each project's daily runs and $ ([Daily limits](#daily-limits)) stay in Project
+  settings. The rest of `.env` (the sweep, the MCP tool timeout, the session cache…) is set there only.
+
+| Section | Row | `.env` | API key | Default | Range |
+| ------- | --- | ------ | ------- | ------- | ----- |
+| Desk chat | Desk-to-desk messages per thread | `HQ_CHAT_HOP_LIMIT` | `chatHops` | 6 | 1 to 100 |
+| Desk chat | Desk-to-desk messages per project per day | `HQ_CHAT_DAILY_RUNS` | `chatDailyWakes` | 30 | 1 to 2000 |
+| Team | Desks running at once | `HQ_CONCURRENCY` | `concurrency` | 2 | 1 to 16 |
+| Team | Huddles per project per day | `HQ_HUDDLES_PER_DAY` | `huddlesPerDay` | 5 | 0 to 50. `0` turns huddles off |
+| Team | Fixes after a failed QA check | `HQ_QA_MAX_FIXES` | `qaMaxFixes` | 2 | 0 to 20 |
+| Claude desk runs | Turns per ticket run | `HQ_MAX_TURNS` | `claudeTicketTurns` | 40 | 1 to 1000 |
+| Claude desk runs | Budget per ticket run | `HQ_MAX_BUDGET_USD` | `claudeTicketUsd` | $3 | $0.10 to $1000 |
+| Claude desk runs | Turns per chat reply | `HQ_MSG_MAX_TURNS` | `claudeReplyTurns` | 12 | 1 to 1000 |
+| Claude desk runs | Budget per chat reply | `HQ_MSG_MAX_BUDGET_USD` | `claudeReplyUsd` | $1 | $0.10 to $1000 |
+| Claude desk runs | Turns per planning run | `HQ_PLAN_MAX_TURNS` | `claudePlanTurns` | 20 | 1 to 1000 |
+| Claude desk runs | Budget per planning run | `HQ_PLAN_MAX_BUDGET_USD` | `claudePlanUsd` | $1.50 | $0.10 to $1000 |
+| GPT desk runs | Tool calls per ticket run | `HQ_GPT_MAX_TOOL_CALLS` | `gptTicketCalls` | 80 | 1 to 1000 |
+| GPT desk runs | Tool calls per chat reply | `HQ_GPT_MSG_MAX_TOOL_CALLS` | `gptReplyCalls` | 24 | 1 to 1000 |
+| GPT desk runs | Tool calls per planning run | `HQ_GPT_PLAN_MAX_TOOL_CALLS` | `gptPlanCalls` | 40 | 1 to 1000 |
+| When a run stops | Quiet limit | `HQ_RUN_IDLE_MS` | `runIdleMs` | 8 min | 1 to 240 min |
+| When a run stops | Tool call limit | `HQ_TOOL_IDLE_MS` | `toolIdleMs` | 20 min | 1 to 480 min |
+| When a run stops | Whole run | `HQ_RUN_TIMEOUT_MS` | `runTimeoutMs` | 40 min | 5 to 1440 min |
+
+Claude's ticket limits also cover QA checks, and its chat reply limits cover huddle turns. GPT's ticket
+limit covers ticket runs, QA checks and huddle turns. A planning run is the lead's run in
+[Goal mode](#goal-mode). The time limits hold for every desk run, Claude or GPT. `shared/limits.ts` is the
+list the server and the page both read.
 
 ### How long a run may take
 
@@ -1202,6 +1284,9 @@ clock again, so a desk driving Blender for half an hour, one tool call a minute,
 | `HQ_MCP_TOOL_TIMEOUT_MS` | 900000 (15 min) | A connection's tool call that never answers fails, so the desk can carry on. Sets Claude Code's `MCP_TOOL_TIMEOUT` unless you set that yourself; 0 leaves it alone |
 | `HQ_DEBUG_SDK` | 0 | 1 logs every message from Claude with the gap since the one before, to tune the limits |
 
+You can also set the first three on the Accounts page, in minutes, under
+[Limits](#limits-on-the-accounts-page) (**When a run stops**).
+
 Progress means anything Claude sends, including each streamed piece of a long reply, so writing a
 big file in one go counts. Claude Code's own "still running" heartbeat during a tool call does not:
 the tool window measures real silence.
@@ -1211,7 +1296,8 @@ A run's error says why it stopped: one of the above, "Stopped by you", or Claude
 
 `HQ_RUN_TIMEOUT_MS` used to be the only limit, at 10 minutes in the old `.env.example`. It now caps
 the whole run, so an old `600000` in your `.env` still cuts busy runs off at 10 minutes. HQ warns
-about that at startup; raise it or remove it.
+about that at startup. Raise **Whole run** under [Limits](#limits-on-the-accounts-page) (it wins over
+`.env`), or raise or remove it in `.env`.
 
 ### Sessions and the prompt cache
 
@@ -1255,7 +1341,7 @@ chat reply's whole budget ("Reached maximum budget ($1)").
 | `workspaces/<id>/<agent>/` | One desk's `ROLE.md`, `memory.md`, `reports/` |
 | `data/skills/` | The skills library and the installed skills (see [Skills](#skills)) |
 | `data/projects/<id>/trash/` | What desks deleted, by time and desk, to move back by hand. Never emptied by HQ |
-| `data/settings.json` | Settings for all of HQ: the [effort](#effort) level, [Pause](#pause), and a Claude usage-limit hold |
+| `data/settings.json` | Settings for all of HQ: the [effort](#effort) level, [Pause](#pause), each model's usage-limit or account hold (`usageHolds`), and the [limits](#limits-on-the-accounts-page) you set on the Accounts page (`limits`, times in milliseconds) |
 | `data/auth.json` | Your [login](#login): the name, a hash of the password, and a hash of each session. Delete it to set up again |
 | `data/archive/` | Archived projects, until you delete them for good from Removed projects |
 | `data/backup/` | The single-project `db.json` from before projects existed |
@@ -1303,9 +1389,9 @@ npm run test:idle
   It writes only in a scratch folder.
 - **`test:chat`** checks the chat core: recipients, the loop limit, resume and settle.
 - **`test:account`** checks signing in to your Claude account with a stand-in Claude Code: the pages shown (Claude's own sites only), the pasted code (and a code the browser beat to it), cancel and every way a sign-in can end, no token or code in any answer, that a poll never sees a sign-in that worked as signed out, that checks share one Claude Code run and only HQ's own page can force one, how HQ picks sim, live or not live, the switch and the restart hint, and sign-out. Your real login is never touched.
-- **`test:codex`** checks GPT desks with a stand-in Codex: the ChatGPT sign-in on this PC and by device code (OpenAI's own pages only, cancel, sign-out), account, usage windows and model list parsing, the model and effort setting, the desk config that switches Codex's own tools off (also against the pinned Codex's own `features list`, offline, skipped when it isn't installed), the file tools through HQ's fence (reads, writes, protected files, globs, grep, a runaway pattern stopped off the main thread), a ticket run end to end (HQ tools, close-out, no dollar cost, the thread kept and resumed), patch approvals inside and outside the fence (Windows name tricks declined, patches counted toward the cap), a used-up plan holding automatic work, Stop (also before Codex answers `turn/start`, with nothing written after it), the tool-call cap, a turn's end matched by its id, a thread too long for the model dropped, a project whose model can't run (the reason names the switch that is off or the login that is missing; work waits on its ticket with your note, the team's own starts wait at the gate, and it all starts once the model can run; an instruct and a chat message of yours already queued behind a busy desk wait too, with no failed run and no paused thread; a team start never replaces your held start; **Put … on it** is refused with the reason and holds nothing), a status check that must not undo a sign-out, and switching a project's model (refused while desks run; every desk starts a new conversation). Nothing signs in and no model runs.
-- **`test:idle`** checks HQ not live: starts and chat messages you make wait (one note per desk per thread) and begin once HQ is live as your own clicks, with your note and images, past the daily limits but not a Pause; a held comment still gets its answer; huddles are refused; `wentLive` survives sign-out and is backfilled from desk runs on disk.
-- **`test:ui`** checks the UI helpers: routes, board columns and filter, search ranking, report link resolution, markdown previews, image sizing, and avatar text contrast.
+- **`test:codex`** checks GPT desks with a stand-in Codex: the ChatGPT sign-in on this PC and by device code (OpenAI's own pages only, cancel, sign-out), account, usage windows and model list parsing, the model and effort setting, the desk config that switches Codex's own tools off (also against the pinned Codex's own `features list`, offline, skipped when it isn't installed), the file tools through HQ's fence (reads, writes, protected files, globs, grep, a runaway pattern stopped off the main thread), a ticket run end to end (HQ tools, close-out, no dollar cost, the thread kept and resumed), patch approvals inside and outside the fence (Windows name tricks declined, patches counted toward the cap), a used-up plan holding automatic work in GPT projects only (a Claude project's queued start stays in line; also when the limit comes after the desk closed out), Stop (also before Codex answers `turn/start`, with nothing written after it), the tool-call cap, a turn's end matched by its id, a thread too long for the model dropped, a project whose model can't run (the reason names the switch that is off or the login that is missing; work waits on its ticket with your note, the team's own starts wait at the gate, and it all starts once the model can run; an instruct and a chat message of yours already queued behind a busy desk wait too, with no failed run and no paused thread; a team start never replaces your held start; **Put … on it** is refused with the reason and holds nothing), a status check that must not undo a sign-out, and switching a project's model (refused while desks run; every desk starts a new conversation). Nothing signs in and no model runs.
+- **`test:idle`** checks HQ not live: starts and chat messages you make wait (one note per desk per thread) and begin once HQ is live as your own clicks, with your note and images, past the daily limits and ChatGPT's limit but not a Pause or Claude's limit; a held comment still gets its answer; huddles are refused; `wentLive` survives sign-out and is backfilled from desk runs on disk.
+- **`test:ui`** checks the UI helpers: routes, board columns and filter, search ranking, report link resolution, markdown previews, image sizing, avatar text contrast, and the pause notices (one model's hold, or both at once).
 - **`test:office`** checks the office floor:
   - the approved v3 layout exactly, and growth from 1 to 12 desks
   - the design team's route checks: every seat reachable, nothing inside a wall or a table, doorways only through gaps
@@ -1352,13 +1438,13 @@ npm run test:idle
 - **`test:archive`** checks removing a project: archived (board, images, trash and workspaces to `data/archive/`) or deleted for good with nothing left, the Removed projects list (names, dates, sizes, newest first) and deleting from it (only a folder there by its exact name), a link in a workspace removed but never followed (also when sizing), the linked folder untouched, and removing refused while a desk runs, a huddle is going, a connection check or sign-in runs, or for the last project. On Windows, with another program working in a desk's folder: archiving is refused with nothing moved and the board kept, and deleting for good names the held folder, which a new project by the same name never takes over. A removed project's late saves write nothing, also into a new project that took its id.
 - **`test:auto`** checks what the team does on its own, with desks on a fake runner:
   - Pause: team starts held on their tickets and chat wakes held in threads (counts unchanged), your own starts never held (also when they join a waiting team run), queued team runs held at once without blocking yours, Resume oldest first, stale holds dropped
-  - Claude's usage limit (held everywhere, cleared at the reset), account problems, and restarts (a team run starts again once; a hand-off and its QA check both cut off keep the QA check)
+  - usage limits (held only in that model's projects, queued team starts too, cleared at the reset; both models at once), account problems (their Resume leaves the other model's usage limit on), and restarts (a team run starts again once; a hand-off and its QA check both cut off keep the QA check)
   - the queue: your runs first come, first served, ahead of the team's
   - daily limits: what counts, queued runs counted, your local day, the settings checks
   - Autopilot: free desks, oldest first, free slots only, failures and the stop after 3, your Stop, the prompt
   - Goal mode: when the lead plans, its tickets and caps, reached/blocked/stalled, planning first with the lead kept free, and the read-only fence and prompt of a planning run
 - **`test:timeouts`** checks when a run is stopped: the idle and tool windows, the overall cap (and what a retry gets), the stop and usage-limit wording (never words that trigger a fresh-session retry), and the MCP tool timeout.
-- **`test:settings`** checks the effort setting (the five levels, saving and going back to the model default), Pause and usage holds in a hand-edited `data/settings.json`, and the `PATCH /api/settings` route. It writes only in a scratch folder.
+- **`test:settings`** checks the effort setting (the five levels, saving and going back to the model default), Pause and usage holds in a hand-edited `data/settings.json`, and the `PATCH /api/settings` route. It also checks HQ's limits: yours over `.env` over the default and going back with null, a hand-edited `limits` keeping only known limits in range, the body checks, the `GET` and `PATCH /api/limits` routes, and the run queue following **Desks running at once** up and down. It writes only in a scratch folder.
 - **`test:attachments`** checks image uploads: type sniffing, file names, picking ids, the startup sweep, and the image blocks sent to desks. It also checks desk images: screenshot capture from connected tools (held in memory, saved only when attached) and attaching image files by path, links included.
 
 To try the UI against a copy of your data, run the API from another folder and point Vite at it.
@@ -1392,8 +1478,10 @@ login session and answers `401` without one; no other route answers `401`.
 | POST   | /api/auth/login | `{ name, password }`: a new session and its cookie. A wrong name or password is `401` with the same message; after 5 tries in 15 minutes, `429` (tries from this PC and from elsewhere are counted apart, see [Login](#login)) |
 | POST   | /api/auth/logout | Ends this browser's session, if any, and clears the cookie. Always `200` |
 | POST   | /api/auth/password | `{ current, next }`: needs a session. A wrong `current` is `400`, not `401`; a change from another browser that lands meanwhile is `409`, and nothing is saved. Ends your other sessions; this one stays |
-| GET    | /api/meta | includes `runner`: `live` or `sim`, picked when HQ started; `effort`: the level every Claude desk run uses, or null for the model default; `gpt`: GPT desks, `{ optedIn, ready, model, effort }` (may run on the ChatGPT login; opted in and signed in; the model and effort, each null for Codex's default); `paused`: why HQ holds automatic work (you, a usage limit, an account problem), or null; `held`: starts waiting; `liveReady`: a Claude key or login, or a ChatGPT login GPT desks may use; `claudeReady`: Claude projects' desks can run now (false while their work waits, see [GPT desks](#gpt-desks-your-chatgpt-plan)); `auth`: what Claude desks use, `api-key`, `claude-login` or `none`; `restartToGoLive`: desks may run on your Claude or ChatGPT login, but HQ started in sim; `optedIn`: desks may run on the Claude login; `simByEnv`: `HQ_RUNNER=sim` keeps HQ in sim; `idle`: HQ started not live (no login to run on, no sim) |
+| GET    | /api/meta | includes `runner`: `live` or `sim`, picked when HQ started; `effort`: the level every Claude desk run uses, or null for the model default; `gpt`: GPT desks, `{ optedIn, ready, model, effort }` (may run on the ChatGPT login; opted in and signed in; the model and effort, each null for Codex's default); `paused`: why HQ holds automatic work (you, a usage limit, an account problem), with `provider` (`claude` or `gpt`) when only that model's projects wait, or `holds` (each model's `{ provider, by, until? }`) when both models' do, or null; `held`: starts waiting; `liveReady`: a Claude key or login, or a ChatGPT login GPT desks may use; `claudeReady`: Claude projects' desks can run now (false while their work waits, see [GPT desks](#gpt-desks-your-chatgpt-plan)); `auth`: what Claude desks use, `api-key`, `claude-login` or `none`; `restartToGoLive`: desks may run on your Claude or ChatGPT login, but HQ started in sim; `optedIn`: desks may run on the Claude login; `simByEnv`: `HQ_RUNNER=sim` keeps HQ in sim; `idle`: HQ started not live (no login to run on, no sim) |
 | PATCH  | /api/settings | `{ effort?, paused? }`: effort is `low`, `medium`, `high`, `xhigh`, `max`, or null for the model default; `paused: true` pauses everything the team starts on its own, `false` resumes (your Pause first, then a usage hold). For all of HQ; answers with the new meta |
+| GET    | /api/limits | HQ's limits, for every project: each [limit's key](#limits-on-the-accounts-page) to `{ value, source, fallback, fallbackSource }`. `source` is `you` (the Accounts page), `env` or `default`; `fallback` and `fallbackSource` are what it goes back to without yours (`env` or `default`). Times in milliseconds |
+| PATCH  | /api/limits | `{ <key>: number \| null }`, with a JSON content type: a value in the limit's range (times in milliseconds, dollars to the cent), or null to go back to `.env` or the default. An unknown key, a value out of range, or a count that isn't a whole number is `400`, and nothing is saved. Raising `concurrency` starts runs waiting for a slot at once. Answers with every limit, as `GET` |
 | GET    | /api/account | your Claude account: `{ account: { loggedIn, method, email, org, plan } \| null, login?, signedInAt?, apiKey, envToken, optedIn, optInByEnv, claudeAtStart, runner, restartToGoLive, simByEnv, idle }`. `signedInAt`: when the last sign-in from HQ worked; `envToken`: `CLAUDE_CODE_OAUTH_TOKEN` is set; `claudeAtStart`: Claude desks were allowed when HQ started (a key, or `optedIn`), so switching the login off keeps them on it until a restart. `?check=1` asks Claude Code again, only with a JSON content type (HQ's own page; another site's `<img>` can't); otherwise an answer up to 30 s old, or the check already running. Never a token |
 | POST   | /api/account/login | 202: starts signing in; `login.authUrl` (and `login.manualUrl`) once Claude Code has the page. 409 while one runs |
 | POST   | /api/account/login/code | `{ code }`: the `code#state` the second sign-in page showed. Answers once signed in, also when the browser finished the same sign-in first |

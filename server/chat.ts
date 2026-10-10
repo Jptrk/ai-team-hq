@@ -1,6 +1,7 @@
 import type { Agent, Attachment, Message, State, Thread, WorkItem } from '../shared/types';
 import { mentionsIn, routeInstruction } from './agents';
 import { addComment } from './comments';
+import { limit } from './limits';
 import { finishWork } from './qa';
 import { now, today, uid } from './store';
 
@@ -8,12 +9,12 @@ import { now, today, uid } from './store';
  * Chat between desks, and Patrick. Pure state logic: no runner, no Claude calls.
  * Callers save the project and wake the desks this returns.
  *
- * The loop guard: every desk woken by another desk counts one hop. After HOP_LIMIT hops
+ * The loop guard: every desk woken by another desk counts one hop. After hopLimit() hops
  * the thread pauses and holds further messages until Patrick posts or resumes.
  */
 
-export const HOP_LIMIT = Math.max(1, Number(process.env.HQ_CHAT_HOP_LIMIT ?? 6));
-export const DAILY_WAKES = Math.max(1, Number(process.env.HQ_CHAT_DAILY_RUNS ?? 30));
+/** Desk-to-desk messages a thread takes before it pauses (Accounts page, or HQ_CHAT_HOP_LIMIT). */
+export const hopLimit = (): number => limit('chatHops');
 export const MAX_SENDS_PER_RUN = 3;
 export const MAX_RECIPIENTS = 3;
 const MAX_MESSAGES = 1500;
@@ -24,7 +25,7 @@ export interface Limits {
   today: string;
 }
 
-export const defaultLimits = (): Limits => ({ hopLimit: HOP_LIMIT, dailyCap: DAILY_WAKES, today: today() });
+export const defaultLimits = (): Limits => ({ hopLimit: hopLimit(), dailyCap: limit('chatDailyWakes'), today: today() });
 
 /** A problem to show the caller as-is (a desk's tool result, or an API error). */
 export class ChatError extends Error {}
