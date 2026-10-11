@@ -225,7 +225,7 @@ Instruct and Send back notes, and ticket descriptions.
 - **Pasting markdown:** a table, list or heading pasted from somewhere else turns into the real thing. Plain sentences stay plain.
 - **Markdown underneath:** what gets saved and sent to desks is still plain markdown, so nothing else changes.
 - **Desks write markdown too:** every desk is told its messages, comments, briefs and decision summaries show as formatted markdown. It uses bold, lists and `code` instead of ALL CAPS. Titles, status lines and "done" summaries stay plain text.
-- **Voice:** desks write to you like a sharp colleague: first person, plain words, answer first. They skip filler, emojis and grovelling apologies, and never claim feelings or work they didn't have. To give one desk its own personality, add a line to its `ROLE.md`; it's read at the start of every run, with no restart.
+- **Voice:** desks write to you like a colleague talking across the desk: first person, short sentences, simple everyday words, answer first. A technical term stays when it's the right word, with a few words on what it means when it's outside your field; names, numbers and paths stay exact. They skip filler, emojis, corporate or AI-sounding phrases and grovelling apologies, and never claim feelings or work they didn't have. Deliverables in `reports/` follow what the ticket asks for. To give one desk its own personality, add a line to its `ROLE.md` (it works within these voice rules); it's read at the start of every run, with no restart.
 - **Loading:** the editor loads in the background after HQ opens, in its own file. Until it arrives, a plain text box works the same way.
 
 **Editing a description.** A ticket's description can be edited only while the ticket is in **To do**.

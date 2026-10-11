@@ -691,6 +691,22 @@ test('prompt: a huddle turn is told to read, not write, and that teammates are n
   }
 });
 
+test('prompt: every kind of run is told to write like a person, in simple words', () => {
+  fresh();
+  const dir = claude.workspaceFor(p.id, 'dylan');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'ROLE.md'), '# Dylan\n');
+  const agent = p.state.agents.find((a) => a.id === 'dylan')!;
+  for (const mode of ['ticket', 'message', 'huddle', 'qa', 'plan'] as const) {
+    const system = claude.systemPromptFor(p, agent, dir, [], mode, false);
+    assert.match(system, /## Voice\n.*talks across the desk, not like a report or a bot/, mode);
+    assert.match(system, /Use simple, everyday words/, mode);
+    assert.match(system, /Simple never means vague/, mode);
+    assert.match(system, /Messages to teammates use the same plain words, with no pleasantries/, mode);
+    assert.match(system, /"it's worth noting"/, mode);
+  }
+});
+
 let failed = 0;
 for (const [name, fn] of cases) {
   try {
