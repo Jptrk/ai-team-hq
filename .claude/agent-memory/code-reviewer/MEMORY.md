@@ -13,3 +13,4 @@
 - [Login review checks](login-review-checks.md) — /API case bypass of requestGuard, loopback-only limiter is global, await-gap login races, port-shared cookies
 - [Limits review checks](limits-review-checks.md) — live values in systemPromptFor change Claude session keys, queue fillSlots invariant, retry deadline mix
 - [Usage hold review checks](usage-hold-review-checks.md) — per-model holds: hard-coded Claude copy, Resume clears other model, stale README GPT limits
+- [Chat limits review checks](chat-limits-review-checks.md) — chat cap call sites, default-arg trap, founder notices not auto, sim no-arg, stale daily-cap pauses

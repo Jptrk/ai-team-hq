@@ -732,7 +732,8 @@ a desk wakes it for a live run, which spends usage.
 - **The loop limit.** Each desk that another desk wakes counts one hop. After 6 hops the
   thread pauses and holds further messages, and it shows up in Needs you and on the Chat tab.
   Reply in the thread, or press **Resume** to deliver what was held. There is also a cap of 30
-  desk-to-desk wakes per project per day.
+  desk-to-desk wakes per project per day. Autopilot projects skip that cap: every chat wake is
+  one of the team's runs, already counted against the project's [Daily limits](#daily-limits).
 - **Messages are async.** A desk posts and stops, and the reply wakes it later. Unread
   messages for a desk batch into one run. Nothing waits in a slot, so the queue can't deadlock.
 - **A cut-off reply is asked again.** If a desk's run dies before it replies (a server restart,
@@ -750,7 +751,7 @@ a desk wakes it for a live run, which spends usage.
 | Env | Default | What |
 | --- | ------- | ---- |
 | `HQ_CHAT_HOP_LIMIT` | 6 | Desk-to-desk wakes per thread before it pauses |
-| `HQ_CHAT_DAILY_RUNS` | 30 | Desk-to-desk wakes per project per day |
+| `HQ_CHAT_DAILY_RUNS` | 30 | Desk-to-desk wakes per project per day. Not in Autopilot projects |
 | `HQ_MSG_MAX_TURNS` | 12 | Turn cap for a message run |
 | `HQ_MSG_MAX_BUDGET_USD` | 1 | Estimated-cost cap for a message run |
 
@@ -1249,7 +1250,7 @@ typed. A value out of range is marked in red, and nothing saves until you fix it
 | Section | Row | `.env` | API key | Default | Range |
 | ------- | --- | ------ | ------- | ------- | ----- |
 | Desk chat | Desk-to-desk messages per thread | `HQ_CHAT_HOP_LIMIT` | `chatHops` | 6 | 1 to 100 |
-| Desk chat | Desk-to-desk messages per project per day | `HQ_CHAT_DAILY_RUNS` | `chatDailyWakes` | 30 | 1 to 2000 |
+| Desk chat | Desk-to-desk messages per project per day | `HQ_CHAT_DAILY_RUNS` | `chatDailyWakes` | 30 | 1 to 2000. Not in Autopilot projects |
 | Team | Desks running at once | `HQ_CONCURRENCY` | `concurrency` | 2 | 1 to 16 |
 | Team | Huddles per project per day | `HQ_HUDDLES_PER_DAY` | `huddlesPerDay` | 5 | 0 to 50. `0` turns huddles off |
 | Team | Fixes after a failed QA check | `HQ_QA_MAX_FIXES` | `qaMaxFixes` | 2 | 0 to 20 |

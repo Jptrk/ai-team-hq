@@ -8,6 +8,7 @@ import {
   ChatError,
   closeThread,
   createThread,
+  defaultLimits,
   findThread,
   hopLimit,
   messagesOf,
@@ -745,7 +746,7 @@ project.post('/threads/:tid/resume', (req, res) => {
   const thread = findThread(p.state, String(req.params.tid));
   if (!thread) return res.status(404).json({ error: 'thread not found' });
   try {
-    const woke = resumeThread(p.state, thread);
+    const woke = resumeThread(p.state, thread, defaultLimits(p.meta));
     p.commit();
     deliver(p, thread.id, woke);
     res.json({ ...threadBody(p, thread.id), woke });
@@ -920,7 +921,7 @@ project.post('/items/:id/decision', (req, res) => {
   let run = null;
   if (signOff) {
     // A handed-off ticket reports back once you sign it off; only that, when the desk already heard it was finished.
-    const posted = noticeHandoff(s, item, item.assignee, `Done with ${ref} (signed off by you).`, `Signed off: ${ref} is done.`);
+    const posted = noticeHandoff(s, item, item.assignee, `Done with ${ref} (signed off by you).`, `Signed off: ${ref} is done.`, defaultLimits(p.meta));
     if (posted) {
       p.commit();
       deliver(p, posted.threadId, posted.deliver);
@@ -989,7 +990,7 @@ project.patch('/items/:id', (req, res) => {
   if (moved === 'qa') kickoff(p, item.id, 'qa');
   if (moved === 'done') {
     // A handed-off ticket you mark done reports back, as one a desk finishes does; as signed off, when the desk already heard it was finished.
-    const posted = noticeHandoff(s, item, item.assignee, `Done with ${p.ticket(item)} (marked done by you).`, `Signed off: ${p.ticket(item)} is done.`);
+    const posted = noticeHandoff(s, item, item.assignee, `Done with ${p.ticket(item)} (marked done by you).`, `Signed off: ${p.ticket(item)} is done.`, defaultLimits(p.meta));
     if (posted) {
       p.commit();
       deliver(p, posted.threadId, posted.deliver);

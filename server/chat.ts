@@ -1,4 +1,4 @@
-import type { Agent, Attachment, Message, State, Thread, WorkItem } from '../shared/types';
+import type { Agent, Attachment, Message, ProjectMeta, State, Thread, WorkItem } from '../shared/types';
 import { mentionsIn, routeInstruction } from './agents';
 import { addComment } from './comments';
 import { limit } from './limits';
@@ -11,6 +11,8 @@ import { now, today, uid } from './store';
  *
  * The loop guard: every desk woken by another desk counts one hop. After hopLimit() hops
  * the thread pauses and holds further messages until Patrick posts or resumes.
+ * The daily cap doesn't apply in Autopilot projects: every chat wake there is one of the team's runs, already
+ * counted against the project's own daily run and spend limits (see projectHold in autopilot.ts).
  */
 
 /** Desk-to-desk messages a thread takes before it pauses (Accounts page, or HQ_CHAT_HOP_LIMIT). */
@@ -25,7 +27,12 @@ export interface Limits {
   today: string;
 }
 
-export const defaultLimits = (): Limits => ({ hopLimit: hopLimit(), dailyCap: limit('chatDailyWakes'), today: today() });
+/** This project's chat limits now. With Autopilot on, no daily cap: its own daily limits cover chat wakes. */
+export const defaultLimits = (meta: Pick<ProjectMeta, 'autopilot'> = {}): Limits => ({
+  hopLimit: hopLimit(),
+  dailyCap: meta.autopilot ? Infinity : limit('chatDailyWakes'),
+  today: today(),
+});
 
 /** A problem to show the caller as-is (a desk's tool result, or an API error). */
 export class ChatError extends Error {}
@@ -364,12 +371,12 @@ export interface HandoffNotice {
   deliver: string[];
 }
 
-function postHandoff(s: State, item: WorkItem, from: string, text: string): HandoffNotice | null {
+function postHandoff(s: State, item: WorkItem, from: string, text: string, limits: Limits): HandoffNotice | null {
   const back = item.handoffFrom ? s.agents.find((a) => a.id === item.handoffFrom && !a.isHuman) : undefined;
   const thread = item.threadId ? findThread(s, item.threadId) : undefined;
   // Nobody to tell, or the ticket came back to the desk that handed it over.
   if (!back || back.id === from || !thread || thread.status === 'closed') return null;
-  return { threadId: thread.id, deliver: postAgentMessage(s, thread, from, [back.id], text).deliver };
+  return { threadId: thread.id, deliver: postAgentMessage(s, thread, from, [back.id], text, limits).deliver };
 }
 
 /**
@@ -377,8 +384,8 @@ function postHandoff(s: State, item: WorkItem, from: string, text: string): Hand
  * `told`: what it hears instead when it was already told the ticket is finished (noticeFinished), so the
  * notice at Done says it was signed off rather than reporting it done a second time.
  */
-export function noticeHandoff(s: State, item: WorkItem, from: string, text: string, told = text): HandoffNotice | null {
-  const posted = postHandoff(s, item, from, item.handoffTold ? told : text);
+export function noticeHandoff(s: State, item: WorkItem, from: string, text: string, told = text, limits: Limits = defaultLimits()): HandoffNotice | null {
+  const posted = postHandoff(s, item, from, item.handoffTold ? told : text, limits);
   // Reopened and finished again later, it is told again.
   if (posted) delete item.handoffTold;
   return posted;
@@ -389,14 +396,14 @@ export function noticeHandoff(s: State, item: WorkItem, from: string, text: stri
  * that handed it over hears it is done. Into QA or your sign-off: it hears now that it is finished and waiting,
  * so it can carry on instead of waiting for your sign-off; once per ticket, and at Done only that it was signed off.
  */
-export function noticeFinished(s: State, item: WorkItem, from: string, ref: string, where: 'done' | 'qa' | 'signoff', summary: string): HandoffNotice | null {
+export function noticeFinished(s: State, item: WorkItem, from: string, ref: string, where: 'done' | 'qa' | 'signoff', summary: string, limits: Limits = defaultLimits()): HandoffNotice | null {
   const said = summary.trim().slice(0, 800) || 'Finished.';
-  if (where === 'done') return noticeHandoff(s, item, from, `Done with ${ref}: ${said}`);
+  if (where === 'done') return noticeHandoff(s, item, from, `Done with ${ref}: ${said}`, undefined, limits);
   if (item.handoffTold) return null;
   const owner = s.agents.find((a) => a.isHuman)?.name ?? 'the founder';
   const checker = where === 'qa' ? s.agents.find((a) => a.id === item.qa?.by)?.name : undefined;
   const waits = where === 'qa' ? `It is with QA${checker ? ` (${checker})` : ''} before it is done` : `It waits for ${owner}'s sign-off before it is done`;
-  const posted = postHandoff(s, item, from, `Finished ${ref}: ${said}\n${waits}. You can carry on; you hear again when it is done.`);
+  const posted = postHandoff(s, item, from, `Finished ${ref}: ${said}\n${waits}. You can carry on; you hear again when it is done.`, limits);
   if (posted) item.handoffTold = true;
   return posted;
 }

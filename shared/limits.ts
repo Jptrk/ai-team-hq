@@ -39,7 +39,7 @@ export const LIMITS = {
     env: 'HQ_CHAT_DAILY_RUNS',
     group: 'chat',
     label: 'Desk-to-desk messages per project per day',
-    hint: 'Past this, threads pause until tomorrow or until you resume.',
+    hint: 'Past this, threads pause until you resume. The count starts over each day. Not in Autopilot projects: their own daily runs and $ cover chat.',
     unit: 'count',
     default: 30,
     min: 1,

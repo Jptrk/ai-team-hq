@@ -219,6 +219,7 @@ test('route: PATCH /limits saves and chat follows at once; GET says where each c
   assert.equal(ok.status, 200);
   assert.deepEqual((ok.body as LimitsResponse).chatHops, { value: 15, source: 'you', fallback: 6, fallbackSource: 'default' });
   assert.deepEqual({ ...defaultLimits(), today: '' }, { hopLimit: 15, dailyCap: 200, today: '' });
+  assert.deepEqual({ ...defaultLimits({ autopilot: true }), today: '' }, { hopLimit: 15, dailyCap: Infinity, today: '' }, 'Autopilot: no daily cap, hop limit stays');
 
   assert.equal((await api('PATCH', '/limits', { chatHops: 0 })).status, 400);
   assert.equal((await api('PATCH', '/limits', { chatHops: 3, bogus: 1 })).status, 400, 'one bad key and nothing is saved');

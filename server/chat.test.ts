@@ -189,6 +189,18 @@ test('daily cap: pauses with daily-cap, and rolls over the next day', () => {
   assert.deepEqual(tomorrow.deliver, ['sam']);
 });
 
+test('daily cap: Autopilot projects have none; the hop limit still pauses', () => {
+  const s = fresh();
+  s.chat.wakes = 500;
+  const t = createThread(s, { title: 'T', createdBy: 'leo' });
+  const auto: Limits = { ...L, hopLimit: 2, dailyCap: Infinity };
+  assert.deepEqual(postAgentMessage(s, t, 'leo', ['sam'], '1', auto).deliver, ['sam']);
+  assert.deepEqual(postAgentMessage(s, t, 'sam', ['leo'], '2', auto).deliver, ['leo']);
+  const third = postAgentMessage(s, t, 'leo', ['sam'], '3', auto);
+  assert.deepEqual(third.deliver, []);
+  assert.equal(t.pausedReason, 'hop-limit');
+});
+
 test('batching: a queued run for the desk and thread means no second wake; a running one does not block', () => {
   const s = fresh();
   const t = createThread(s, { title: 'T', createdBy: 'leo' });

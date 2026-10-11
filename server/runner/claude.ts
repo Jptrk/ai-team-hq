@@ -13,6 +13,7 @@ import {
   ChatError,
   clearWaiting,
   createThread,
+  defaultLimits,
   findThread,
   hopLimit,
   MAX_SENDS_PER_RUN,
@@ -1264,7 +1265,7 @@ export function hqTools(ctx: RunContext): HqTools {
       p.log(ctx.agent.id, where === 'done' ? `Finished ${ref}` : where === 'qa' ? `Finished ${ref}, sent to QA` : `Finished ${ref}, ready for ${ownerName}'s sign-off`);
 
       // A handed-off ticket reports back to whoever handed it over: done, or finished and waiting for QA or sign-off, so it can carry on.
-      const posted = noticeFinished(s, target, ctx.agent.id, p.ticket(target), where, args.summary);
+      const posted = noticeFinished(s, target, ctx.agent.id, p.ticket(target), where, args.summary, defaultLimits(p.meta));
       if (posted) {
         if (posted.threadId === ctx.thread?.id) ctx.sentToThread = true;
         p.commit();
@@ -1307,7 +1308,7 @@ export function hqTools(ctx: RunContext): HqTools {
       const to = [...r.agents.map((a) => a.id), ...(r.founder ? ['you'] : [])];
       let posted;
       try {
-        posted = postAgentMessage(s, picked, ctx.agent.id, to, withImageNote(args.text, ready), undefined, ready.save());
+        posted = postAgentMessage(s, picked, ctx.agent.id, to, withImageNote(args.text, ready), defaultLimits(p.meta), ready.save());
       } catch (e) {
         if (e instanceof ChatError) return fail(e.message);
         throw e;
@@ -1351,7 +1352,7 @@ export function hqTools(ctx: RunContext): HqTools {
       if (!target) return fail('Hand off to a teammate, not the founder. For the founder, use raise_for_decision.');
       const picked = pickThread(ctx, args.thread, undefined, args.title);
       if (typeof picked === 'string') return fail(picked);
-      const blocked = canWake(s, picked);
+      const blocked = canWake(s, picked, defaultLimits(p.meta));
       if (blocked) return fail(`The thread is ${blocked === 'closed' ? 'closed' : 'paused'}, so nobody can be handed work in it right now. Wrap up; ${ownerName} can resume it.`);
 
       const parent = ctx.item ? s.items.find((i) => i.id === ctx.item!.id) : undefined;
@@ -1372,7 +1373,7 @@ export function hqTools(ctx: RunContext): HqTools {
         history: [{ ts: now(), text: `Handed over by ${ctx.agent.name}${parent ? ` from ${p.ticket(parent)}` : ''}` }],
       };
       s.items.unshift(item);
-      postAgentMessage(s, picked, ctx.agent.id, [target.id], `Handed you ${p.ticket(item)}: ${args.title}\n${args.brief}`);
+      postAgentMessage(s, picked, ctx.agent.id, [target.id], `Handed you ${p.ticket(item)}: ${args.title}\n${args.brief}`, defaultLimits(p.meta));
       // The recipient works the ticket in a ticket run, not a message run.
       clearWaiting(picked, target.id);
       ctx.sends += 1;
@@ -1419,7 +1420,7 @@ export function hqTools(ctx: RunContext): HqTools {
       p.commit();
       // Sign-off off: the pass closed it, so a handed-off ticket reports back now (only the pass, when it already heard it was finished).
       if (outcome === 'done') {
-        const posted = noticeHandoff(s, item, item.assignee, `Done with ${p.ticket(item)} (passed QA).`, `Passed QA: ${p.ticket(item)} is done.`);
+        const posted = noticeHandoff(s, item, item.assignee, `Done with ${p.ticket(item)} (passed QA).`, `Passed QA: ${p.ticket(item)} is done.`, defaultLimits(p.meta));
         if (posted) {
           p.commit();
           ctx.hooks.deliver(posted.threadId, posted.deliver);
@@ -2281,6 +2282,7 @@ export function finishRun(ctx: RunContext, outcome: RunOutcome, freshSession: bo
       signoff: signoffOn(p.meta),
     },
     (id, text) => p.log(id, text),
+    defaultLimits(p.meta),
   );
   p.commit();
   if (wake.length && ctx.thread) ctx.hooks.deliver(ctx.thread.id, wake);
@@ -2289,7 +2291,7 @@ export function finishRun(ctx: RunContext, outcome: RunOutcome, freshSession: bo
   // Finished without report_done (to Done, QA or your sign-off): the desk that handed it over hears back, as report_done would tell it.
   const after = liveItem?.status;
   if (liveItem && after !== before && (after === 'done' || after === 'qa' || after === 'signoff')) {
-    const posted = noticeFinished(p.state, liveItem, ctx.agent.id, p.ticket(liveItem), after, outcome.summary);
+    const posted = noticeFinished(p.state, liveItem, ctx.agent.id, p.ticket(liveItem), after, outcome.summary, defaultLimits(p.meta));
     if (posted) {
       p.commit();
       ctx.hooks.deliver(posted.threadId, posted.deliver);
