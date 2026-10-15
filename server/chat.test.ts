@@ -1,5 +1,6 @@
 /**
- * Chat core: recipients, the loop limit, founder posts, resume, batching, and end-of-run settle.
+ * Chat core: recipients, the loop limit, messages that need no reply, the back-and-forth check, founder posts,
+ * resume, batching, and end-of-run settle.
  * Run: npm run test:chat. Pure state, no Claude calls, touches nothing on disk.
  */
 import assert from 'node:assert/strict';
@@ -10,10 +11,13 @@ import { rewindCursor } from './cursor';
 import { migrateState } from './store';
 import {
   ChatError,
+  ECHO_LIMIT,
   closeThread,
   createThread,
   messagesOf,
+  needsNoReply,
   needsWake,
+  noticeHandoff,
   pauseForFailure,
   postAgentMessage,
   postFounderMessage,
@@ -100,12 +104,13 @@ test('loop limit: 6 desk wakes go through, the 7th pauses and is held', () => {
   for (let i = 0; i < 6; i++) {
     const from = i % 2 ? 'sam' : 'leo';
     const to = i % 2 ? 'leo' : 'sam';
-    const r = postAgentMessage(s, t, from, [to], `m${i}`, L);
+    // Questions, so the back-and-forth check (statements only) stays out of it.
+    const r = postAgentMessage(s, t, from, [to], `q${i}?`, L);
     assert.deepEqual(r.deliver, [to], `message ${i + 1} should deliver`);
   }
   assert.equal(t.agentHops, 6);
   assert.equal(t.status, 'open');
-  const seventh = postAgentMessage(s, t, 'leo', ['sam'], 'm7', L);
+  const seventh = postAgentMessage(s, t, 'leo', ['sam'], 'q7?', L);
   assert.deepEqual(seventh.deliver, []);
   assert.deepEqual(seventh.message.undelivered, ['sam']);
   assert.equal(t.status, 'paused');
@@ -202,6 +207,176 @@ test('daily cap: Autopilot projects have none; the hop limit still pauses', () =
   assert.equal(t.pausedReason, 'hop-limit');
 });
 
+test('no reply needed: what the sender says, or plain thanks, is spotted; a question or a condition is not', () => {
+  const quiet = [
+    'My next substantive CG-9 update will be QA findings, clearance or a new blocker. No reply needed; leave this thread idle until then.',
+    "Good, a comment on GI-2 is the right place for it. You're done on my side. **No reply needed.**",
+    'Shipped. No response is needed.',
+    'Nothing changed here, no need to respond.',
+    "Logged it. Please don't reply.",
+    'Thanks!',
+    'Thanks, Sam.',
+    '@Sam got it, thanks',
+    '**Noted.**',
+    'OK. Will do.',
+  ];
+  for (const text of quiet) assert.equal(needsNoReply(text, ['Sam', 'Leo']), true, text);
+  assert.equal(needsNoReply('Will do.', ['Will']), true, 'a desk named Will');
+  const wakes = [
+    'Can you check the build? No reply needed if it passes.',
+    'No reply needed if the build is green; otherwise send me the log.',
+    'No reply needed — if QA fails, fix it first.',
+    'The client wrote "no reply needed", but we should answer them.',
+    "Don't reply to the client yet.",
+    'Thanks, the endpoint is /orders.',
+    'Done. The cart page is in src/cart.tsx.',
+    'Build and hand off CG-15 to Amara.',
+    'CG-9 remains paused for CG-8 slice QA. No changes.',
+    '',
+  ];
+  for (const text of wakes) assert.equal(needsNoReply(text, ['Sam', 'Leo']), false, text);
+});
+
+test('no reply needed: saved and shown, but nobody is woken; the desk reads it next time, and Resume never delivers it', () => {
+  const s = fresh();
+  const t = createThread(s, { title: 'T', createdBy: 'leo' });
+  const said = postAgentMessage(s, t, 'leo', ['sam'], 'CG-9 stays paused for QA. No reply needed; leave this thread idle until then.', L);
+  assert.deepEqual(said.deliver, []);
+  assert.equal(said.message.noReply, true);
+  assert.equal(said.message.undelivered, undefined);
+  assert.equal(t.agentHops, 0);
+  assert.equal(s.chat.wakes, 0);
+  assert.deepEqual(t.waiting, [], 'nobody shows as typing');
+  const flagged = postAgentMessage(s, t, 'leo', ['sam'], 'The cart page is live on staging.', L, { needsReply: false });
+  assert.deepEqual(flagged.deliver, [], 'needs_reply: false');
+  assert.equal(flagged.message.noReply, true);
+  assert.deepEqual(unreadFor(s, t, 'sam').addressed.map((m) => m.n), [1, 2], 'Sam sees both next time Sam runs here');
+  assert.equal(postAgentMessage(s, t, 'leo', ['you'], 'Thanks!', L).message.noReply, undefined, 'only desks are woken, so only a desk message is marked');
+  // A paused thread holds what would wake a desk, not what needs no reply.
+  t.status = 'paused';
+  t.pausedReason = 'hop-limit';
+  assert.equal(postAgentMessage(s, t, 'sam', ['leo'], 'Noted.', L).message.undelivered, undefined);
+  assert.deepEqual(resumeThread(s, t, L), []);
+  // A question always wakes.
+  assert.deepEqual(postAgentMessage(s, t, 'leo', ['sam'], 'Thanks. Can you add the totals row?', L).deliver, ['sam']);
+});
+
+test('no reply needed: a desk that may be waiting on the sender is woken anyway', () => {
+  const s = fresh();
+  const t = createThread(s, { title: 'T', createdBy: 'leo' });
+  // Leo asked, so Sam's "OK." is the answer Leo waits for.
+  postAgentMessage(s, t, 'leo', ['sam'], 'Can I rename the cart table? Blocked until you confirm.', L);
+  const ok = postAgentMessage(s, t, 'sam', ['leo'], 'OK.', L);
+  assert.deepEqual(ok.deliver, ['leo']);
+  assert.equal(ok.message.noReply, undefined);
+  // Answered now: thanks and notes after it wake nobody.
+  assert.deepEqual(postAgentMessage(s, t, 'leo', ['sam'], 'Thanks!', L).deliver, []);
+  assert.deepEqual(postAgentMessage(s, t, 'sam', ['leo'], 'Renamed in the schema too.', L, { needsReply: false }).deliver, []);
+  // The owner of the thread's open ticket may be waiting on any teammate: woken even with needs_reply: false.
+  const item = ticket(s, 'leo');
+  const t2 = createThread(s, { title: 'SA-1', createdBy: 'leo', itemId: item.id });
+  assert.deepEqual(postAgentMessage(s, t2, 'sam', ['leo'], 'Migration is in. No reply needed.', L).deliver, ['leo']);
+  assert.deepEqual(postAgentMessage(s, t2, 'sam', ['leo'], 'Seed data is in.', L, { needsReply: false }).deliver, ['leo']);
+  // The owner's own thanks still wakes nobody, and once the ticket is done, nobody waits.
+  assert.deepEqual(postAgentMessage(s, t2, 'leo', ['sam'], 'Thanks!', L).deliver, []);
+  item.status = 'done';
+  assert.deepEqual(postAgentMessage(s, t2, 'sam', ['leo'], 'Docs are in too. No reply needed.', L).deliver, []);
+});
+
+/** Two desks trading statements, like the CG-9 thread: "still paused for QA, no changes", back and forth. */
+const ECHOES = [
+  'CG-9 remains paused until the slice blockers are resolved. Copy stays Draft.',
+  'No new implementation request. CG-9 stays paused and copy stays Draft.',
+  'CG-9 remains paused for slice QA. No implementation changes.',
+  'No new implementation request. CG-9 stays paused for slice QA; copy remains Draft.',
+  'CG-9 is paused for slice QA; copy remains Draft. No changes.',
+  'No new task or clearance. CG-9 remains paused for slice QA.',
+  'CG-9 stays paused pending slice QA.',
+];
+/** An Autopilot project with the hop limit at its 100 maximum: neither the hop limit nor a daily cap stops the loop. */
+const LOOSE: Limits = { hopLimit: 100, dailyCap: Infinity, today: '2026-10-01' };
+
+test(`back-and-forth: two desks sending each other ${ECHO_LIMIT} messages in a row without a question pause the thread, whatever the hop limit`, () => {
+  const s = fresh();
+  const t = createThread(s, { title: 'CG-9', createdBy: 'leo' });
+  for (let i = 0; i < ECHO_LIMIT - 1; i++) {
+    const [from, to] = i % 2 ? ['sam', 'leo'] : ['leo', 'sam'];
+    assert.deepEqual(postAgentMessage(s, t, from, [to], ECHOES[i], LOOSE).deliver, [to], `message ${i + 1} wakes ${to}`);
+  }
+  const last = postAgentMessage(s, t, 'sam', ['leo'], ECHOES[ECHO_LIMIT - 1], LOOSE);
+  assert.deepEqual(last.deliver, []);
+  assert.deepEqual(last.message.undelivered, ['leo'], 'held for Resume');
+  assert.equal(t.status, 'paused');
+  assert.equal(t.pausedReason, 'echo');
+  assert.equal(t.agentHops, ECHO_LIMIT - 1);
+  assert.match(messagesOf(s, t.id).at(-1)!.text, new RegExp(`^Paused: Sam and Leo sent each other ${ECHO_LIMIT} messages in a row without a question\\. Patrick can reply or resume\\.$`));
+  // Resume delivers it and starts the count again.
+  assert.deepEqual(resumeThread(s, t, LOOSE), ['leo']);
+  assert.deepEqual(postAgentMessage(s, t, 'leo', ['sam'], ECHOES[0], LOOSE).deliver, ['sam']);
+  assert.equal(t.status, 'open');
+});
+
+test('back-and-forth: a question, the founder, a third desk or a group message breaks the run', () => {
+  const s = fresh();
+  const t = createThread(s, { title: 'T', createdBy: 'leo' });
+  // In turn across calls: Leo, Sam, Leo, ...
+  let k = 0;
+  const trade = (n: number) => {
+    for (let i = 0; i < n; i++, k++) postAgentMessage(s, t, k % 2 ? 'sam' : 'leo', [k % 2 ? 'leo' : 'sam'], ECHOES[k % ECHOES.length], LOOSE);
+  };
+  const breakers: (() => void)[] = [
+    () => postAgentMessage(s, t, 'leo', ['sam'], 'Which file holds the totals?', LOOSE),
+    () => postFounderMessage(s, t, '@Leo keep going'),
+    () => postAgentMessage(s, t, 'sam', ['dylan'], 'Cart API is merged.', LOOSE),
+    () => postAgentMessage(s, t, 'leo', ['sam', 'dylan'], 'Cart page is merged.', LOOSE),
+    () => postAgentMessage(s, t, 'sam', ['you'], 'Both halves are in.', LOOSE),
+  ];
+  trade(ECHO_LIMIT - 1);
+  for (const brk of breakers) {
+    brk();
+    trade(ECHO_LIMIT - 1);
+    assert.equal(t.status, 'open', `one short of the limit after ${breakers.indexOf(brk) + 1} break(s): still open`);
+  }
+  trade(1);
+  assert.equal(t.pausedReason, 'echo', 'and the next one in a row pauses it');
+});
+
+test('back-and-forth: only messages in turn count; one desk sending updates is not one, and messages that woke nobody are skipped', () => {
+  const s = fresh();
+  const t = createThread(s, { title: 'T', createdBy: 'leo' });
+  for (let i = 0; i < ECHO_LIMIT + 2; i++) assert.deepEqual(postAgentMessage(s, t, 'leo', ['sam'], `Step ${i + 1} done.`, LOOSE).deliver, ['sam']);
+  assert.equal(t.status, 'open', 'one way only');
+  const t2 = createThread(s, { title: 'T2', createdBy: 'leo' });
+  for (let i = 0; i < ECHO_LIMIT - 1; i++) {
+    const [from, to] = i % 2 ? ['sam', 'leo'] : ['leo', 'sam'];
+    postAgentMessage(s, t2, from, [to], ECHOES[i], LOOSE);
+    assert.equal(postAgentMessage(s, t2, from, [to], 'Logged in memory.md too.', LOOSE, { needsReply: false }).message.noReply, true);
+  }
+  assert.equal(t2.status, 'open');
+  postAgentMessage(s, t2, 'sam', ['leo'], ECHOES[ECHO_LIMIT - 1], LOOSE);
+  assert.equal(t2.pausedReason, 'echo', 'the quiet ones in between neither count nor break the run');
+});
+
+test("back-and-forth: HQ's notices of a hand-off or a finished ticket always go through, and start the count again", () => {
+  const s = fresh();
+  const t = createThread(s, { title: 'T', createdBy: 'leo' });
+  const item = ticket(s, 'sam');
+  item.threadId = t.id;
+  item.handoffFrom = 'leo';
+  for (let i = 0; i < ECHO_LIMIT - 1; i++) postAgentMessage(s, t, i % 2 ? 'sam' : 'leo', [i % 2 ? 'leo' : 'sam'], ECHOES[i], LOOSE);
+  // The finished notice carries the desk's summary, which may say "no reply needed": Leo still hears it.
+  const told = noticeHandoff(s, item, 'sam', 'Done with SA-1: built the cart API. No reply needed.', undefined, LOOSE);
+  assert.deepEqual(told?.deliver, ['leo']);
+  assert.equal(t.status, 'open');
+  const notice = messagesOf(s, t.id).at(-1)!;
+  assert.equal(notice.noReply, undefined);
+  assert.equal(notice.notice, true);
+  for (let i = 0; i < ECHO_LIMIT - 1; i++) postAgentMessage(s, t, i % 2 ? 'sam' : 'leo', [i % 2 ? 'leo' : 'sam'], ECHOES[i], LOOSE);
+  assert.equal(t.status, 'open', 'the notice ended the run before it');
+  postAgentMessage(s, t, 'sam', ['leo'], ECHOES[ECHO_LIMIT - 1], LOOSE);
+  assert.equal(t.pausedReason, 'echo');
+});
+
 test('batching: a queued run for the desk and thread means no second wake; a running one does not block', () => {
   const s = fresh();
   const t = createThread(s, { title: 'T', createdBy: 'leo' });
@@ -243,14 +418,33 @@ test("settle: a message run never touches the owner's ticket", () => {
   assert.equal(item.status, 'in-progress');
 });
 
-test('settle: leftover text in a message run becomes the reply and wakes the asker', () => {
+test('settle: leftover text in a message run becomes the reply to the founder, and wakes nobody', () => {
   const s = fresh();
   const t = createThread(s, { title: 'T', createdBy: 'leo' });
   const wake = settleAfterRun(s, { mode: 'message', agentId: 'sam', threadId: t.id, raised: false, finished: false, sentToThread: false, awaiting: [], askedBy: ['leo', 'you'], summary: 'Endpoint is /orders.', ...NO_CHECKS }, noLog, L);
-  assert.deepEqual(wake, ['leo']);
+  assert.deepEqual(wake, []);
   const last = messagesOf(s, t.id).at(-1)!;
   assert.equal(last.from, 'sam');
-  assert.deepEqual(last.to, ['leo', 'you']);
+  assert.deepEqual(last.to, ['you'], 'not to Leo: only send_message reaches a teammate');
+  assert.equal(t.agentHops, 0);
+});
+
+test("settle: a message run's closing words go to the teammate who woke it only when it asked a question", () => {
+  const s = fresh();
+  const t = createThread(s, { title: 'T', createdBy: 'leo' });
+  postAgentMessage(s, t, 'leo', ['sam'], 'Shipped the cart page. You are done on my side.', L);
+  const count = t.count;
+  // What desks wrote when they chose not to reply. Posted to the teammate, it woke them, and they did the same back.
+  const closing = "I didn't reply: Leo asked nothing, and a message would only wake Leo's desk again.";
+  const wake = settleAfterRun(s, { mode: 'message', agentId: 'sam', threadId: t.id, raised: false, finished: false, sentToThread: false, awaiting: [], askedBy: ['leo'], summary: closing, ...NO_CHECKS }, noLog, L);
+  assert.deepEqual(wake, []);
+  assert.equal(t.count, count, 'nothing posted');
+  assert.equal(t.agentHops, 1, 'only the first message woke anyone');
+  // A question Sam left unanswered still gets them, so Leo is not left waiting.
+  postAgentMessage(s, t, 'leo', ['sam'], 'Which endpoint returns the totals?', L);
+  const answer = settleAfterRun(s, { mode: 'message', agentId: 'sam', threadId: t.id, raised: false, finished: false, sentToThread: false, awaiting: [], askedBy: ['leo'], summary: 'GET /cart/totals.', ...NO_CHECKS }, noLog, L);
+  assert.deepEqual(answer, ['leo']);
+  assert.deepEqual(messagesOf(s, t.id).at(-1)!.to, ['leo']);
 });
 
 test('settle: a ticket run that asked a teammate stays in progress; otherwise it finishes', () => {

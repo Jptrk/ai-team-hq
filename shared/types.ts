@@ -515,7 +515,8 @@ export interface Thread {
   /** Agent ids, plus 'you' once Patrick posts. */
   participants: string[];
   status: ThreadStatus;
-  pausedReason?: 'hop-limit' | 'daily-cap' | 'restart' | 'failed';
+  /** echo: two desks kept messaging each other without a question (see ECHO_LIMIT in server/chat.ts). */
+  pausedReason?: 'hop-limit' | 'daily-cap' | 'echo' | 'restart' | 'failed';
   /** Desks woken by other desks since Patrick last posted or resumed. Capped by the loop limit. */
   agentHops: number;
   /** Messages so far. Message.n runs 1..count. */
@@ -544,6 +545,10 @@ export interface Message {
   runId?: string;
   /** Recipients not woken because the thread paused. Resume delivers them. */
   undelivered?: string[];
+  /** It needed no reply, so no desk was woken for it: they read it next time they run in this thread. */
+  noReply?: true;
+  /** HQ's notice of a hand-off or a finished ticket, posted under the desk's name. */
+  notice?: true;
   attachments?: Attachment[];
 }
 

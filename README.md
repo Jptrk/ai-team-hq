@@ -760,7 +760,8 @@ The **Chat** tab shows threads between desks, and you. Messages do real work: ea
 a desk wakes it for a live run, which spends usage.
 
 - **Desks message each other** with two HQ tools:
-  - `send_message(to, text)` reaches up to 3 teammates, or "founder" to answer you.
+  - `send_message(to, text)` reaches up to 3 teammates, or "founder" to answer you. With
+    `needs_reply: false` it tells them something without waking them (see below).
   - `hand_off(to, title, brief)` gives a teammate a ticket of their own. The sender is told
     automatically when its desk finishes it, even while it still waits for QA or your sign-off, so
     the sender can carry on. It hears once more when the ticket is done: you sign it off, QA passes
@@ -770,11 +771,28 @@ a desk wakes it for a live run, which spends usage.
 - **You can post in any thread.** `@Name` pulls a desk in. With no mention, your message goes
   to the last desk that spoke. In a new thread, the router picks a desk. Your messages never
   count toward the limit.
+- **Desks answer only what needs an answer.** A desk woken by a teammate replies when it is asked
+  something or asked to act. A status update, thanks or "no reply needed" gets no reply. A desk
+  that owns the ticket carries on with it once the answer it waited for comes in. What a desk
+  writes at the end of a run is not a reply: it goes to you when you asked, and to a teammate only
+  when that teammate asked it a question it didn't answer with `send_message`.
+- **A message that needs no answer wakes nobody.** It is saved and shown with "no reply needed",
+  and the desk reads it the next time it runs in that thread. That is a message sent with
+  `needs_reply: false`, one that says "no reply needed" (or "no need to respond", "don't reply"),
+  and one that is only "Thanks" or "Noted". A question always wakes the desk, and so does
+  "no reply needed if ...". A desk that may be waiting on the sender is woken anyway: it owns the
+  thread's open ticket, or it asked the sender a question that is not answered yet.
 - **The loop limit.** Each desk that another desk wakes counts one hop. After 6 hops the
   thread pauses and holds further messages, and it shows up in Needs you and on the Chat tab.
   Reply in the thread, or press **Resume** to deliver what was held. There is also a cap of 30
   desk-to-desk wakes per project per day. Autopilot projects skip that cap: every chat wake is
   one of the team's runs, already counted against the project's [Daily limits](#daily-limits).
+- **Back and forth.** When two desks take turns sending each other 6 messages in a row without a
+  question, the thread pauses the same way, whatever the loop limit. That is two desks telling each
+  other the same status ("still waiting on QA, no changes"), each message waking the other.
+  Messages that woke nobody don't count. Your message, **Resume**, or a notice that a ticket was
+  handed over or finished starts the count again, and those notices always go through. A ticket
+  run whose question is held by a pause waits for the answer instead of finishing.
 - **Messages are async.** A desk posts and stops, and the reply wakes it later. Unread
   messages for a desk batch into one run. Nothing waits in a slot, so the queue can't deadlock.
 - **A cut-off reply is asked again.** If a desk's run dies before it replies (a server restart,
@@ -1478,7 +1496,7 @@ npm run test:epics
   - no other route answers 401
 
   It writes only in a scratch folder.
-- **`test:chat`** checks the chat core: recipients, the loop limit, resume and settle.
+- **`test:chat`** checks the chat core: recipients, the loop limit, messages that need no reply (what counts, nobody woken, nothing held for Resume, a desk that may be waiting woken anyway), the back-and-forth pause (with the hop limit at 100 and no daily cap; only messages in turn, quiet ones skipped; a question, you, a third desk, Resume or a notice starting the count again; hand-off and finished notices going through), resume, and settle (a desk's closing words reach you when you asked, and a teammate only for a question it left unanswered).
 - **`test:account`** checks signing in to your Claude account with a stand-in Claude Code: the pages shown (Claude's own sites only), the pasted code (and a code the browser beat to it), cancel and every way a sign-in can end, no token or code in any answer, that a poll never sees a sign-in that worked as signed out, that checks share one Claude Code run and only HQ's own page can force one, how HQ picks sim, live or not live, the switch and the restart hint, and sign-out. Your real login is never touched.
 - **`test:codex`** checks GPT desks with a stand-in Codex: the ChatGPT sign-in on this PC and by device code (OpenAI's own pages only, cancel, sign-out), account, usage windows and model list parsing, the model and effort setting, the desk config that switches Codex's own tools off (also against the pinned Codex's own `features list`, offline, skipped when it isn't installed), the file tools through HQ's fence (reads, writes, protected files, globs, grep, a runaway pattern stopped off the main thread), a ticket run end to end (HQ tools, close-out, no dollar cost, the thread kept and resumed), patch approvals inside and outside the fence (Windows name tricks declined, patches counted toward the cap), a used-up plan holding automatic work in GPT projects only (a Claude project's queued start stays in line; also when the limit comes after the desk closed out), Stop (also before Codex answers `turn/start`, with nothing written after it), the tool-call cap, a turn's end matched by its id, a thread too long for the model dropped, a project whose model can't run (the reason names the switch that is off or the login that is missing; work waits on its ticket with your note, the team's own starts wait at the gate, and it all starts once the model can run; an instruct and a chat message of yours already queued behind a busy desk wait too, with no failed run and no paused thread; a team start never replaces your held start; **Put … on it** is refused with the reason and holds nothing), a status check that must not undo a sign-out, and switching a project's model (refused while desks run; every desk starts a new conversation). Nothing signs in and no model runs.
 - **`test:idle`** checks HQ not live: starts and chat messages you make wait (one note per desk per thread) and begin once HQ is live as your own clicks, with your note and images, past the daily limits and ChatGPT's limit but not a Pause or Claude's limit; a held comment still gets its answer; huddles are refused; `wentLive` survives sign-out and is backfilled from desk runs on disk.
@@ -1498,7 +1516,7 @@ npm run test:epics
     resume mid-turn, a removed facilitator, and a summary that landed before the stop)
   - a restart mid-huddle, and the guard and prompt that keep huddle turns read-only
   - saving the team notes after they changed mid-edit, and the daily limit setting
-- **`test:qa`** checks sign-off and QA: where a finished ticket goes with QA and the sign-off setting on or off, the sign-off setting on projects, pass and fail verdicts, too many fails, rounds and stale verdicts, signing off, moving tickets by hand (through the API routes, in-process), changes after QA, changing or removing the QA desk, the QA desk default, changed files recorded only for writes that went through, the read-only, no-web fence around a QA check, and the quoting of desk-written text in its prompt.
+- **`test:qa`** checks sign-off and QA: where a finished ticket goes with QA and the sign-off setting on or off, the sign-off setting on projects, pass and fail verdicts, too many fails, rounds and stale verdicts, signing off, moving tickets by hand (through the API routes, in-process), changes after QA, changing or removing the QA desk, the QA desk default, changed files recorded only for writes that went through, the read-only, no-web fence around a QA check, and the quoting of desk-written text in its prompt. It also checks the chat rules both models get (answer a teammate only when asked something; an owner carries on once answered; a GPT desk's last message is not a reply to a teammate) and `send_message` with `needs_reply: false`, after a back-and-forth pause, and from a ticket run whose question the pause holds.
 - **`test:mcp`** checks adding, removing and signing in to MCP servers:
   - the rules for names, URLs, local commands and presets
   - masked previews and what the page shows, fingerprints, and secrets scrubbed from what the CLI

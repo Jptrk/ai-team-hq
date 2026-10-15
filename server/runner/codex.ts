@@ -133,7 +133,8 @@ export function developerPrompt(systemPrompt: string, hq: HqTools, files: FileTo
       : []),
     ...(extras.skipped?.length ? [`- Not available to you here: ${extras.skipped.map((x) => `${x.name} (${x.why})`).join('; ')}.`] : []),
     `- ${hq.instructions}`,
-    '- Your last message is your reply: keep it to what was asked.',
+    // Not "your reply": a message run's closing words never go to the teammate who woke it (see settleAfterRun).
+    '- Your last message is your summary for the founder: keep it to what was asked. It is not a reply to a teammate; answer one with send_message.',
   ];
   return lines.join('\n');
 }

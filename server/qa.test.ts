@@ -25,6 +25,7 @@ const store = await import('./store');
 const qa = await import('./qa');
 const chat = await import('./chat');
 const claude = await import('./runner/claude');
+const codex = await import('./runner/codex');
 const runner = await import('./runner/index');
 const { router, readProjectPatch } = await import('./routes');
 const { seed } = await import('./seed');
@@ -774,6 +775,86 @@ test('prompt: QA checks get their own rules; owners in dev projects hear where f
   assert.match(prompts[0], onlyLast);
   assert.doesNotMatch(check, onlyLast);
   assert.doesNotMatch(claude.systemPromptFor(p, leo, leoDir, [], 'huddle', false), onlyLast);
+});
+
+test('prompt: desks answer a teammate only when asked something, and send no reply otherwise (both models)', () => {
+  fresh();
+  const leoDir = claude.workspaceFor(p.id, 'leo');
+  fs.mkdirSync(leoDir, { recursive: true });
+  fs.writeFileSync(path.join(leoDir, 'ROLE.md'), '# leo');
+  const leo = p.state.agents.find((a) => a.id === 'leo')!;
+  const system = claude.systemPromptFor(p, leo, leoDir, [], 'message', false);
+  assert.match(system, /Do not answer a teammate's message that needs no answer: a status update, thanks, "nothing new", "no reply needed"\. Send no reply\./);
+  assert.match(system, /send it with needs_reply: false\. They read it next time they run, and are not woken for it unless they are waiting on you\./);
+  assert.match(system, /or when two desks keep messaging each other without a question/);
+  const rule = /Answer a teammate only when they ask you something or need you to act; if their message needs no answer, send no reply\. Your closing text is not a reply: only send_message answers a teammate\./;
+  const carryOn = /If it answers what your ticket was waiting on, carry on with the ticket now\./;
+  const own = claude.runNotes(p, leo, [], 'message', 'message', true, false).join('\n');
+  const theirs = claude.runNotes(p, leo, [], 'message', 'message', false, false).join('\n');
+  for (const notes of [own, theirs]) {
+    assert.match(notes, rule);
+    assert.doesNotMatch(notes, /Reply with send_message in this thread/, 'a message run is no longer told it must reply');
+  }
+  assert.match(own, carryOn, 'the owner carries on once its question is answered');
+  assert.doesNotMatch(theirs, carryOn);
+  // The chat prompt marks a message that needs no reply, and ends by saying to send none.
+  const t = chat.createThread(p.state, { title: 'SA-1: Cart', createdBy: 'sam' });
+  chat.postAgentMessage(p.state, t, 'sam', ['leo'], 'Cart API is merged. No reply needed.');
+  const unread = chat.unreadFor(p.state, t, 'leo').all;
+  const input = { project: p, agent: leo, thread: t, unread, reason: 'message' } as unknown as Parameters<typeof claude.messagePrompt>[0];
+  const prompt = claude.messagePrompt(input, false);
+  assert.match(prompt, /^- \[1\] Sam -> Leo \(to you, no reply needed\): Cart API is merged\. No reply needed\.$/m);
+  assert.match(prompt, /If nothing here asks you something or needs you to act \(a status update, thanks, "no reply needed"\), send no reply\.$/);
+  assert.match(claude.messagePrompt(input, true), /^You own this ticket\. If this answers what it was waiting on, carry on with it now\. If this finishes it, call report_done too\.$/m);
+  // GPT desks: their last message is a summary for the founder, not a reply to the teammate who woke them.
+  const hq = { instructions: 'HQ tools.', tools: [] } as unknown as Parameters<typeof codex.developerPrompt>[1];
+  const dev = codex.developerPrompt('', hq, ['Read']);
+  assert.match(dev, /^- Your last message is your summary for the founder: keep it to what was asked\. It is not a reply to a teammate; answer one with send_message\.$/m);
+});
+
+test('send_message: needs_reply false wakes nobody; desks trading statements are told the thread paused', async () => {
+  fresh();
+  const leo = p.state.agents.find((a) => a.id === 'leo')!;
+  const dir = claude.workspaceFor(p.id, 'leo');
+  fs.mkdirSync(dir, { recursive: true });
+  const t = chat.createThread(p.state, { title: 'SA-1: Cart', createdBy: 'sam' });
+  const woke: string[][] = [];
+  const ctx = {
+    project: p,
+    agent: leo,
+    mode: 'message',
+    reason: 'message',
+    thread: t,
+    sends: 0,
+    sentToThread: false,
+    awaiting: [],
+    askedBy: ['sam'],
+    hooks: { deliver: (_thread: string, ids: string[]) => woke.push(ids), kickoff: () => undefined, held: () => null },
+    dir,
+    shots: { recent: [], pending: new Set() },
+  } as unknown as Parameters<typeof claude.hqTools>[0];
+  const send = claude.hqTools(ctx).tools.find((x) => x.name === 'send_message')!;
+  const said = (r: Awaited<ReturnType<typeof send.handler>>) => (r.content[0] as { text: string }).text;
+
+  const fyi = await send.handler({ to: ['Sam'], text: 'The cart page is live on staging.', needs_reply: false } as never, {});
+  assert.equal(fyi.isError, undefined);
+  assert.match(said(fyi), /It needs no reply, so nobody was woken: they read it next time they run\. You can stop now\./);
+  assert.deepEqual(woke, [[]]);
+  assert.equal(chat.messagesOf(p.state, t.id).at(-1)!.noReply, true);
+  assert.equal(t.agentHops, 0);
+
+  // Statements back and forth in turn, ending with Sam's, then one more from Leo: the thread pauses and Leo hears why.
+  for (let i = 0; i < chat.ECHO_LIMIT - 1; i++) chat.postAgentMessage(p.state, t, i % 2 ? 'leo' : 'sam', [i % 2 ? 'sam' : 'leo'], `Still waiting on QA (${i}).`);
+  const echo = await send.handler({ to: ['Sam'], text: 'SA-1 stays paused for QA. No changes.' } as never, {});
+  assert.match(said(echo), /but the thread paused: desks kept messaging each other without a question\. It waits until \S+ steps in, so Sam will not see it yet\. Wrap up\./);
+  assert.equal(t.pausedReason, 'echo');
+  assert.deepEqual(chat.messagesOf(p.state, t.id).filter((m) => m.from !== 'hq').at(-1)!.undelivered, ['sam']);
+
+  // A ticket run whose question is held by the pause waits for the answer, instead of finishing without it.
+  const ticketCtx = { ...(ctx as object), mode: 'ticket', reason: 'manual', thread: undefined, sends: 0, awaiting: [], askedBy: [] } as unknown as Parameters<typeof claude.hqTools>[0];
+  const ask = claude.hqTools(ticketCtx).tools.find((x) => x.name === 'send_message')!;
+  await ask.handler({ to: ['Sam'], text: 'Which table holds the totals?', thread: t.id } as never, {});
+  assert.deepEqual((ticketCtx as unknown as { awaiting: string[] }).awaiting, ['sam']);
 });
 
 test("prompt: owners on any project hear that report_done goes to the founder's sign-off, unless it is off", () => {

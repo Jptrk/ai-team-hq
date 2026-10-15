@@ -13,13 +13,41 @@ import { now, today, uid } from './store';
  * the thread pauses and holds further messages until Patrick posts or resumes.
  * The daily cap doesn't apply in Autopilot projects: every chat wake there is one of the team's runs, already
  * counted against the project's own daily run and spend limits (see projectHold in autopilot.ts).
+ *
+ * Desks must not wake each other with replies to replies ("still paused, no changes", "no reply needed"):
+ * a message that needs no answer wakes nobody (unless the desk may be waiting on the sender), and two desks
+ * trading ECHO_LIMIT messages in turn with no question pause the thread, whatever the hop limit.
  */
 
 /** Desk-to-desk messages a thread takes before it pauses (Accounts page, or HQ_CHAT_HOP_LIMIT). */
 export const hopLimit = (): number => limit('chatHops');
 export const MAX_SENDS_PER_RUN = 3;
 export const MAX_RECIPIENTS = 3;
+/** Messages two desks may send each other in a row without a question before the thread pauses. */
+export const ECHO_LIMIT = 6;
 const MAX_MESSAGES = 1500;
+
+// The sender says it needs no answer: "No reply needed", "no need to respond", "don't reply". Not when it goes on
+// with "if" or "unless": that still asks for something when the condition holds.
+const NO_REPLY =
+  /\b(?:no (?:reply|response|answer)s? (?:is |are )?(?:needed|required|necessary|expected)|no need to (?:reply|respond|answer)|(?:needs|requires) no (?:reply|response|answer)|(?:do not|don't|dont) (?:reply|respond)(?=\s*(?:[.;:,!)]|$|to (?:this|me)\b|here\b)))(?![\s,;:\-–—]+(?:if|unless)\b)/i;
+// Only thanks or "noted", nothing else.
+const ACK_ONLY = /^(?:(?:thanks|thank you|thx|cheers|noted|got it|acknowledged|ack|ok|okay|understood|will do|sounds good|roger|great|perfect|all good)[\s,.!:;-]*)+$/i;
+
+/** A message that needs no answer: it says so, or it is only thanks or "noted". `names`: desks' names, which an ack may add. */
+export function needsNoReply(text: string, names: string[] = []): boolean {
+  // Words in double quotes are someone else's: 'the client wrote "no reply needed"'.
+  const plain = text
+    .replace(/"[^"]*"|“[^”]*”/g, ' ')
+    .replace(/[*_`~>#@]/g, ' ')
+    .trim();
+  // A question wants an answer, whatever else the message says.
+  if (!plain || plain.includes('?')) return false;
+  if (NO_REPLY.test(plain) || ACK_ONLY.test(plain)) return true;
+  let bare = plain;
+  for (const name of names) if (name) bare = bare.replace(new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'gi'), ' ');
+  return ACK_ONLY.test(bare.trim());
+}
 
 export interface Limits {
   hopLimit: number;
@@ -86,7 +114,7 @@ export function previewText(text: string, attachments?: Attachment[]): string {
   return n === 0 ? '' : n === 1 ? 'Sent an image' : `Sent ${n} images`;
 }
 
-function append(s: State, t: Thread, msg: Pick<Message, 'from' | 'to' | 'text'> & Partial<Pick<Message, 'undelivered' | 'runId' | 'attachments'>>): Message {
+function append(s: State, t: Thread, msg: Pick<Message, 'from' | 'to' | 'text'> & Partial<Pick<Message, 'undelivered' | 'runId' | 'attachments' | 'noReply' | 'notice'>>): Message {
   t.count += 1;
   const message: Message = { id: uid('msg'), threadId: t.id, n: t.count, ts: now(), ...msg };
   if (!message.undelivered?.length) delete message.undelivered;
@@ -167,17 +195,63 @@ function rollDay(s: State, day: string): void {
   if (s.chat.day !== day) s.chat = { day, wakes: 0 };
 }
 
-function pause(s: State, t: Thread, reason: NonNullable<Thread['pausedReason']>, limits: Limits): void {
+/** `who`: the two desks, for an echo pause. */
+function pause(s: State, t: Thread, reason: NonNullable<Thread['pausedReason']>, limits: Limits, who: string[] = []): void {
   if (t.status === 'paused') return;
   t.status = 'paused';
   t.pausedReason = reason;
+  const names = who.map((id) => s.agents.find((a) => a.id === id)?.name ?? id).join(' and ');
   note(
     s,
     t,
     reason === 'hop-limit'
       ? `Paused after ${limits.hopLimit} desk-to-desk message${limits.hopLimit === 1 ? '' : 's'}. Patrick can reply or resume.`
-      : `Paused: the team hit today's limit of ${limits.dailyCap} desk-to-desk message${limits.dailyCap === 1 ? '' : 's'}. Patrick can resume.`,
+      : reason === 'echo'
+        ? `Paused: ${names} sent each other ${ECHO_LIMIT} messages in a row without a question. Patrick can reply or resume.`
+        : `Paused: the team hit today's limit of ${limits.dailyCap} desk-to-desk message${limits.dailyCap === 1 ? '' : 's'}. Patrick can resume.`,
   );
+}
+
+/**
+ * Messages in a row, this one included, that two desks sent each other in turn with no question in them, since
+ * Patrick or HQ last posted (so a Resume starts the count again). 0 when this one asks something or goes elsewhere.
+ * Messages that woke nobody are skipped; HQ's notices of a hand-off or a finished ticket end the run.
+ */
+function echoStreak(s: State, t: Thread, from: string, to: string[], text: string): number {
+  if (to.length !== 1 || to[0] === 'you' || text.includes('?')) return 0;
+  const msgs = messagesOf(s, t.id);
+  let n = 1;
+  // The one before must have come the other way, and so on.
+  let [want, wantTo] = [to[0], from];
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i];
+    if (m.noReply) continue;
+    if (m.notice || m.from !== want || m.to.length !== 1 || m.to[0] !== wantTo || m.text.includes('?')) break;
+    n++;
+    [want, wantTo] = [wantTo, want];
+  }
+  return n;
+}
+
+/**
+ * `desk` may be waiting on `from`: it owns the thread's open ticket (a ticket run that asked a teammate waits for the
+ * answer), or its last message to `from` asked a question `from` has not answered yet.
+ */
+export function waitsOn(s: State, t: Thread, desk: string, from: string): boolean {
+  const item = t.itemId ? s.items.find((i) => i.id === t.itemId) : undefined;
+  if (item && item.assignee === desk && (item.status === 'todo' || item.status === 'in-progress')) return true;
+  return askedUnanswered(s, t, desk, from);
+}
+
+/** `asker`'s last message to `answerer` in this thread asked a question, and `answerer` has not written back since. */
+function askedUnanswered(s: State, t: Thread, asker: string, answerer: string): boolean {
+  const msgs = messagesOf(s, t.id);
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i];
+    if (m.from === answerer && m.to.includes(asker)) return false;
+    if (m.from === asker && m.to.includes(answerer)) return m.text.includes('?');
+  }
+  return false;
 }
 
 /** Why a desk-to-desk wake would be held right now, or null if it can go through. */
@@ -197,18 +271,36 @@ export interface Posted {
   paused: boolean;
 }
 
+export interface PostOptions {
+  attachments?: Attachment[];
+  /** false: the sender says the message needs no answer. */
+  needsReply?: boolean;
+  /** HQ's notice of a hand-off or a finished ticket: news the desk waits for, so it always wakes it (within the limits). */
+  notice?: boolean;
+}
+
 /**
  * A desk posts. The message is always saved. Each desk recipient is one hop; past the
  * limit (or the daily cap) the thread pauses and the rest are held as undelivered.
+ * A message that needs no answer wakes nobody, unless a desk may be waiting on the sender: the desks read it next
+ * time they run in this thread. A message that makes ECHO_LIMIT in turn between two desks with no question pauses
+ * the thread and is held.
  */
-export function postAgentMessage(s: State, t: Thread, from: string, to: string[], text: string, limits: Limits = defaultLimits(), attachments?: Attachment[]): Posted {
+export function postAgentMessage(s: State, t: Thread, from: string, to: string[], text: string, limits: Limits = defaultLimits(), opts: PostOptions = {}): Posted {
   if (t.status === 'closed') throw new ChatError('This thread is closed.');
   rollDay(s, limits.today);
+  const desks = to.filter((id) => id !== 'you');
+  // Waking a desk for a message that needs no answer only gets a reply to a reply, and then another. A desk waiting
+  // on the sender is woken anyway: "OK" may be the answer its ticket waits for, and "no reply needed" is not "no news".
+  const quiet =
+    desks.length > 0 &&
+    !opts.notice &&
+    !desks.some((id) => waitsOn(s, t, id, from)) &&
+    (opts.needsReply === false || needsNoReply(text, s.agents.map((a) => a.name)));
   const deliver: string[] = [];
   const held: string[] = [];
-  let pauseWith: NonNullable<Thread['pausedReason']> | null = null;
-  for (const id of to) {
-    if (id === 'you') continue;
+  let pauseWith: NonNullable<Thread['pausedReason']> | null = !quiet && !opts.notice && t.status === 'open' && echoStreak(s, t, from, to, text) >= ECHO_LIMIT ? 'echo' : null;
+  for (const id of quiet ? [] : desks) {
     if (t.status === 'paused' || pauseWith) held.push(id);
     else if (t.agentHops >= limits.hopLimit) {
       pauseWith = 'hop-limit';
@@ -222,8 +314,16 @@ export function postAgentMessage(s: State, t: Thread, from: string, to: string[]
       deliver.push(id);
     }
   }
-  const message = append(s, t, { from, to, text, undelivered: held, attachments });
-  if (pauseWith) pause(s, t, pauseWith, limits);
+  const message = append(s, t, {
+    from,
+    to,
+    text,
+    undelivered: held,
+    attachments: opts.attachments,
+    ...(quiet ? { noReply: true as const } : {}),
+    ...(opts.notice ? { notice: true as const } : {}),
+  });
+  if (pauseWith) pause(s, t, pauseWith, limits, [from, ...desks]);
   addWaiting(t, deliver);
   return { message, deliver, paused: t.status === 'paused' };
 }
@@ -332,15 +432,19 @@ export interface SettleInput {
 
 /**
  * What happens when a run ends without the expected tool call.
- * Message runs never touch tickets: leftover text becomes the reply. Ticket runs that
- * asked a teammate stay in progress. Returns desks to wake.
+ * Message runs never touch tickets: leftover text becomes the reply to Patrick, when Patrick asked, and to a teammate
+ * only when that teammate asked a question. Ticket runs that asked a teammate stay in progress. Returns desks to wake.
  */
 export function settleAfterRun(s: State, input: SettleInput, log: (agentId: string, text: string) => void, limits: Limits = defaultLimits()): string[] {
   if (input.mode === 'message') {
+    // A desk answers a teammate with send_message, and ends without it when there is nothing to answer. Its closing
+    // words ("I didn't reply, Leo asked nothing") used to go to the teammate and wake it, and two desks kept waking
+    // each other that way. A question left unanswered still gets them, so the teammate is not left waiting.
     const t = input.threadId ? findThread(s, input.threadId) : undefined;
     const text = input.summary.trim();
     if (!t || t.status === 'closed' || input.sentToThread || !text) return [];
-    const to = input.askedBy.filter((id) => id !== input.agentId);
+    const to = input.askedBy.filter((id) => (id === 'you' ? true : id !== input.agentId && askedUnanswered(s, t, id, input.agentId)));
+    if (!to.length) return [];
     return postAgentMessage(s, t, input.agentId, to, text.slice(0, 1500), limits).deliver;
   }
 
@@ -376,7 +480,7 @@ function postHandoff(s: State, item: WorkItem, from: string, text: string, limit
   const thread = item.threadId ? findThread(s, item.threadId) : undefined;
   // Nobody to tell, or the ticket came back to the desk that handed it over.
   if (!back || back.id === from || !thread || thread.status === 'closed') return null;
-  return { threadId: thread.id, deliver: postAgentMessage(s, thread, from, [back.id], text, limits).deliver };
+  return { threadId: thread.id, deliver: postAgentMessage(s, thread, from, [back.id], text, limits, { notice: true }).deliver };
 }
 
 /**

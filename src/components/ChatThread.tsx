@@ -26,6 +26,7 @@ interface Props {
 const PAUSE_TEXT: Record<string, string> = {
   'hop-limit': 'Paused: the desks hit the message limit for this thread.',
   'daily-cap': "Paused: the team hit today's limit for desk-to-desk messages.",
+  echo: 'Paused: two desks kept messaging each other without a question.',
   restart: 'Paused: a reply was cut off by a server restart.',
   failed: 'Paused: a reply failed. Resume to try again.',
 };
@@ -177,6 +178,7 @@ export function ChatThread({ pid, thread, state, onBack, onOpenTicket, onChanged
                   <strong>{speakerName(agents, m.from)}</strong>
                   {to.length > 0 && <span className="muted"> → {to.join(', ')}</span>}
                   <span className="muted"> · {timeAgo(m.ts)}</span>
+                  {m.noReply && <span className="muted" title="Nobody was woken for it: they read it next time they run"> · no reply needed</span>}
                 </div>
                 {m.text && <Markdown source={m.text} variant="compact" breaks />}
                 <AttachmentGrid pid={pid} attachments={m.attachments} from={speakerName(agents, m.from)} size="sm" />
