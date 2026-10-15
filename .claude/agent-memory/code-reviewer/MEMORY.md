@@ -17,3 +17,4 @@
 - [Prompt copy review checks](prompt-copy-review-checks.md) — Voice vs teammates/markdown rules, banned words vs exact names, GPT resume reach, README drift
 - [TipTap React lifecycle checks](tiptap-react-lifecycle-checks.md) — useEditor 1 ms destroy vs Suspense 300 ms reveal, destroyed-editor API, rAF focus
 - [Shell review checks](shell-review-checks.md) — shellRefusal bypasses (reserved words, cmd //c, powershell -NoProfile, cd --), shellDelete folder gaps
+- [Blocker hold review checks](blocker-hold-review-checks.md) — stale autoHold why after release paths, Pause vs released yours, loop check via done tickets
