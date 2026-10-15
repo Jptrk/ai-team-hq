@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { z } from 'zod';
 import type { Agent, Attachment, ConnectionMode, EffortLevel, ItemKind, ItemStatus, Message, RunReason, Thread, WorkItem } from '../../shared/types';
-import { hasQa, signoffOn } from '../../shared/types';
+import { blockedByThis, epicProgress, hasQa, MAX_BLOCKERS, MAX_EPIC_TITLE, openBlockers, signoffOn } from '../../shared/types';
 import { parseReportUrl } from '../../shared/reportUrl';
 import { attachmentsDir, saveUpload } from '../attachments';
 import {
@@ -35,7 +35,7 @@ import { changedAfterQa, clearSignoff, finishWork, noteChangedFiles, qaDeskOf, q
 import { claudeEnv, folderExists, HQ_ROOT, instructionsFileIn, isInside, samePath } from '../paths';
 import { settings } from '../settings';
 import { argsLine, runSkillScript, scriptReply, SKILL_TIMEOUT_MS } from '../skillRunner';
-import { createGoalTicket, finishPlan, GOAL_OPEN_CAP, GOAL_PER_PLAN, goalState, openGoalTickets, recordGoalStatus } from '../goal';
+import { createGoalEpic, createGoalTicket, finishPlan, GOAL_EPICS_PER_PLAN, GOAL_OPEN_CAP, GOAL_PER_PLAN, goalState, openGoalTickets, recordGoalStatus } from '../goal';
 import { getSkill, SkillError, skillDir, skillsForDesk } from '../skills';
 import { moveToTrash, trashBatch } from '../trash';
 import { now, uid, WORKSPACES, type Project } from '../store';
@@ -583,6 +583,20 @@ export function imagesFor(input: RunInput): Attachment[] {
   return [];
 }
 
+/** The ticket's epic, the tickets it is blocked by and the ones it blocks, one line each, for its prompt. Titles are desk-written, so on one line. */
+function linkLines(p: Project, item: WorkItem): string[] {
+  const s = p.state;
+  const lines: string[] = [];
+  const epic = item.epicId ? s.epics.find((e) => e.id === item.epicId) : undefined;
+  if (epic) lines.push(`Epic: ${p.ticket(epic)} ${oneLine(epic.title)}`);
+  const ref = (i: WorkItem) => `${p.ticket(i)} "${oneLine(i.title)}" (${i.status})`;
+  const blockers = (item.blockedBy ?? []).map((id) => s.items.find((i) => i.id === id)).filter((i): i is WorkItem => Boolean(i));
+  if (blockers.length) lines.push(`Blocked by: ${blockers.map(ref).join(', ')}`);
+  const blocks = blockedByThis(item.id, s.items);
+  if (blocks.length) lines.push(`Blocks: ${blocks.slice(0, 8).map(ref).join(', ')}${blocks.length > 8 ? ` and ${blocks.length - 8} more` : ''}`);
+  return lines;
+}
+
 /** The prompt for a ticket run: the ticket, its comments, history and discussion, and why the desk runs now. Exported for tests. */
 export function ticketPrompt(input: Pick<RunInput, 'project' | 'item' | 'reason' | 'note' | 'thread'>, opts: { restarted?: boolean } = {}): string {
   const { project: p, reason, note: founderNote, thread } = input;
@@ -594,6 +608,7 @@ export function ticketPrompt(input: Pick<RunInput, 'project' | 'item' | 'reason'
   const lines = [
     `# ${p.ticket(item)}: ${item.title}`,
     `Kind: ${item.kind} · Status: ${item.status}${item.client ? ` · Client: ${item.client}` : ''} · From: ${from?.name ?? item.from}`,
+    ...linkLines(p, item),
     '',
     item.summary.trim() || '(No written description. See the attached images.)',
   ];
@@ -848,6 +863,8 @@ export interface RunContext {
   /** Planning runs: tickets made so far, and whether goal_status was given. */
   planMade: number;
   planSaid: boolean;
+  /** Planning runs: epics made so far. */
+  planEpics?: number;
 }
 
 /** One change an auto connection made: where, with which tool, and a short hint of what it touched. */
@@ -1046,11 +1063,17 @@ function planTools(ctx: RunContext): HqTools {
 
   const create = tool(
     'create_ticket',
-    `Add one ticket toward the goal for a desk (yourself included). It goes straight into To do, tagged Goal, and Autopilot starts it when that desk is free. At most ${GOAL_PER_PLAN} per plan.`,
+    `Add one ticket toward the goal for a desk (yourself included). It goes straight into To do, tagged Goal, and Autopilot starts it when that desk is free and the tickets it is blocked by are done. At most ${GOAL_PER_PLAN} per plan.`,
     {
       to: z.string().min(1).max(40).describe('Desk name'),
       title: z.string().min(5).max(120).describe('Starts with a verb'),
       brief: z.string().min(20).max(1500).describe('In markdown: what to do, what done looks like, and anything they need to know.'),
+      epic: z.string().max(MAX_EPIC_TITLE).optional().describe(`The epic it belongs to: its key (e.g. ${p.meta.key}-14) or its title. Leave out for none.`),
+      blocked_by: z
+        .array(z.string().min(1).max(40))
+        .max(MAX_BLOCKERS)
+        .optional()
+        .describe(`Keys of tickets that must be done before this one starts, e.g. ["${p.meta.key}-12"]. Tickets you made earlier this run count. Leave out when it can start right away.`),
     },
     async (args) => {
       if (ctx.planSaid) return fail('You already gave the goal status. Stop now.');
@@ -1078,7 +1101,28 @@ function planTools(ctx: RunContext): HqTools {
     },
   );
 
-  return { instructions: `HQ tools: create_ticket for each new piece of work (at most ${GOAL_PER_PLAN}), then goal_status once, then stop.`, tools: [create, status] };
+  const epic = tool(
+    'create_epic',
+    `Make an epic: a name for a bigger piece of work that several tickets belong to, so ${ownerName} sees them together. Then pass its key as epic to create_ticket. At most ${GOAL_EPICS_PER_PLAN} per plan; an epic that already has the title is not made twice.`,
+    {
+      title: z.string().min(3).max(MAX_EPIC_TITLE).describe('A short name for the bigger piece of work, e.g. "Checkout on mobile"'),
+      brief: z.string().max(1500).optional().describe('In markdown: what it is for and what done looks like. Optional.'),
+    },
+    async (args) => {
+      if (ctx.planSaid) return fail('You already gave the goal status. Stop now.');
+      const out = createGoalEpic(p, ctx.agent.id, args, ctx.planEpics ?? 0);
+      if (typeof out === 'string') return fail(out);
+      if (out.existed) return ok(`${p.ticket(out.epic)} "${out.epic.title}" already exists. Use ${p.ticket(out.epic)} as epic in create_ticket.`);
+      ctx.planEpics = (ctx.planEpics ?? 0) + 1;
+      p.commit();
+      return ok(`Made epic ${p.ticket(out.epic)}. Pass "${p.ticket(out.epic)}" as epic in create_ticket.`);
+    },
+  );
+
+  return {
+    instructions: `HQ tools: create_epic to name a bigger piece of work (optional), create_ticket for each new piece of work (at most ${GOAL_PER_PLAN}), then goal_status once, then stop.`,
+    tools: [epic, create, status],
+  };
 }
 
 /** The planning run's prompt: the goal, where the board stands, the team, and what to do. Desk-written text is quoted. Exported for tests. */
@@ -1091,7 +1135,15 @@ export function planPrompt(ctx: Pick<RunContext, 'project' | 'agent'>): string {
   const done = s.items.filter((i) => i.origin === 'goal' && i.status === 'done').slice(0, 10);
   const other = s.items.filter((i) => i.origin !== 'goal' && i.status !== 'done').slice(0, 30);
   const left = Math.max(0, Math.min(GOAL_PER_PLAN, GOAL_OPEN_CAP - open.length));
-  const line = (i: WorkItem) => `- ${p.ticket(i)} [${i.status}] ${oneLine(i.title)} (${nameOf(p, i.assignee)})`;
+  const epicKey = (id: string | undefined) => {
+    const e = id ? s.epics.find((x) => x.id === id) : undefined;
+    return e ? p.ticket(e) : undefined;
+  };
+  const line = (i: WorkItem) => {
+    const epic = epicKey(i.epicId);
+    const waits = openBlockers(i, s.items).map((b) => p.ticket(b));
+    return `- ${p.ticket(i)} [${i.status}] ${oneLine(i.title)} (${nameOf(p, i.assignee)})${epic ? ` · epic ${epic}` : ''}${waits.length ? ` · blocked by ${waits.join(', ')}` : ''}`;
+  };
   const lines = ['# Plan the next steps toward the goal', '', '## The goal', `${ownerName} wrote:`, (p.meta.goal ?? '').trim(), ''];
   if (g?.note) lines.push('## Your last word on it', ...quoted(g.note), '');
   // What you said on the latest goal ticket that came to you (reached, blocked, stalled) is yours to plan by.
@@ -1113,6 +1165,15 @@ export function planPrompt(ctx: Pick<RunContext, 'project' | 'agent'>): string {
     lines.push('');
   }
   if (other.length) lines.push('## Other open tickets on the board', ...other.map(line), '');
+  const epics = s.epics.filter((e) => epicProgress(e.id, s.items).status !== 'done').slice(0, 12);
+  if (epics.length) {
+    lines.push('## Epics');
+    for (const e of epics) {
+      const pr = epicProgress(e.id, s.items);
+      lines.push(`- ${p.ticket(e)} ${oneLine(e.title)}: ${pr.done} of ${pr.total} ticket${pr.total === 1 ? '' : 's'} done`);
+    }
+    lines.push('');
+  }
   lines.push(
     '## The team',
     ...s.agents.filter((a) => !a.isHuman).map((a) => `- ${a.name} (@${a.id}): ${oneLine(a.role)}${a.status === 'off' ? ', off shift' : ''}${a.id === ctx.agent.id ? ' (you)' : ''}`),
@@ -1122,6 +1183,8 @@ export function planPrompt(ctx: Pick<RunContext, 'project' | 'agent'>): string {
     left
       ? `- Add up to ${left} ticket${left === 1 ? '' : 's'} with create_ticket: each one desk's next concrete piece of work, not already on the board, small enough to finish in one go.`
       : '- The open goal tickets are at the cap: add none this time.',
+    '- Tickets that belong together go under one epic: pass its key as epic. For a new bigger piece of work, make the epic first with create_epic.',
+    '- When one ticket needs another done first, pass the key of that other ticket in blocked_by. Autopilot starts it only once that one is done. Leave it out when the work can start now.',
     '- Do not do the work yourself here.',
     '- Then call goal_status once: on-track, reached, or blocked.',
   );
@@ -1405,6 +1468,8 @@ export function hqTools(ctx: RunContext): HqTools {
         links: [],
         threadId: picked.id,
         handoffFrom: ctx.agent.id,
+        // Work handed over from a ticket in an epic belongs to that epic too.
+        ...(parent?.epicId ? { epicId: parent.epicId } : {}),
         history: [{ ts: now(), text: `Handed over by ${ctx.agent.name}${parent ? ` from ${p.ticket(parent)}` : ''}` }],
       };
       s.items.unshift(item);

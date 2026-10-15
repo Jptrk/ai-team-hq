@@ -67,8 +67,8 @@ export function useProjectActions({ pid, state, notify, after, openTicket, openT
     async (id: string) => {
       if (!pid) return;
       await guard(async () => {
-        await api.run(pid, id);
-        notify('Queued');
+        const out = await api.run(pid, id);
+        notify('held' in out ? `Waiting for its blockers. ${out.held}` : 'Queued');
         await after();
       }, 'Could not start that');
     },
@@ -263,6 +263,70 @@ export function useProjectActions({ pid, state, notify, after, openTicket, openT
     [pid, state, guard, notify, after, nameOf, openTicket],
   );
 
+  const setItemEpic = useCallback(
+    async (itemId: string, epicId: string | null) => {
+      if (!pid || !state) return;
+      await guard(async () => {
+        await api.setItemEpic(pid, itemId, epicId);
+        const epic = epicId ? state.epics.find((e) => e.id === epicId) : undefined;
+        notify(epic ? `Added to ${epic.title}` : 'Taken out of its epic');
+        await after();
+      }, 'Could not change the epic');
+    },
+    [pid, state, guard, notify, after],
+  );
+
+  /** Resolves false when the change was refused (a loop, say); the flag says why. */
+  const setBlockers = useCallback(
+    async (itemId: string, blockedBy: string[]): Promise<boolean> => {
+      if (!pid) return false;
+      let ok = false;
+      await guard(async () => {
+        await api.setBlockers(pid, itemId, blockedBy);
+        ok = true;
+        await after();
+      }, 'Could not change what blocks it');
+      return ok;
+    },
+    [pid, guard, after],
+  );
+
+  /** Throws so the form keeps what you typed. Answers with the new epic. */
+  const createEpic = useCallback(
+    async (title: string, summary: string) => {
+      if (!pid || !state) return null;
+      const epic = await api.createEpic(pid, { title, summary });
+      notify(`${ticketKey(epic, state.project.key)} ${epic.title} created`, { tone: 'success' });
+      await after();
+      return epic;
+    },
+    [pid, state, notify, after],
+  );
+
+  /** Throws so the editor keeps the draft. */
+  const updateEpic = useCallback(
+    async (id: string, body: { title?: string; summary?: string }) => {
+      if (!pid) return;
+      await api.updateEpic(pid, id, body);
+      notify('Epic saved', { tone: 'success' });
+      await after();
+    },
+    [pid, notify, after],
+  );
+
+  const deleteEpic = useCallback(
+    async (id: string, onDone?: () => void) => {
+      if (!pid) return;
+      await guard(async () => {
+        const { tickets } = await api.deleteEpic(pid, id);
+        onDone?.();
+        notify(tickets === 0 ? 'Epic deleted' : tickets === 1 ? 'Epic deleted. Its ticket stays on the board.' : `Epic deleted. Its ${tickets} tickets stay on the board.`);
+        await after();
+      }, 'Could not delete the epic');
+    },
+    [pid, guard, notify, after],
+  );
+
   /** Throws so the notes editor keeps the draft. */
   const saveTeamNotes = useCallback(
     async (body: { teamNotes?: string; notesEveryRun?: boolean; base?: string }) => {
@@ -295,6 +359,11 @@ export function useProjectActions({ pid, state, notify, after, openTicket, openT
     steerHuddle,
     decideProposal,
     saveTeamNotes,
+    setItemEpic,
+    setBlockers,
+    createEpic,
+    updateEpic,
+    deleteEpic,
   };
 }
 

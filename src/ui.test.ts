@@ -1,5 +1,5 @@
 /**
- * UI helpers: markdown previews, hash routes, board columns and filter, top-bar search, report links, what waits on you, editor markdown, add connection, skills links.
+ * UI helpers: markdown previews, hash routes, board columns and filter, epics and blockers, top-bar search, report links, what waits on you, editor markdown, add connection, skills links.
  * Run: npm run test:ui. Pure functions and a headless editor, no browser, no network.
  */
 import assert from 'node:assert/strict';
@@ -19,6 +19,8 @@ import { fitWithin, imageFiles } from './lib/images';
 import { cleanMarkdown, escapeTypedText, looksLikeDiffOrTerminal, looksLikeMarkdown, needsPlainEditor } from './lib/markdownPaste';
 import { attachmentUrl, isAttachmentUrl, isReportUrl, reportFileName, resolveReportHref } from './markdown/reportLinks';
 import { parseRoute, projectPath } from './route';
+import { blockedTitle, blockerChoices, epicByKey, epicTicketChoices, progressParts, progressText, sortEpics } from './components/epics/epicInfo';
+import type { Epic } from '../shared/types';
 import { accountHeld, awaitsSignoff, clockTime, latestDecision, readableInk, autoTodayText, effortLabel, goalLabel, goLiveHint, holdText, pauseLabel, pauseText, pauseTitle, runnerLabel, signoffVerdict, waitingSummary, waitingTitle } from './util';
 import { MCP_PRESETS, presetArgs, presetDefaults } from '../shared/mcpPresets';
 import { buildSpec, safeAuthUrl } from '../shared/mcpSpec';
@@ -191,7 +193,55 @@ test('filterItems: text matches key, title, client and summary', () => {
 test('filterItems: assignee and needs-me combine', () => {
   assert.deepEqual(filterItems(items, { ...EMPTY_FILTER, assignees: ['grace'] }, 'GA').map((i) => i.id), ['w2', 'w3']);
   assert.deepEqual(filterItems(items, { ...EMPTY_FILTER, needsMe: true }, 'GA').map((i) => i.id), ['w1', 'w3']);
-  assert.deepEqual(filterItems(items, { text: '', assignees: ['grace'], needsMe: true }, 'GA').map((i) => i.id), ['w3']);
+  assert.deepEqual(filterItems(items, { ...EMPTY_FILTER, assignees: ['grace'], needsMe: true }, 'GA').map((i) => i.id), ['w3']);
+});
+
+test('filterItems: one epic, or tickets in no epic', () => {
+  const tagged = [item(1, { epicId: 'e1' }), item(2, { epicId: 'e2' }), item(3)];
+  assert.equal(isFiltered({ ...EMPTY_FILTER, epic: 'e1' }), true);
+  assert.deepEqual(filterItems(tagged, { ...EMPTY_FILTER, epic: 'e1' }, 'GA').map((i) => i.id), ['w1']);
+  assert.deepEqual(filterItems(tagged, { ...EMPTY_FILTER, epic: 'none' }, 'GA').map((i) => i.id), ['w3']);
+  assert.equal(filterItems(tagged, EMPTY_FILTER, 'GA').length, 3);
+});
+
+// ---------- epics and blockers ----------
+const epic = (n: number, title: string): Epic => ({ id: `ep${n}`, number: n, title, summary: '', color: '#8a5fb8', from: 'you', createdAt: '2026-10-15T00:00:00Z' });
+test('epics: the Epics view has its own route, and an epic opens by its key like a ticket', () => {
+  assert.equal((parseRoute('#/p/g/epics') as { view: string }).view, 'epics');
+  const r = parseRoute(`#${projectPath('g', 'epics', { ticket: 'GA-14' })}`);
+  assert.deepEqual([(r as { view: string }).view, (r as { ticket?: string }).ticket], ['epics', 'GA-14']);
+  const epics = [epic(14, 'Checkout'), epic(20, 'Onboarding')];
+  assert.equal(epicByKey(epics, 'GA-14', 'GA')?.title, 'Checkout');
+  assert.equal(epicByKey(epics, 'ep20', 'GA')?.title, 'Onboarding');
+  assert.equal(epicByKey(epics, 'GA-15', 'GA'), undefined);
+});
+test('epics: open ones first, newest first; progress in words and as bar parts that add up', () => {
+  const epics = [epic(14, 'Old open'), epic(20, 'Done'), epic(22, 'New open')];
+  const tickets = [item(1, { epicId: 'ep20', status: 'done' }), item(2, { epicId: 'ep14', status: 'in-progress' }), item(3, { epicId: 'ep14' }), item(4, { epicId: 'ep14', status: 'done' })];
+  assert.deepEqual(sortEpics(epics, tickets).map((r) => r.epic.title), ['New open', 'Old open', 'Done']);
+  const p14 = sortEpics(epics, tickets)[1].progress;
+  assert.equal(progressText(p14), '1 of 3 done');
+  assert.deepEqual(progressParts(p14), { done: 33, active: 33, todo: 34 });
+  assert.equal(progressText({ total: 0, done: 0 }), 'No tickets yet');
+  assert.deepEqual(progressParts({ total: 0, done: 0, active: 0 }), { done: 0, active: 0, todo: 0 });
+  assert.deepEqual(progressParts({ total: 3, done: 2, active: 1 }), { done: 67, active: 33, todo: 0 });
+  assert.deepEqual(epicTicketChoices('ep14', tickets).map((i) => i.id), [], 'only tickets not done and not in it');
+  assert.deepEqual(epicTicketChoices('ep20', tickets).map((i) => i.id), ['w2', 'w3']);
+});
+test('blockers: the Blocked tag names what is not done; choices leave out itself, done ones and loops', () => {
+  const a = item(1, { status: 'in-progress' });
+  const b = item(2, { blockedBy: ['w1', 'w4'] });
+  const c = item(3, { blockedBy: ['w2'] });
+  const d = item(4, { status: 'done' });
+  const all = [a, b, c, d];
+  assert.equal(blockedTitle(b, all, 'GA'), 'Blocked by GA-1: it starts once that is done');
+  assert.equal(blockedTitle(item(5, { blockedBy: ['w1', 'w3'] }), all, 'GA'), 'Blocked by GA-1 and GA-3: it starts once they are done');
+  assert.equal(blockedTitle({ ...b, status: 'done' }, all, 'GA'), null, 'a done ticket waits for nothing');
+  assert.equal(blockedTitle(a, all, 'GA'), null);
+  assert.deepEqual(blockerChoices(a, all).map((i) => i.id), [], 'GA-2 and GA-3 wait on GA-1 already; GA-4 is done');
+  assert.deepEqual(blockerChoices(c, all).map((i) => i.id), ['w1']);
+  assert.equal(holdText({ reason: 'manual', why: 'blocked' }), 'Your start waits for the tickets this one is blocked by. It starts by itself once they are done.');
+  assert.equal(holdText({ reason: 'handoff', why: 'blocked' }), 'The hand-off waits for the tickets this one is blocked by. It starts by itself once they are done.');
 });
 
 // ---------- search ----------

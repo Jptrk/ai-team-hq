@@ -126,6 +126,101 @@ export interface WorkItem {
   autoSkip?: { at: string; why: string };
   /** Made by the lead in Goal mode. */
   origin?: 'goal';
+  /** The epic it belongs to (State.epics), if any. */
+  epicId?: string;
+  /** Tickets (ids) that must be done before a desk starts this one. Autopilot skips it until then; other starts wait on it. */
+  blockedBy?: string[];
+}
+
+/** A group of tickets toward one bigger piece of work, like a Jira epic. Its status and progress come from its tickets. */
+export interface Epic {
+  id: string;
+  /** Shares the project's ticket numbers, so it shows as GA-14 and never takes a ticket's key. */
+  number: number;
+  title: string;
+  /** What it is for, in markdown. */
+  summary: string;
+  /** Its tag's color, one of EPIC_COLORS. */
+  color: string;
+  /** 'you', or the desk that made it (the lead, planning). */
+  from: string;
+  createdAt: string;
+}
+
+/** Data colors for epic tags, picked in turn. The tag shows the color as a dot, so text contrast never depends on it. */
+export const EPIC_COLORS = ['#8a5fb8', '#2f8f6b', '#d98a2b', '#3b6ea5', '#c9407a', '#6b7f3a', '#b4482f', '#4f8fd6'];
+export const MAX_EPIC_TITLE = 80;
+/** Most tickets one ticket can be blocked by. */
+export const MAX_BLOCKERS = 10;
+
+export type EpicStatus = 'todo' | 'in-progress' | 'done';
+
+export interface EpicProgress {
+  total: number;
+  done: number;
+  /** Started and not done: in progress, in QA, waiting on you. */
+  active: number;
+  todo: number;
+  /** To do until a ticket starts; done once every ticket is (and it has at least one). */
+  status: EpicStatus;
+}
+
+/** An epic's progress, from its tickets. */
+export function epicProgress(epicId: string, items: Pick<WorkItem, 'epicId' | 'status'>[]): EpicProgress {
+  let total = 0;
+  let done = 0;
+  let todo = 0;
+  for (const i of items) {
+    if (i.epicId !== epicId) continue;
+    total++;
+    if (i.status === 'done') done++;
+    else if (i.status === 'todo') todo++;
+  }
+  const active = total - done - todo;
+  const status: EpicStatus = total > 0 && done === total ? 'done' : done + active > 0 ? 'in-progress' : 'todo';
+  return { total, done, active, todo, status };
+}
+
+/** The tickets blocking this one that are not done yet, in the order they were added. A blocker that is gone blocks nothing. */
+export function openBlockers<T extends Pick<WorkItem, 'id' | 'status'>>(item: Pick<WorkItem, 'blockedBy'>, items: T[]): T[] {
+  if (!item.blockedBy?.length) return [];
+  return item.blockedBy.map((id) => items.find((i) => i.id === id)).filter((b): b is T => Boolean(b) && b!.status !== 'done');
+}
+
+/** The tickets this one blocks: they list it in their blockedBy. */
+export function blockedByThis<T extends Pick<WorkItem, 'blockedBy'>>(itemId: string, items: T[]): T[] {
+  return items.filter((i) => i.blockedBy?.includes(itemId));
+}
+
+/**
+ * Why `item` can't be blocked by these tickets, or null: itself, a ticket that is not there, too many, or a loop (one
+ * of them already waits on this ticket, directly or through others). ref names a ticket in the answer, e.g. GA-12.
+ */
+export function blockerProblem(
+  itemId: string,
+  blockedBy: string[],
+  items: Pick<WorkItem, 'id' | 'blockedBy' | 'number'>[],
+  ref: (i: Pick<WorkItem, 'id' | 'number'>) => string,
+): string | null {
+  if (blockedBy.length > MAX_BLOCKERS) return `A ticket can be blocked by at most ${MAX_BLOCKERS} tickets.`;
+  const byId = new Map(items.map((i) => [i.id, i]));
+  for (const id of blockedBy) {
+    if (id === itemId) return 'A ticket cannot block itself.';
+    const blocker = byId.get(id);
+    if (!blocker) return 'That ticket is not on this project.';
+    // Walk what the blocker waits on: reaching this ticket means a loop, and neither could ever start.
+    const seen = new Set<string>();
+    const stack = [...(blocker.blockedBy ?? [])];
+    while (stack.length) {
+      const next = stack.pop()!;
+      // Done tickets count too: one moved back to work would be stuck in the loop.
+      if (next === itemId) return `${ref(blocker)} already waits on this ticket (or on a ticket that does), so it can't block it too: that would make a loop.`;
+      if (seen.has(next)) continue;
+      seen.add(next);
+      stack.push(...(byId.get(next)?.blockedBy ?? []));
+    }
+  }
+  return null;
 }
 
 /** Why automatic work can't start now. paused: you; usage / account: the project's model refused; halted: Autopilot failed 3 times in a row; runs / usd: the project's daily limit. */
@@ -147,7 +242,8 @@ export interface Hold {
 export interface AutoHold {
   reason: RunReason;
   at: string;
-  why: HoldKind | 'restart' | 'login';
+  /** blocked: tickets it is blocked by are not done yet (WorkItem.blockedBy); it starts once they are. */
+  why: HoldKind | 'restart' | 'login' | 'blocked';
   /** Times a restart already cut this start off. A second time, it is skipped instead. */
   restarts?: number;
   /**
@@ -456,6 +552,8 @@ export interface State {
   company: Company;
   agents: Agent[];
   items: WorkItem[];
+  /** Groups of tickets. Newest first. */
+  epics: Epic[];
   instructions: Instruction[];
   activity: Activity[];
   runs: Run[];

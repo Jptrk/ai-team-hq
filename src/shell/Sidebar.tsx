@@ -1,4 +1,4 @@
-import { Building2, FolderOpen, Inbox, MessagesSquare, NotebookPen, Plug, Plus, Presentation, Settings, Sparkles, SquareKanban, UserRound, Users } from 'lucide-react';
+import { Building2, FolderOpen, Inbox, MessagesSquare, NotebookPen, Plug, Plus, Presentation, Settings, Sparkles, SquareKanban, UserRound, Users, Zap } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { ProjectSummary } from '../../shared/types';
 import { ProjectSwitcher } from '../components/ProjectSwitcher';
@@ -21,6 +21,7 @@ const NAV: { view: ViewId; label: string; Icon: typeof Inbox }[] = [
   { view: 'needs-you', label: 'Needs you', Icon: Inbox },
   { view: 'chat', label: 'Chat', Icon: MessagesSquare },
   { view: 'board', label: 'Board', Icon: SquareKanban },
+  { view: 'epics', label: 'Epics', Icon: Zap },
   { view: 'huddles', label: 'Huddles', Icon: Presentation },
   { view: 'team', label: 'Team', Icon: Users },
   { view: 'office', label: 'Office', Icon: Building2 },

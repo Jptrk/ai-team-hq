@@ -7,8 +7,15 @@ export function clockTime(iso: string, nowMs = Date.now()): string {
   return d.toDateString() === new Date(nowMs).toDateString() ? time : `${d.toLocaleDateString(undefined, { weekday: 'short' })} ${time}`;
 }
 
-const HOLD_START: Partial<Record<RunReason, string>> = { handoff: 'The hand-off', qa: 'The QA check', 'qa-fail': 'The fix after QA', auto: "Autopilot's start" };
-const HOLD_WHY: Record<Exclude<AutoHold['why'], 'restart' | 'login'>, string> = {
+const HOLD_START: Partial<Record<RunReason, string>> = {
+  handoff: 'The hand-off',
+  qa: 'The QA check',
+  'qa-fail': 'The fix after QA',
+  auto: "Autopilot's start",
+  manual: 'Your start',
+  instruction: 'Your instruction',
+};
+const HOLD_WHY: Record<Exclude<AutoHold['why'], 'restart' | 'login' | 'blocked'>, string> = {
   paused: 'HQ is paused',
   usage: 'a usage limit was reached',
   account: 'a login reported an account problem',
@@ -34,6 +41,7 @@ export function holdText(h: Pick<AutoHold, 'reason' | 'why'>): string {
   const what = HOLD_START[h.reason] ?? 'A run';
   if (h.why === 'restart') return `${what} was cut off by a server restart. It starts again by itself.`;
   if (h.why === 'login') return `${what} waits: HQ has no login to run desks on. It starts by itself once HQ is live.`;
+  if (h.why === 'blocked') return `${what} waits for the tickets this one is blocked by. It starts by itself once they are done.`;
   return `${what} waits: ${HOLD_WHY[h.why]}. It starts by itself once that clears.`;
 }
 

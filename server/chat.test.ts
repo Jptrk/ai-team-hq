@@ -56,6 +56,7 @@ function fresh(): State {
       desk('ivy', 'Ivy', { status: 'off' }),
     ],
     items: [],
+    epics: [],
     instructions: [],
     activity: [],
     runs: [],

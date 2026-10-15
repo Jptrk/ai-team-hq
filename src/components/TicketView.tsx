@@ -1,4 +1,4 @@
-import { Check, ChevronDown, CirclePause, Link as LinkIcon, MessagesSquare, Pencil, Play, X } from 'lucide-react';
+import { Ban, Check, ChevronDown, CirclePause, Link as LinkIcon, MessagesSquare, Pencil, Play, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { canEditDescription, hasQa, MAX_DESCRIPTION, signoffOn, type Decision, type ItemStatus, type StateResponse, type WorkItem } from '../../shared/types';
 import { TextEditor } from '../editor/TextEditor';
@@ -17,6 +17,9 @@ import { DecisionBar } from './DecisionBar';
 import { ProjectAvatar } from './ProjectAvatar';
 import { ReportList } from './ReportList';
 import { TicketComments, useDescriptionImages } from './TicketComments';
+import { blockedTitle } from './epics/epicInfo';
+import { EpicTag } from './epics/EpicTag';
+import { TicketLinks } from './epics/TicketLinks';
 
 interface Props {
   item: WorkItem;
@@ -33,6 +36,12 @@ interface Props {
   onEditDescription: (itemId: string, summary: string) => Promise<void>;
   onRun: (id: string) => Promise<void>;
   onMove: (id: string, status: ItemStatus) => Promise<void>;
+  /** An epic's id, or null for none. */
+  onSetEpic: (id: string, epicId: string | null) => Promise<void>;
+  /** The whole list of blockers. Resolves false when it was refused. */
+  onSetBlockers: (id: string, blockedBy: string[]) => Promise<boolean>;
+  /** Opens a ticket or an epic by its key. */
+  onOpen: (key: string) => void;
   onOpenAgent: (id: string) => void;
   onOpenThread: (id: string) => void;
   onDiscuss: (itemId: string) => void;
@@ -192,7 +201,7 @@ function Description({ item, onEdit, onComment, onFiles }: { item: WorkItem; onE
   );
 }
 
-export function TicketView({ item, state, live, onClose, onDecide, onComment, onAttach, onEditDescription, onRun, onMove, onOpenAgent, onOpenThread, onDiscuss }: Props) {
+export function TicketView({ item, state, live, onClose, onDecide, onComment, onAttach, onEditDescription, onRun, onMove, onSetEpic, onSetBlockers, onOpen, onOpenAgent, onOpenThread, onDiscuss }: Props) {
   const key = ticketKey(item, state.project.key);
   const agents = state.agents;
   const assignee = agentById(agents, item.assignee);
@@ -216,6 +225,19 @@ export function TicketView({ item, state, live, onClose, onDecide, onComment, on
   const desc = useDescriptionImages(pid, item.id, onAttach);
   const ask = latestDecision(item);
   const commentCount = item.comments?.length ?? 0;
+  const epics = state.epics ?? [];
+  const epic = item.epicId ? epics.find((e) => e.id === item.epicId) : undefined;
+  const blocked = blockedTitle(item, state.items, state.project.key);
+  // The epic you just picked, until the board catches up, so the picker does not jump back while it saves.
+  const [epicPick, setEpicPick] = useState<string | null>(null);
+  const pickEpic = async (epicId: string) => {
+    setEpicPick(epicId);
+    try {
+      await onSetEpic(item.id, epicId || null);
+    } finally {
+      setEpicPick(null);
+    }
+  };
 
   const copyLink = async () => {
     try {
@@ -267,6 +289,7 @@ export function TicketView({ item, state, live, onClose, onDecide, onComment, on
         <h2 className="panel-title" tabIndex={-1} data-drawer-title>
           {item.title}
         </h2>
+        {epic && <EpicTag epic={epic} projectKey={state.project.key} onOpen={onOpen} />}
 
         <div className="ticket-actions">
           <StatusMenu item={item} onMove={onMove} qa={qaProject} signoff={signoff} />
@@ -287,6 +310,12 @@ export function TicketView({ item, state, live, onClose, onDecide, onComment, on
             </button>
           )}
         </div>
+        {/* A start waiting for its blockers says so in its own banner, below. */}
+        {blocked && item.autoHold?.why !== 'blocked' && (
+          <p className="banner hold-note blocked-note">
+            <Ban size={15} aria-hidden /> {blocked}. Autopilot passes it over until then.
+          </p>
+        )}
         {item.autoHold && (
           <p className="banner warning hold-note">
             <CirclePause size={15} aria-hidden /> {holdText(item.autoHold)}
@@ -335,6 +364,8 @@ export function TicketView({ item, state, live, onClose, onDecide, onComment, on
               <AttachmentTray att={desc.att} />
               {desc.error && <p className="field-hint bad">{desc.error}</p>}
             </section>
+
+            <TicketLinks item={item} items={state.items} agents={agents} projectKey={state.project.key} onOpen={onOpen} onSetBlockers={onSetBlockers} />
 
             <ReportList pid={pid} item={item} agents={agents} />
 
@@ -413,6 +444,20 @@ export function TicketView({ item, state, live, onClose, onDecide, onComment, on
                   </dd>
                 </>
               )}
+              <dt>
+                <label htmlFor={`epic-${item.id}`}>Epic</label>
+              </dt>
+              <dd>
+                <select id={`epic-${item.id}`} className="input epic-select" value={epicPick ?? item.epicId ?? ''} disabled={epicPick !== null} onChange={(e) => void pickEpic(e.target.value)}>
+                  <option value="">None</option>
+                  {epics.map((e) => (
+                    <option key={e.id} value={e.id}>
+                      {e.title}
+                    </option>
+                  ))}
+                </select>
+                {!epics.length && <span className="field-hint">Make one on the Epics page.</span>}
+              </dd>
               <dt>Type</dt>
               <dd className="with-icon">
                 <TypeIcon kind={item.kind} /> {TYPE_LABEL[item.kind]}

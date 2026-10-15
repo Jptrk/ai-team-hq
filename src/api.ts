@@ -14,6 +14,7 @@ import type {
   McpSource,
   Decision,
   EffortLevel,
+  Epic,
   Huddle,
   HuddleKind,
   HuddleProposal,
@@ -180,8 +181,17 @@ export const api = {
     return (await res.json()) as Attachment;
   },
   move: (pid: string, id: string, status: ItemStatus) => request<WorkItem>(`${pp(pid)}/items/${id}`, json('PATCH', { status })),
+  /** Puts the ticket in an epic (its id), or in none (null). */
+  setItemEpic: (pid: string, id: string, epic: string | null) => request<WorkItem>(`${pp(pid)}/items/${id}`, json('PATCH', { epic })),
+  /** The whole list of tickets (ids) that must be done before this one starts. A loop is refused. */
+  setBlockers: (pid: string, id: string, blockedBy: string[]) => request<WorkItem>(`${pp(pid)}/items/${id}`, json('PATCH', { blockedBy })),
+  createEpic: (pid: string, body: { title: string; summary?: string }) => request<Epic>(`${pp(pid)}/epics`, json('POST', body)),
+  updateEpic: (pid: string, id: string, body: { title?: string; summary?: string }) => request<Epic>(`${pp(pid)}/epics/${encodeURIComponent(id)}`, json('PATCH', body)),
+  /** Its tickets stay on the board, in no epic. */
+  deleteEpic: (pid: string, id: string) => request<{ ok: true; tickets: number }>(`${pp(pid)}/epics/${encodeURIComponent(id)}`, json('DELETE')),
   editDescription: (pid: string, id: string, summary: string) => request<WorkItem>(`${pp(pid)}/items/${id}`, json('PATCH', { summary })),
-  run: (pid: string, id: string) => request<Run>(`${pp(pid)}/items/${id}/run`, json('POST')),
+  /** A queued run, or held: the ticket waits for the tickets it is blocked by, and starts by itself once they are done. */
+  run: (pid: string, id: string) => request<Run | { held: string }>(`${pp(pid)}/items/${id}/run`, json('POST')),
   cancelRun: (pid: string, id: string) => request<{ ok: true }>(`${pp(pid)}/runs/${id}/cancel`, json('POST')),
   addAgent: (pid: string, body: AgentBody) => request<Agent>(`${pp(pid)}/agents`, json('POST', body)),
   updateAgent: (pid: string, id: string, body: AgentBody) => request<Agent>(`${pp(pid)}/agents/${id}`, json('PATCH', body)),

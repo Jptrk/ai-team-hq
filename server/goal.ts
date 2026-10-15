@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
-import type { Agent, GoalState, GoalStatus, ProjectMeta, State, WorkItem } from '../shared/types';
+import type { Agent, Epic, GoalState, GoalStatus, ProjectMeta, State, WorkItem } from '../shared/types';
+import { MAX_BLOCKERS, openBlockers } from '../shared/types';
+import { createEpic, epicByRef, epicInputProblem, epicTwin, setBlockers, setEpic, ticketByRef } from './epics';
 import { now, today, uid, type Project } from './store';
 
 /**
@@ -41,14 +43,41 @@ export function openGoalTickets(s: State): WorkItem[] {
   return s.items.filter(isOpenGoalTicket);
 }
 
-/** Goal tickets the team can still act on: not waiting on you, owned by a desk that is not off shift. */
-function actionableGoalTickets(s: State): WorkItem[] {
-  return openGoalTickets(s).filter((i) => ACTIONABLE.has(i.status) && !i.autoSkip && s.agents.some((a) => a.id === i.assignee && !a.isHuman && a.status !== 'off'));
+/** A To do ticket that can't start yet: tickets it is blocked by are not done. */
+const isBlocked = (s: State, i: WorkItem) => i.status === 'todo' && openBlockers(i, s.items).length > 0;
+
+/** Waiting on you: a decision, your sign-off, on hold, or left for you by Autopilot. */
+const onYou = (i: WorkItem) => i.status === 'needs-you' || i.status === 'signoff' || i.status === 'held' || Boolean(i.autoSkip);
+
+/**
+ * The ticket gets done without a new plan: it waits on you, or a desk on shift can work it (and, in To do, its own
+ * blockers get done too). One owned by nobody who can work it, or behind such a one, never moves.
+ */
+function moves(s: State, i: WorkItem, seen = new Set<string>()): boolean {
+  if (onYou(i)) return true;
+  if (!ACTIONABLE.has(i.status) || seen.has(i.id)) return false;
+  if (!s.agents.some((a) => a.id === i.assignee && !a.isHuman && a.status !== 'off')) return false;
+  seen.add(i.id);
+  return i.status !== 'todo' || openBlockers(i, s.items).every((b) => moves(s, b, seen));
 }
 
-/** Goal tickets waiting on you: a decision, your sign-off, on hold, or left for you by Autopilot. */
+/** A blocked To do ticket whose blockers get done: work that comes later, not work that is stuck. */
+const waitsOnBlockers = (s: State, i: WorkItem) => isBlocked(s, i) && openBlockers(i, s.items).every((b) => moves(s, b));
+
+/** Goal tickets the team can still act on: not waiting on you or on their blockers, owned by a desk that is not off shift. */
+function actionableGoalTickets(s: State): WorkItem[] {
+  return openGoalTickets(s).filter(
+    (i) => ACTIONABLE.has(i.status) && !i.autoSkip && !isBlocked(s, i) && s.agents.some((a) => a.id === i.assignee && !a.isHuman && a.status !== 'off'),
+  );
+}
+
+/**
+ * Goal tickets waiting on you (a decision, your sign-off, on hold, or left for you by Autopilot), or on blockers that
+ * get done: planned work that comes later, so the lead does not plan around it. One behind a blocker nobody can work
+ * counts as neither, so the lead plans again (and two plans that add nothing come to you as stalled).
+ */
 function waitingGoalTickets(s: State): WorkItem[] {
-  return openGoalTickets(s).filter((i) => i.status === 'needs-you' || i.status === 'signoff' || i.status === 'held' || Boolean(i.autoSkip));
+  return openGoalTickets(s).filter((i) => onYou(i) || waitsOnBlockers(s, i));
 }
 
 /** The desk that plans: the lead, when there is one on shift. */
@@ -97,10 +126,17 @@ const titleKey = (t: string) =>
     .replace(/[^\p{L}\p{N}]+/gu, ' ')
     .trim();
 
+/** New epics one planning run may make. */
+export const GOAL_EPICS_PER_PLAN = 2;
+
 export interface GoalTicketArgs {
   to: string;
   title: string;
   brief: string;
+  /** An epic's key (GA-14) or title to file it under. */
+  epic?: string;
+  /** Keys of tickets that must be done before it starts (GA-12), tickets planned earlier in the same run included. */
+  blocked_by?: string[];
 }
 
 /**
@@ -123,6 +159,20 @@ export function createGoalTicket(p: Project, leadId: string, args: GoalTicketArg
   const key = titleKey(args.title);
   const twin = open.find((i) => titleKey(i.title) === key);
   if (twin) return `${p.ticket(twin)} "${twin.title}" is already open for that. Plan something else, or stop.`;
+  // The epic and the blockers are checked before anything is made, so a bad one makes no ticket.
+  const epic = args.epic?.trim() ? epicByRef(p, args.epic) : undefined;
+  if (args.epic?.trim() && !epic) {
+    const known = s.epics.slice(0, 10).map((e) => `${p.ticket(e)} "${e.title}"`);
+    return `No epic "${args.epic}". ${known.length ? `Epics: ${known.join(', ')}.` : 'There are none yet.'} Make one with create_epic first, or leave epic out.`;
+  }
+  const blockers: WorkItem[] = [];
+  for (const ref of args.blocked_by ?? []) {
+    if (!ref.trim()) continue;
+    const b = ticketByRef(p, ref);
+    if (!b) return `No ticket "${ref}" to be blocked by. Use a ticket key from the board, like ${p.meta.key}-12.`;
+    if (!blockers.includes(b)) blockers.push(b);
+  }
+  if (blockers.length > MAX_BLOCKERS) return `A ticket can be blocked by at most ${MAX_BLOCKERS} tickets.`;
   const lead = s.agents.find((a) => a.id === leadId);
   const item: WorkItem = {
     id: uid('wi'),
@@ -140,8 +190,26 @@ export function createGoalTicket(p: Project, leadId: string, args: GoalTicketArg
     origin: 'goal',
   };
   s.items.unshift(item);
+  const by = lead?.name ?? 'the lead';
+  if (epic) setEpic(p, item, epic, by);
+  // A new ticket blocks nothing yet, so its blockers can't make a loop.
+  if (blockers.length) setBlockers(p, item, blockers.map((b) => b.id), by);
   p.log(leadId, `Planned ${p.ticket(item)} "${item.title}" for ${desk.name}${desk.id === leadId ? ' (own desk)' : ''}`);
   return item;
+}
+
+/**
+ * An epic the lead makes while planning, to group the goal tickets it plans. made: epics this planning run made so
+ * far. An epic of the same title is not made twice: its key comes back instead. A string is why it was refused, in
+ * words for the lead. Exported for tests.
+ */
+export function createGoalEpic(p: Project, leadId: string, args: { title: string; brief?: string }, made: number): { epic: Epic; existed: boolean } | string {
+  const twin = epicTwin(p.state, args.title);
+  if (twin) return { epic: twin, existed: true };
+  if (made >= GOAL_EPICS_PER_PLAN) return `You already made ${GOAL_EPICS_PER_PLAN} epics this time. File tickets under one of them.`;
+  const problem = epicInputProblem({ title: args.title, summary: args.brief ?? '' }, true);
+  if (problem) return problem;
+  return { epic: createEpic(p, leadId, { title: args.title, summary: args.brief }), existed: false };
 }
 
 const STATUS_TITLE: Record<Exclude<GoalStatus, 'on-track'>, string> = {

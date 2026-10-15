@@ -1,0 +1,231 @@
+@layer views {
+  /* ---------- epics: the tag on a card or ticket, the Epics page, the epic modal ---------- */
+
+  /* An epic's color only ever shows as a dot, so its text reads in both themes whatever the color. */
+  .epic-dot {
+    flex: none;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+  }
+  .epic-dot.lg {
+    width: 10px;
+    height: 10px;
+  }
+  .panel-title .epic-dot {
+    vertical-align: middle;
+    margin-right: 4px;
+  }
+  .epic-icon {
+    color: var(--accent-text);
+  }
+  .epic-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    align-self: flex-start;
+    max-width: 100%;
+    padding: 1px 8px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface-sunken);
+    color: var(--text-subtle);
+    font-size: var(--fs-xs);
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .epic-tag:hover {
+    border-color: var(--border-strong);
+    color: var(--text);
+  }
+  .epic-tag-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* In the ticket modal the tag sits under the title. */
+  .panel-title + .epic-tag {
+    margin: -6px 0 12px;
+  }
+  .bcard .epic-tag {
+    margin-top: -4px;
+  }
+
+  /* A ticket waiting for tickets that are not done yet. */
+  .blocked-chip {
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-size: 10px;
+    background: var(--danger-subtle);
+    border-color: var(--danger-border);
+    color: var(--danger-text);
+  }
+  .blocked-note {
+    color: var(--danger-text);
+  }
+
+  .epic-filter {
+    width: auto;
+    max-width: 200px;
+    height: 32px;
+    padding-top: 0;
+    padding-bottom: 0;
+    font-size: var(--fs-sm);
+  }
+  .epic-filter.on {
+    border-color: var(--accent);
+  }
+  .epic-select {
+    padding: 3px 6px;
+    font-size: var(--fs-sm);
+  }
+
+  /* Linked tickets: what blocks a ticket, what it blocks, an epic's tickets. */
+  .link-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface-raised);
+  }
+  .link-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 36px;
+    padding: 4px 6px 4px 10px;
+  }
+  .link-row + .link-row {
+    border-top: 1px solid var(--border);
+  }
+  .link-row-title {
+    flex: 1;
+    min-width: 0;
+    border: 0;
+    padding: 0;
+    background: none;
+    color: var(--text);
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .link-row-title:hover {
+    color: var(--accent-text);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+  .link-row.is-done .link-row-title {
+    color: var(--text-subtle);
+    text-decoration: line-through;
+  }
+  .link-add {
+    display: block;
+    max-width: 420px;
+  }
+  .link-add .input {
+    font-size: var(--fs-sm);
+  }
+  .section-label.link-sub {
+    margin-top: 8px;
+  }
+
+  /* An epic's progress: done, then in progress, on a to-do track. */
+  .epic-progress {
+    display: flex;
+    height: 8px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: var(--surface-selected);
+    margin-bottom: 18px;
+  }
+  .epic-progress.compact {
+    height: 6px;
+    margin: 0;
+    width: 100%;
+  }
+  .epic-progress-done {
+    background: var(--success-bold);
+  }
+  .epic-progress-active {
+    background: var(--info-bold);
+  }
+
+  .epic-edit {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 14px;
+  }
+  .epic-delete {
+    align-self: flex-start;
+    color: var(--danger-text);
+  }
+
+  /* The Epics page. */
+  .epic-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--surface-raised);
+  }
+  .epic-row {
+    display: grid;
+    grid-template-columns: auto auto minmax(0, 1fr) auto minmax(140px, 220px);
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+  }
+  .epic-row + .epic-row {
+    border-top: 1px solid var(--border);
+  }
+  .epic-row-title {
+    min-width: 0;
+    border: 0;
+    padding: 0;
+    background: none;
+    color: var(--text);
+    font-weight: 600;
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .epic-row-title:hover {
+    color: var(--accent-text);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+  .epic-row.is-done .epic-row-title {
+    color: var(--text-subtle);
+  }
+  .epic-row-progress {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+  }
+  @media (max-width: 719px) {
+    .epic-row {
+      grid-template-columns: auto auto minmax(0, 1fr);
+    }
+    .epic-row > .lozenge {
+      grid-column: 2;
+    }
+    .epic-row-progress {
+      grid-column: 3;
+    }
+  }
+}

@@ -1,6 +1,7 @@
 import type { Agent, AutoState, AutoStatus, Hold, PauseInfo, ProjectMeta, Run, RunReason, State, Thread, WorkItem } from '../shared/types';
-import { autoLimitsOf, localDay, projectProvider, PROVIDERS, type Provider } from '../shared/types';
+import { autoLimitsOf, localDay, openBlockers, projectProvider, PROVIDERS, type Provider } from '../shared/types';
 import { clearWaiting, note } from './chat';
+import { waitsForBlockers } from './epics';
 import { goalStatusOf } from './goal';
 import type { UsageLimit } from './runner/watch';
 import { settings, type UsageHold } from './settings';
@@ -161,8 +162,10 @@ const START_WORDS: Partial<Record<RunReason, string>> = {
   auto: "Autopilot's start",
 };
 
-/** What a start is held for: a gate (Hold), or login while HQ is idle without a Claude login to run on. */
-export type HeldFor = Pick<Hold, 'text'> & { kind: Hold['kind'] | 'login' };
+/** What HQ holds a start or a chat wake for: a gate (Hold), or login while HQ is idle without a Claude login to run on. */
+export type HqHold = Pick<Hold, 'text'> & { kind: Hold['kind'] | 'login' };
+/** What a start is held for: HQ (HqHold), or blocked: tickets its ticket is blocked by are not done. */
+export type HeldFor = HqHold | (Pick<Hold, 'text'> & { kind: 'blocked' });
 
 /** A hold's words inside a sentence: a model's limit texts are sentences of their own, so their full stop goes. */
 export function holdWords(hold: Pick<Hold, 'text'>): string {
@@ -183,7 +186,7 @@ export function holdItem(item: WorkItem, reason: RunReason, hold: HeldFor, resta
 }
 
 /** Hold a chat wake. The thread says why it waits, once per desk per thread. A desk mid-reply here keeps showing as replying. */
-export function holdWake(p: Project, t: Thread, agentId: string, hold: HeldFor, restarts?: number, mine = false): void {
+export function holdWake(p: Project, t: Thread, agentId: string, hold: HqHold, restarts?: number, mine = false): void {
   const s = p.state;
   const replying = s.runs.some((r) => r.status === 'running' && r.reason === 'message' && r.threadId === t.id && r.agentId === agentId);
   if (!replying) clearWaiting(t, agentId);
@@ -220,18 +223,20 @@ export function freeDesks(s: State): Agent[] {
 
 /**
  * Autopilot's next starts: each free desk's oldest To do ticket (by number), oldest first across desks, at most
- * slots of them. Not one already held, skipped, or with a run queued. reserved: desks kept free for something else
+ * slots of them. Not one already held, skipped, with a run queued, or blocked by a ticket that is not done. reserved: desks kept free for something else
  * (the lead, when goal planning is due). Exported for tests.
  */
 export function pickStarts(s: State, meta: Pick<ProjectMeta, 'autopilot'>, slots: number, reserved: ReadonlySet<string> = new Set()): { agentId: string; itemId: string }[] {
   if (!meta.autopilot || slots <= 0) return [];
   const queuedFor = new Set(s.runs.filter((r) => r.status === 'queued' && r.itemId).map((r) => r.itemId));
+  const blocked = (i: WorkItem) => openBlockers(i, s.items).length > 0;
   const picks: { agentId: string; itemId: string; number: number }[] = [];
   for (const desk of freeDesks(s)) {
     if (reserved.has(desk.id)) continue;
     let next: WorkItem | undefined;
     for (const i of s.items) {
-      if (i.assignee !== desk.id || i.status !== 'todo' || i.autoHold || i.autoSkip || queuedFor.has(i.id)) continue;
+      // A ticket waiting for its blockers is passed over: the desk takes its next one, and comes back once they are done.
+      if (i.assignee !== desk.id || i.status !== 'todo' || i.autoHold || i.autoSkip || queuedFor.has(i.id) || blocked(i)) continue;
       if (!next || (i.number ?? 0) < (next.number ?? 0)) next = i;
     }
     if (next) picks.push({ agentId: desk.id, itemId: next.id, number: next.number ?? 0 });
@@ -269,7 +274,12 @@ export function resumeProject(p: Project): void {
   p.state.auto.failStreak = 0;
 }
 
-/** Starts and wakes waiting in this project. */
+/**
+ * Starts and wakes waiting in this project for HQ (a Pause, a limit, a login). A start whose ticket is still blocked
+ * by a ticket that is not done isn't counted, whatever it was held for: no Resume starts it.
+ */
 export function heldCount(p: Project): number {
-  return p.state.items.filter((i) => i.autoHold).length + p.state.auto.heldWakes.length;
+  const items = p.state.items;
+  const blocked = (i: WorkItem) => waitsForBlockers(i.autoHold!.reason) && openBlockers(i, items).length > 0;
+  return items.filter((i) => i.autoHold && !blocked(i)).length + p.state.auto.heldWakes.length;
 }

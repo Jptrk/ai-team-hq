@@ -1,16 +1,18 @@
 import { Search, X } from 'lucide-react';
-import type { Agent } from '../../../shared/types';
+import type { Agent, Epic } from '../../../shared/types';
 import { Avatar } from '../../ui/Avatar';
-import { isFiltered, type BoardFilter } from './filter';
+import { EMPTY_FILTER, isFiltered, type BoardFilter } from './filter';
 
 interface Props {
   filter: BoardFilter;
   onChange: (f: BoardFilter) => void;
   /** Desks that own at least one ticket. */
   people: Agent[];
+  /** The project's epics, for the Epic filter. Hidden while there are none. */
+  epics: Epic[];
 }
 
-export function BoardToolbar({ filter, onChange, people }: Props) {
+export function BoardToolbar({ filter, onChange, people, epics }: Props) {
   const toggle = (id: string) =>
     onChange({ ...filter, assignees: filter.assignees.includes(id) ? filter.assignees.filter((a) => a !== id) : [...filter.assignees, id] });
   return (
@@ -27,11 +29,22 @@ export function BoardToolbar({ filter, onChange, people }: Props) {
           </button>
         ))}
       </div>
+      {(epics.length > 0 || filter.epic) && (
+        <select className={`input epic-filter${filter.epic ? ' on' : ''}`} aria-label="Filter by epic" value={filter.epic} onChange={(e) => onChange({ ...filter, epic: e.target.value })}>
+          <option value="">All epics</option>
+          <option value="none">No epic</option>
+          {epics.map((e) => (
+            <option key={e.id} value={e.id}>
+              {e.title}
+            </option>
+          ))}
+        </select>
+      )}
       <button type="button" className="btn btn-outline btn-sm" aria-pressed={filter.needsMe} onClick={() => onChange({ ...filter, needsMe: !filter.needsMe })}>
         Needs me
       </button>
       {isFiltered(filter) && (
-        <button type="button" className="btn btn-ghost btn-sm" onClick={() => onChange({ text: '', assignees: [], needsMe: false })}>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={() => onChange(EMPTY_FILTER)}>
           <X size={13} aria-hidden /> Clear filters
         </button>
       )}

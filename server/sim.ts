@@ -1,5 +1,5 @@
 import type { WorkItem } from '../shared/types';
-import { hasQa, projectProvider, signoffOn } from '../shared/types';
+import { hasQa, openBlockers, projectProvider, signoffOn } from '../shared/types';
 import { leadOf, refreshStatuses, settleInstructions } from './agents';
 import { autoGate, countStart, globalHold, pickStarts } from './autopilot';
 import { createGoalTicket, goalState, planDue, plannerOf, recordGoalStatus } from './goal';
@@ -273,7 +273,8 @@ function tickProject(p: Project): void {
     }
   } else if (Math.random() < 0.35) {
     // Occasionally start a queued item.
-    const next = s.items.find((i) => i.status === 'todo' && s.agents.find((a) => a.id === i.assignee)?.status !== 'off');
+    // Not one waiting for its blockers, as a live desk would not start it.
+    const next = s.items.find((i) => i.status === 'todo' && s.agents.find((a) => a.id === i.assignee)?.status !== 'off' && !openBlockers(i, s.items).length);
     if (next) {
       next.status = 'in-progress';
       next.history.push({ ts: now(), text: 'Started' });

@@ -1,7 +1,9 @@
 import express, { Router, type Response } from 'express';
 import fs from 'node:fs';
 import type { AccountResponse, Attachment, ChatGptResponse, Decision, EffortLevel, ItemStatus, ProjectAccess, ProjectMeta, ProjectSummary, ReportInfo, StateResponse, TeamTemplate, ThreadResponse, WorkItem } from '../shared/types';
-import { canEditDescription, EFFORT_LEVELS, hasQa, isEffortLevel, isProvider, projectProvider, MAX_ATTACHMENTS, MAX_GOAL, MAX_DESCRIPTION, signoffOn } from '../shared/types';
+import { canEditDescription, EFFORT_LEVELS, hasQa, isEffortLevel, isProvider, projectProvider, MAX_ATTACHMENTS, MAX_GOAL, MAX_DESCRIPTION, openBlockers, signoffOn } from '../shared/types';
+import type { Epic } from '../shared/types';
+import { blockerKeys, blockersProblem, createEpic, deleteEpic, epicInputProblem, findEpic, setBlockers, setEpic, updateEpic } from './epics';
 import { acceptInstruction, addAgent, parseSkills, refreshStatuses, removeAgent, settleInstructions } from './agents';
 import { AttachmentError, pickAttachments, resolveAttachment, saveUpload } from './attachments';
 import {
@@ -951,7 +953,9 @@ project.patch('/items/:id', (req, res) => {
   const item = s.items.find((i) => i.id === req.params.id);
   if (!item) return res.status(404).json({ error: 'item not found' });
   const body = (req.body ?? {}) as Record<string, unknown>;
-  if (!('status' in body) && !('summary' in body)) return res.status(400).json({ error: 'Send a status or a summary' });
+  if (!('status' in body) && !('summary' in body) && !('epic' in body) && !('blockedBy' in body)) {
+    return res.status(400).json({ error: 'Send a status, a summary, an epic or blockedBy' });
+  }
 
   // Check everything first, so a request with one bad field changes nothing.
   let nextStatus: ItemStatus | undefined;
@@ -969,6 +973,26 @@ project.patch('/items/:id', (req, res) => {
     nextSummary = body.summary.replace(/\s+$/, '');
     if (nextSummary.length > MAX_DESCRIPTION) return res.status(400).json({ error: `The description can be at most ${MAX_DESCRIPTION} characters` });
   }
+  // epic: an epic's id, or null for none.
+  let nextEpic: Epic | null | undefined;
+  if ('epic' in body) {
+    if (body.epic === null || body.epic === '') nextEpic = null;
+    else if (typeof body.epic !== 'string') return res.status(400).json({ error: 'epic must be an epic id or null' });
+    else {
+      nextEpic = findEpic(s, body.epic) ?? undefined;
+      if (!nextEpic) return res.status(404).json({ error: 'epic not found' });
+    }
+  }
+  // blockedBy: the whole list of tickets (ids) that must be done before this one starts. Loops are refused.
+  let nextBlockers: string[] | undefined;
+  if ('blockedBy' in body) {
+    if (!Array.isArray(body.blockedBy) || body.blockedBy.some((id) => typeof id !== 'string')) return res.status(400).json({ error: 'blockedBy must be a list of ticket ids' });
+    nextBlockers = [...new Set(body.blockedBy as string[])];
+    const problem = blockersProblem(p, item, nextBlockers);
+    if (problem) return res.status(400).json({ error: problem });
+  }
+  if (nextEpic !== undefined) setEpic(p, item, nextEpic, 'you');
+  if (nextBlockers !== undefined) setBlockers(p, item, nextBlockers, 'you');
 
   if (nextSummary !== undefined && nextSummary !== item.summary) {
     item.summary = nextSummary;
@@ -1056,6 +1080,10 @@ project.post('/items/:id/run', (req, res) => {
   if (noModel) return res.status(409).json({ error: noModel });
   // An approved ticket that did not get finished (a failed run) is retried as the approved action.
   const run = kickoff(p, item.id, inQa ? 'qa' : item.status === 'approved' ? 'approved' : 'manual');
+  // Tickets it is blocked by are not done: the start waits on the ticket and begins by itself once they are.
+  if (!run && item.autoHold?.mine && item.autoHold.why === 'blocked') {
+    return res.status(202).json({ held: `${agent.name} starts once ${blockerKeys(p, item)} ${openBlockers(item, p.state.items).length === 1 ? 'is' : 'are'} done.` });
+  }
   if (!run) return res.status(500).json({ error: 'could not queue the run' });
   res.status(202).json(run);
 });
@@ -1065,6 +1093,43 @@ project.post('/runs/:id/cancel', (req, res) => {
   if (!p.state.runs.some((r) => r.id === req.params.id)) return res.status(404).json({ error: 'run not found' });
   if (!cancelRun(String(req.params.id))) return res.status(404).json({ error: 'that run is not running' });
   res.json({ ok: true });
+});
+
+// ---------- epics ----------
+
+/** A new epic: `{ title, summary? }`. Tickets join it from the ticket (PATCH /items/:id with epic) or the epic's page. */
+project.post('/epics', (req, res) => {
+  const p = P(res);
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const problem = epicInputProblem(body, true);
+  if (problem) return res.status(400).json({ error: problem });
+  const epic = createEpic(p, 'you', { title: String(body.title), summary: typeof body.summary === 'string' ? body.summary : '' });
+  p.commit();
+  res.status(201).json(epic);
+});
+
+/** Change an epic's `{ title?, summary? }`. */
+project.patch('/epics/:id', (req, res) => {
+  const p = P(res);
+  const epic = findEpic(p.state, String(req.params.id));
+  if (!epic) return res.status(404).json({ error: 'epic not found' });
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  if (!('title' in body) && !('summary' in body)) return res.status(400).json({ error: 'Send a title or a summary' });
+  const problem = epicInputProblem(body, false);
+  if (problem) return res.status(400).json({ error: problem });
+  updateEpic(p, epic, { ...(typeof body.title === 'string' ? { title: body.title } : {}), ...(typeof body.summary === 'string' ? { summary: body.summary } : {}) });
+  p.commit();
+  res.json(epic);
+});
+
+/** Delete an epic. Its tickets stay on the board, in no epic. */
+project.delete('/epics/:id', (req, res) => {
+  const p = P(res);
+  const epic = findEpic(p.state, String(req.params.id));
+  if (!epic) return res.status(404).json({ error: 'epic not found' });
+  const tickets = deleteEpic(p, epic);
+  p.commit();
+  res.json({ ok: true, tickets });
 });
 
 // ---------- huddles and team notes ----------

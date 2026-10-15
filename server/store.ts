@@ -281,6 +281,22 @@ function cleanSkillDesks(raw: unknown, agents: State['agents']): Record<string, 
   return out;
 }
 
+/**
+ * Epics and blockers as saved, kept to what can hold: an epic that is gone leaves its tickets, and a ticket is blocked
+ * only by other tickets still on the board, each once. A hand edit can't leave a ticket waiting on nothing.
+ */
+function cleanLinks(s: State): void {
+  const epics = new Set(s.epics.map((e) => e.id));
+  const ids = new Set(s.items.map((i) => i.id));
+  for (const item of s.items) {
+    if (item.epicId !== undefined && !epics.has(item.epicId)) delete item.epicId;
+    if (item.blockedBy === undefined) continue;
+    const kept = Array.isArray(item.blockedBy) ? [...new Set(item.blockedBy.filter((id) => typeof id === 'string' && id !== item.id && ids.has(id)))] : [];
+    if (kept.length) item.blockedBy = kept;
+    else delete item.blockedBy;
+  }
+}
+
 /** Fill in fields added over time, and close out anything a restart killed. Exported for tests. */
 export function migrateState(s: State, template?: TeamTemplate): State {
   s.runs ??= [];
@@ -304,6 +320,8 @@ export function migrateState(s: State, template?: TeamTemplate): State {
   s.auto.heldWakes ??= [];
   s.auto.failStreak ??= 0;
   s.auto.usage ??= emptyAutoState().usage;
+  s.epics ??= [];
+  cleanLinks(s);
   // The Office's waiting clock. Before the restart notes below add history, so they don't count as the start.
   stampNeedsYou(s.items, now(), true);
   // A huddle mid-round when the server stopped: it stops too, and Resume picks it up.

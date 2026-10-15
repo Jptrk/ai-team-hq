@@ -307,6 +307,7 @@ export function seed(template: TeamTemplate, opts: SeedOptions): State {
     company: { name: opts.projectName, ownerId: 'you', timezone: 'America/New_York' },
     agents,
     items,
+    epics: [],
     instructions: [],
     runs: [],
     seq,

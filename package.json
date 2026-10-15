@@ -30,7 +30,8 @@
     "test:codex": "tsx server/codex.test.ts",
     "test:idle": "tsx server/idle.test.ts",
     "test:shell": "tsx server/shell.test.ts",
-    "office:sync": "node scripts/office-sync.mjs"
+    "office:sync": "node scripts/office-sync.mjs",
+    "test:epics": "tsx server/epics.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.282",

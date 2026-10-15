@@ -8,18 +8,18 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
  *   #/projects/new                create a project
  *   #/account                     your Claude and ChatGPT accounts: sign in, and whether desks run on them
  *   #/p/<pid>                     Needs you
- *   #/p/<pid>/<view>              chat | board | huddles | team | office | notes
+ *   #/p/<pid>/<view>              chat | board | epics | huddles | team | office | notes
  *   #/p/<pid>/chat/<threadId>     one thread
  *   #/p/<pid>/huddles/<huddleId>  one huddle
  *   #/p/<pid>/notes               team notes
  *   #/p/<pid>/settings            project settings
  *   #/p/<pid>/connections         MCP connections
  *   #/p/<pid>/skills              skills: the library, and which desks have each one here
- *   ...?ticket=GA-12 | ?agent=leo ticket or person modal
+ *   ...?ticket=GA-12 | ?agent=leo ticket or person modal (an epic's key opens the epic: epics share ticket numbers)
  */
 
-export type ViewId = 'needs-you' | 'chat' | 'board' | 'huddles' | 'team' | 'office' | 'notes';
-export const VIEWS: ViewId[] = ['needs-you', 'chat', 'board', 'huddles', 'team', 'office', 'notes'];
+export type ViewId = 'needs-you' | 'chat' | 'board' | 'epics' | 'huddles' | 'team' | 'office' | 'notes';
+export const VIEWS: ViewId[] = ['needs-you', 'chat', 'board', 'epics', 'huddles', 'team', 'office', 'notes'];
 
 export interface PanelRef {
   ticket?: string;

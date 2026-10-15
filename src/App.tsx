@@ -41,8 +41,11 @@ import type { SearchHandle } from './shell/TopBarSearch';
 import { agentById, goLiveHint, pauseLabel, pauseText, ticketKey } from './util';
 import { api } from './api';
 import { AutoBar } from './components/AutoBar';
+import { EpicList, NewEpicModal } from './components/epics/EpicList';
+import { EpicView } from './components/epics/EpicView';
+import { epicByKey } from './components/epics/epicInfo';
 
-const VIEW_TITLE: Record<ViewId, string> = { 'needs-you': 'Needs you', chat: 'Chat', board: 'Board', huddles: 'Huddles', team: 'Team', office: 'Office', notes: 'Team notes' };
+const VIEW_TITLE: Record<ViewId, string> = { 'needs-you': 'Needs you', chat: 'Chat', board: 'Board', epics: 'Epics', huddles: 'Huddles', team: 'Team', office: 'Office', notes: 'Team notes' };
 
 /** loginName and onLogout come from the login gate (src/shell/AuthGate.tsx): App only mounts once you are logged in. */
 export function App({ loginName, onLogout }: { loginName: string; onLogout: () => Promise<void> }) {
@@ -161,6 +164,7 @@ export function App({ loginName, onLogout }: { loginName: string; onLogout: () =
 
   const actions = useProjectActions({ pid, state, notify, after, openTicket, openThread, openHuddle });
   const [huddleSetupOpen, setHuddleSetupOpen] = useState(false);
+  const [newEpicOpen, setNewEpicOpen] = useState(false);
 
   // The "Include team notes" boxes: hidden when there are no notes.
   const teamNotes = useMemo<TeamNotesInfo | null>(
@@ -358,6 +362,7 @@ export function App({ loginName, onLogout }: { loginName: string; onLogout: () =
             <Board
               items={state.items}
               agents={state.agents}
+              epics={state.epics ?? []}
               projectKey={key}
               selectedId={selected?.id}
               onOpen={openTicket}
@@ -366,6 +371,26 @@ export function App({ loginName, onLogout }: { loginName: string; onLogout: () =
               flash={(t) => notify(t)}
               qa={hasQa(state.project.template)}
               signoff={signoffOn(state.project)}
+            />
+          </div>
+        );
+      } else if (view === 'epics') {
+        const newEpic = (
+          <button type="button" className="btn btn-primary" onClick={() => setNewEpicOpen(true)}>
+            New epic
+          </button>
+        );
+        body = (
+          <div className="page">
+            {header((state.epics ?? []).length ? newEpic : undefined)}
+            <EpicList epics={state.epics ?? []} items={state.items} projectKey={key} onOpen={openTicket} onNew={() => setNewEpicOpen(true)} />
+            <NewEpicModal
+              open={newEpicOpen}
+              onClose={() => setNewEpicOpen(false)}
+              onCreate={async (title, summary) => {
+                const epic = await actions.createEpic(title, summary);
+                if (epic) openTicket(ticketKey(epic, key));
+              }}
             />
           </div>
         );
@@ -486,10 +511,24 @@ export function App({ loginName, onLogout }: { loginName: string; onLogout: () =
   if (state && route.kind === 'project') {
     if (panelTicket) {
       const item = state.items.find((i) => ticketKey(i, state.project.key) === panelTicket || i.id === panelTicket);
+      // Epics share ticket numbers, so a key that is no ticket may be an epic.
+      const epic = item ? undefined : epicByKey(state.epics ?? [], panelTicket, state.project.key);
       panelKey = `t-${panelTicket}`;
-      panelLabel = item ? `${panelTicket} ${item.title}` : panelTicket;
+      panelLabel = item ? `${panelTicket} ${item.title}` : epic ? `Epic ${panelTicket} ${epic.title}` : panelTicket;
       returnFocus = item ? `[data-card="${item.id}"] .bcard-title` : undefined;
-      panel = item ? (
+      panel = epic ? (
+        <EpicView
+          key={epic.id}
+          epic={epic}
+          state={state}
+          onClose={closePanel}
+          onOpen={openTicket}
+          onOpenAgent={openAgent}
+          onSetEpic={actions.setItemEpic}
+          onUpdate={actions.updateEpic}
+          onDelete={(id) => actions.deleteEpic(id, closePanel)}
+        />
+      ) : item ? (
         <TicketView
           key={item.id}
           item={item}
@@ -502,6 +541,9 @@ export function App({ loginName, onLogout }: { loginName: string; onLogout: () =
           onEditDescription={actions.editDescription}
           onRun={actions.runItem}
           onMove={actions.move}
+          onSetEpic={actions.setItemEpic}
+          onSetBlockers={actions.setBlockers}
+          onOpen={openTicket}
           onOpenAgent={openAgent}
           onOpenThread={openThread}
           onDiscuss={(id) => {

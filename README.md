@@ -93,7 +93,8 @@ theme toggle and your menu. A left sidebar holds the project switcher and the vi
 | ---- | ---------- |
 | Needs you | An inbox of decisions, tickets ready for sign-off, holds and paused chat threads, with Approve (or Mark done) / Hold / Send back / Instruct on each row |
 | Chat | Thread list and the open thread side by side (one pane under 900px) |
-| Board | To do, In progress, Sign-off, Needs you and Done, plus QA on dev-team projects (see [Sign-off and QA](#sign-off-and-qa)). Drag-and-drop, filters by text, assignee and "Needs me" |
+| Board | To do, In progress, Sign-off, Needs you and Done, plus QA on dev-team projects (see [Sign-off and QA](#sign-off-and-qa)). Drag-and-drop, filters by text, assignee, epic and "Needs me" |
+| Epics | Every epic with its progress; one opens in the ticket modal (see [Epics and blockers](#epics-and-blockers)) |
 | Team | A card per desk; "Add teammate" is the dashed card |
 | Office | The pixel office: where every desk is and what it's doing right now (see [Office](#office)) |
 
@@ -103,7 +104,7 @@ right. Clicking a desk's name inside it switches the modal to that person. The U
 (`#/p/gecom-apps/board?ticket=GA-12`), so reload, Back and shared links land on the same ticket.
 Esc, the X, or a click outside closes it, and focus goes back to the card you opened it from.
 
-Every view has its own URL: `#/p/<project>`, `#/p/<project>/chat`, `/board`, `/team`, `/office`,
+Every view has its own URL: `#/p/<project>`, `#/p/<project>/chat`, `/board`, `/epics`, `/team`, `/office`,
 `/chat/<threadId>`, `/settings`, `/connections`, `/skills`, plus `#/projects`.
 
 Keyboard shortcuts (ignored while you type):
@@ -867,6 +868,45 @@ refused, so the new note isn't lost. Copy your text, press **Cancel**, and edit 
 You can also set `HQ_HUDDLES_PER_DAY` on the Accounts page, under [Limits](#limits-on-the-accounts-page):
 **Huddles per project per day**.
 
+## Epics and blockers
+
+Like Jira: an **epic** groups tickets toward one bigger piece of work, and a ticket can be **blocked by** other tickets
+that must be done first.
+
+### Epics
+
+- **Make one** on the **Epics** page (**New epic**): a title, and what it is for if you like. The lead can make them
+  too, when it plans toward the goal.
+- **Its key** comes from the same numbers as tickets, so an epic is `GA-14` and no ticket ever shares it. The key opens
+  it in the ticket modal (`?ticket=GA-14`), like a ticket.
+- **Tickets join** from the ticket (**Epic** in its details) or from the epic (**Add a ticket**). A ticket is in one
+  epic at most. A hand-off from a ticket in an epic joins the same epic.
+- **On the board** each card shows its epic as a small tag; click it to open the epic. The **Epic** filter shows one
+  epic's tickets, or tickets in no epic.
+- **Progress** comes from its tickets: to do until one starts, in progress, and done once every ticket is done. The bar
+  shows done (green), in progress (blue) and to do. Sign-off and QA count as in progress.
+- **Edit** the title and description in the epic. **Delete epic** keeps its tickets on the board, in no epic, with a
+  line in each ticket's history.
+
+### Blockers
+
+- **Set them** on the ticket, under **Blocked by**: pick the tickets it waits for, or take one off. The ticket also lists
+  what it **Blocks**. HQ refuses a ticket blocking itself, and a loop (`GA-3` waits on `GA-5`, which waits on `GA-3`):
+  neither could ever start. At most 10 per ticket.
+- **Done means done.** A blocker stops blocking when it is Done. With sign-off on, that is when you **Mark done** it, so a
+  chain waits for your sign-off at each step.
+- **What waits.** A card with open blockers shows **Blocked** (hover it for which), and the ticket says so.
+  - **Autopilot** passes a blocked ticket over and starts the desk's next one; it picks the blocked one up once its
+    blockers are done.
+  - **Put … on it**, a hand-off, and a start held for HQ (a Pause, a limit) wait on the ticket instead ("Your start
+    waits for the tickets this one is blocked by") and start by themselves once the blockers are done. A blocker added
+    while a start waits for its turn holds it too. Taking the blocker off lets it go; moving the ticket on drops it, as
+    with any held start. Resume never starts them before their blockers are done, and if HQ is paused once they are,
+    they wait for Resume, like any held start.
+- **What doesn't wait.** Answers to your comments, QA checks, and your decisions on work under way (Approve, Send back,
+  Instruct) run as usual.
+- **Desks see them.** A ticket run's prompt names its epic, what blocks it and what it blocks, with their status.
+
 ## Autopilot, Goal mode and Pause
 
 The team can work on its own, and you can stop it with one button.
@@ -875,7 +915,7 @@ The team can work on its own, and you can stop it with one button.
 
 Turn it on with the **Autopilot** switch on the board (it asks first), or in **Project settings**.
 Then a free desk starts its next To do ticket by itself, oldest first, and goes on to the next one
-when it is done. A desk counts as free when it is not off shift, has nothing queued or running,
+when it is done. A ticket still waiting on its [blockers](#blockers) is passed over until they are done. A desk counts as free when it is not off shift, has nothing queued or running,
 is not in a running huddle, is not on an active ticket, and has fewer than 2 decisions waiting on
 you. Autopilot only fills free run slots (**Desks running at once** under
 [Limits](#limits-on-the-accounts-page), or `HQ_CONCURRENCY`), so it never takes a slot ahead of your
@@ -897,6 +937,10 @@ plans: a short planning run that reads the goal, the board and the team, makes u
 straight into To do (tagged **Goal**, at most 8 open at once), and says where the goal stands.
 Autopilot works through the tickets.
 
+- The lead can group what it plans: `create_epic` makes an [epic](#epics) (at most 2 per plan, never two with the same
+  title), and `create_ticket` takes an `epic` (its key or title) and `blocked_by` (ticket keys, tickets from the same
+  plan too), so work that has to come in order starts in order. A bad key makes no ticket, and the lead is told why.
+
 - The lead plans when the goal is new, when the team has run out of goal work (at most every
   20 minutes), and every 6 hours besides, to add anything missing. Editing the goal starts over.
 - A planning run only reads: no writes, no web, nothing changed through connections. It has its
@@ -905,8 +949,10 @@ Autopilot works through the tickets.
   (Approve marks it done) and planning waits for you. Marking "reached" done ends planning until you
   change the goal; sending it back, or dealing with "blocked", lets the lead plan again. Two plans
   in a row that add nothing while the team has nothing to do also come to you, as **stalled**.
-- While all open goal work waits on you (decisions, sign-off, on hold), the lead waits too. It
-  also never plans while it is in a huddle you started.
+- While all open goal work waits on you (decisions, sign-off, on hold) or on blockers that are getting done, the lead
+  waits too. Goal work behind a blocker nobody can work (its desk is off shift, say) doesn't count, so the lead plans
+  again, and two plans that add nothing come to you as **stalled**. It also never plans while it is in a huddle you
+  started.
 - The board shows the goal with its status (On track, Planning…, Reached?, Blocked, Stalled),
   how many goal tickets are open, and when the lead last planned.
 
@@ -1379,7 +1425,7 @@ chat reply's whole budget ("Reached maximum budget ($1)").
 | Path | What |
 | ---- | ---- |
 | `data/projects.json` | Registry: the founder's name and every project |
-| `data/projects/<id>/db.json` | One project's team, tickets, runs, and activity |
+| `data/projects/<id>/db.json` | One project's team, tickets, epics, runs, and activity |
 | `data/projects/<id>/attachments/` | Images you pasted, named by the server |
 | `workspaces/<id>/<agent>/` | One desk's `ROLE.md`, `memory.md`, `reports/` |
 | `data/skills/` | The skills library and the installed skills (see [Skills](#skills)) |
@@ -1415,6 +1461,7 @@ npm run test:account
 npm run test:codex
 npm run test:idle
 npm run test:shell
+npm run test:epics
 ```
 
 - **`test:guard`** checks what an agent may read and write in its workspace and the linked folder, including names Windows reads as another file (`.git.`, `server.key.`, a `:` stream, a `\\` path). It also checks which MCP tools run freely, need approval, or are refused, and when Bash is refused (shell off, a huddle or a plan, a background command, a delete outside the fence).
@@ -1435,7 +1482,7 @@ npm run test:shell
 - **`test:account`** checks signing in to your Claude account with a stand-in Claude Code: the pages shown (Claude's own sites only), the pasted code (and a code the browser beat to it), cancel and every way a sign-in can end, no token or code in any answer, that a poll never sees a sign-in that worked as signed out, that checks share one Claude Code run and only HQ's own page can force one, how HQ picks sim, live or not live, the switch and the restart hint, and sign-out. Your real login is never touched.
 - **`test:codex`** checks GPT desks with a stand-in Codex: the ChatGPT sign-in on this PC and by device code (OpenAI's own pages only, cancel, sign-out), account, usage windows and model list parsing, the model and effort setting, the desk config that switches Codex's own tools off (also against the pinned Codex's own `features list`, offline, skipped when it isn't installed), the file tools through HQ's fence (reads, writes, protected files, globs, grep, a runaway pattern stopped off the main thread), a ticket run end to end (HQ tools, close-out, no dollar cost, the thread kept and resumed), patch approvals inside and outside the fence (Windows name tricks declined, patches counted toward the cap), a used-up plan holding automatic work in GPT projects only (a Claude project's queued start stays in line; also when the limit comes after the desk closed out), Stop (also before Codex answers `turn/start`, with nothing written after it), the tool-call cap, a turn's end matched by its id, a thread too long for the model dropped, a project whose model can't run (the reason names the switch that is off or the login that is missing; work waits on its ticket with your note, the team's own starts wait at the gate, and it all starts once the model can run; an instruct and a chat message of yours already queued behind a busy desk wait too, with no failed run and no paused thread; a team start never replaces your held start; **Put … on it** is refused with the reason and holds nothing), a status check that must not undo a sign-out, and switching a project's model (refused while desks run; every desk starts a new conversation). Nothing signs in and no model runs.
 - **`test:idle`** checks HQ not live: starts and chat messages you make wait (one note per desk per thread) and begin once HQ is live as your own clicks, with your note and images, past the daily limits and ChatGPT's limit but not a Pause or Claude's limit; a held comment still gets its answer; huddles are refused; `wentLive` survives sign-out and is backfilled from desk runs on disk.
-- **`test:ui`** checks the UI helpers: routes, board columns and filter, search ranking, report link resolution, markdown previews, image sizing, avatar text contrast, and the pause notices (one model's hold, or both at once).
+- **`test:ui`** checks the UI helpers: routes, board columns and filter (by epic too), search ranking, report link resolution, markdown previews, image sizing, avatar text contrast, the pause notices (one model's hold, or both at once), and the epic and blocker helpers (an epic's key, progress, the Blocked tag, which tickets may block another).
 - **`test:office`** checks the office floor:
   - the approved v3 layout exactly, and growth from 1 to 12 desks
   - the design team's route checks: every seat reachable, nothing inside a wall or a table, doorways only through gaps
@@ -1479,6 +1526,7 @@ npm run test:shell
 
   It fetches nothing: a stand-in builds a local fixture where git would clone.
 - **`test:shell`** checks desks' shell: Bash only with the project's Shell on (never in a huddle or a plan; a QA check with the project read-only), what HQ refuses before a command runs (git push in its forms, a `.env` file named anywhere, deletes outside the fence through `rm`, globs, `find`, `xargs`, `git clean`, `git rm`, PowerShell and `cmd`, nested shells, variables and `~`) and what it lets through, the hook that checks Claude's commands, counting and the activity feed, the prompts both models get, the setting, and HQ's Bash tool for GPT desks (finding Git Bash, an environment without HQ's logins, the reply). Where this PC has bash, a few commands really run in a scratch workspace: output, exit code, the working folder, a refusal that never ran, a timeout.
+- **`test:epics`** checks epics and blockers: progress from tickets, open blockers and loops (direct and through others), the epic and blocker routes (an epic takes the next ticket number; a bad field changes nothing; deleting an epic keeps its tickets), cleaning a hand-edited `db.json`, Autopilot passing a blocked ticket over, **Put … on it** and a hand-off waiting and starting once the blockers are done (or dropped when the ticket moves on), comments and QA checks not waiting, a blocker added while a start was queued, the lead waiting while goal work waits on blockers, planning with `create_epic`, `epic` and `blocked_by`, what ticket and planning prompts say, and a hand-off joining its parent's epic.
 - **`test:delete`** checks `delete_file`: files and folders move to the project's trash (nothing overwritten there), only where a desk may write, never protected files or a folder holding one, never a desk's own ROLE.md, memory.md or reports, the per-run and folder-size limits, the ticket history and changed files, and the QA prompt marking a deleted file.
 - **`test:archive`** checks removing a project: archived (board, images, trash and workspaces to `data/archive/`) or deleted for good with nothing left, the Removed projects list (names, dates, sizes, newest first) and deleting from it (only a folder there by its exact name), a link in a workspace removed but never followed (also when sizing), the linked folder untouched, and removing refused while a desk runs, a huddle is going, a connection check or sign-in runs, or for the last project. On Windows, with another program working in a desk's folder: archiving is refused with nothing moved and the board kept, and deleting for good names the held folder, which a new project by the same name never takes over. A removed project's late saves write nothing, also into a new project that took its id.
 - **`test:auto`** checks what the team does on its own, with desks on a fake runner:
@@ -1523,7 +1571,7 @@ login session and answers `401` without one; no other route answers `401`.
 | POST   | /api/auth/login | `{ name, password }`: a new session and its cookie. A wrong name or password is `401` with the same message; after 5 tries in 15 minutes, `429` (tries from this PC and from elsewhere are counted apart, see [Login](#login)) |
 | POST   | /api/auth/logout | Ends this browser's session, if any, and clears the cookie. Always `200` |
 | POST   | /api/auth/password | `{ current, next }`: needs a session. A wrong `current` is `400`, not `401`; a change from another browser that lands meanwhile is `409`, and nothing is saved. Ends your other sessions; this one stays |
-| GET    | /api/meta | includes `runner`: `live` or `sim`, picked when HQ started; `effort`: the level every Claude desk run uses, or null for the model default; `gpt`: GPT desks, `{ optedIn, ready, model, effort }` (may run on the ChatGPT login; opted in and signed in; the model and effort, each null for Codex's default); `paused`: why HQ holds automatic work (you, a usage limit, an account problem), with `provider` (`claude` or `gpt`) when only that model's projects wait, or `holds` (each model's `{ provider, by, until? }`) when both models' do, or null; `held`: starts waiting; `liveReady`: a Claude key or login, or a ChatGPT login GPT desks may use; `claudeReady`: Claude projects' desks can run now (false while their work waits, see [GPT desks](#gpt-desks-your-chatgpt-plan)); `auth`: what Claude desks use, `api-key`, `claude-login` or `none`; `restartToGoLive`: desks may run on your Claude or ChatGPT login, but HQ started in sim; `optedIn`: desks may run on the Claude login; `simByEnv`: `HQ_RUNNER=sim` keeps HQ in sim; `idle`: HQ started not live (no login to run on, no sim) |
+| GET    | /api/meta | includes `runner`: `live` or `sim`, picked when HQ started; `effort`: the level every Claude desk run uses, or null for the model default; `gpt`: GPT desks, `{ optedIn, ready, model, effort }` (may run on the ChatGPT login; opted in and signed in; the model and effort, each null for Codex's default); `paused`: why HQ holds automatic work (you, a usage limit, an account problem), with `provider` (`claude` or `gpt`) when only that model's projects wait, or `holds` (each model's `{ provider, by, until? }`) when both models' do, or null; `held`: starts waiting for HQ (not those still waiting on their ticket's blockers); `liveReady`: a Claude key or login, or a ChatGPT login GPT desks may use; `claudeReady`: Claude projects' desks can run now (false while their work waits, see [GPT desks](#gpt-desks-your-chatgpt-plan)); `auth`: what Claude desks use, `api-key`, `claude-login` or `none`; `restartToGoLive`: desks may run on your Claude or ChatGPT login, but HQ started in sim; `optedIn`: desks may run on the Claude login; `simByEnv`: `HQ_RUNNER=sim` keeps HQ in sim; `idle`: HQ started not live (no login to run on, no sim) |
 | PATCH  | /api/settings | `{ effort?, paused? }`: effort is `low`, `medium`, `high`, `xhigh`, `max`, or null for the model default; `paused: true` pauses everything the team starts on its own, `false` resumes (your Pause first, then a usage hold). For all of HQ; answers with the new meta |
 | GET    | /api/limits | HQ's limits, for every project: each [limit's key](#limits-on-the-accounts-page) to `{ value, source, fallback, fallbackSource }`. `source` is `you` (the Accounts page), `env` or `default`; `fallback` and `fallbackSource` are what it goes back to without yours (`env` or `default`). Times in milliseconds |
 | PATCH  | /api/limits | `{ <key>: number \| null }`, with a JSON content type: a value in the limit's range (times in milliseconds, dollars to the cent), or null to go back to `.env` or the default. An unknown key, a value out of range, or a count that isn't a whole number is `400`, and nothing is saved. Raising `concurrency` starts runs waiting for a slot at once. Answers with every limit, as `GET` |
@@ -1548,15 +1596,18 @@ login session and answers `401` without one; no other route answers `401`.
 | DELETE | /api/projects/:pid | archives it, or 409 with nothing moved while another program has a file of it open; `?forGood=1` deletes it where it is instead and answers `{ left }`: the folders another program held open, relative to HQ's folder. 409 while a desk runs, a huddle is going, or a connection check or sign-in runs, or for the last project |
 | GET    | /api/archive | removed projects in `data/archive/`, newest first: `{ folder, name, key, color, removedAt, bytes }` |
 | DELETE | /api/archive/:folder | deletes that removed project for good, trying a file another program has open again for about a second; 404 for anything not in `data/archive/` by that exact name, 409 when some of it is still open |
-| GET    | /api/projects/:pid/state | includes `office`: what each desk is doing right now (activity, since, who with); `auto`: why the team's own work waits here, today's count against the limits, and the goal's status; `modelProblem`: why this project's model can't run now, or null |
+| GET    | /api/projects/:pid/state | includes `epics` (newest first; a ticket's `epicId` and `blockedBy` are on the ticket); `office`: what each desk is doing right now (activity, since, who with); `auto`: why the team's own work waits here, today's count against the limits, and the goal's status; `modelProblem`: why this project's model can't run now, or null |
 | POST   | /api/projects/:pid/instructions | `{ text, attachments?, includeNotes? }` |
 | POST   | /api/projects/:pid/items/:id/decision | `{ decision, note?, attachments?, includeNotes? }` |
 | POST   | /api/projects/:pid/items/:id/comments | `{ text, attachments?, includeNotes? }`; wakes the owner |
 | POST   | /api/projects/:pid/items/:id/attachments | `{ attachments }`; adds to the description |
 | POST   | /api/projects/:pid/attachments | raw image body; returns the attachment |
 | GET    | /api/projects/:pid/attachments/:file | the image |
-| PATCH  | /api/projects/:pid/items/:id | `{ status?, summary? }`; summary only while To do; status `qa` starts a QA check; `signoff` waits for your sign-off (Approve closes it); `done` tells the desk that handed it over |
-| POST   | /api/projects/:pid/items/:id/run | live only; 409 with `modelProblem` while the project's model can't run (nothing is held) |
+| PATCH  | /api/projects/:pid/items/:id | `{ status?, summary?, epic?, blockedBy? }`; summary only while To do; status `qa` starts a QA check; `signoff` waits for your sign-off (Approve closes it); `done` tells the desk that handed it over; `epic`: an epic's id, or null for none (404 for an unknown one); `blockedBy`: the whole list of ticket ids it waits for, 400 for itself, a ticket not on the project, more than 10, or a loop. A bad field changes nothing |
+| POST   | /api/projects/:pid/items/:id/run | live only; 409 with `modelProblem` while the project's model can't run (nothing is held). 202 with the run, or `{ held }` when tickets it is blocked by are not done: it starts by itself once they are |
+| POST   | /api/projects/:pid/epics | `{ title, summary? }`; 201 with the epic. Its `number` is the next ticket number |
+| PATCH  | /api/projects/:pid/epics/:id | `{ title?, summary? }` |
+| DELETE | /api/projects/:pid/epics/:id | answers `{ ok, tickets }`: its tickets stay on the board, in no epic |
 | POST   | /api/projects/:pid/runs/:id/cancel | |
 | GET    | /api/projects/:pid/agents/:id | |
 | POST   | /api/projects/:pid/agents | `{ name, role, skills?, lead? }` |

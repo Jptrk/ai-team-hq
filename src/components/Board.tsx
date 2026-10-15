@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
-import { boardColumns, type Agent, type ItemStatus, type WorkItem } from '../../shared/types';
+import { boardColumns, type Agent, type Epic, type ItemStatus, type WorkItem } from '../../shared/types';
 import { agentById, ticketKey } from '../util';
 import { BoardCard } from './board/BoardCard';
 import { BoardToolbar } from './board/BoardToolbar';
 import { EMPTY_FILTER, filterItems, isFiltered, type BoardFilter } from './board/filter';
+import { blockedTitle } from './epics/epicInfo';
 
 interface Props {
   items: WorkItem[];
   agents: Agent[];
+  epics: Epic[];
   projectKey: string;
   selectedId?: string;
   onOpen: (key: string) => void;
@@ -21,7 +23,7 @@ interface Props {
   signoff: boolean;
 }
 
-export function Board({ items, agents, projectKey, selectedId, onOpen, onMove, onDragActive, flash, qa, signoff }: Props) {
+export function Board({ items, agents, epics, projectKey, selectedId, onOpen, onMove, onDragActive, flash, qa, signoff }: Props) {
   const columns = useMemo(() => boardColumns(items, { qa, signoff }), [qa, signoff, items]);
   const colOf = (status: ItemStatus) => columns.findIndex((c) => c.statuses.includes(status));
   const [filter, setFilter] = useState<BoardFilter>(EMPTY_FILTER);
@@ -29,6 +31,11 @@ export function Board({ items, agents, projectKey, selectedId, onOpen, onMove, o
   const [dragId, setDragId] = useState<string | null>(null);
   const [over, setOver] = useState<number | null>(null);
   const enterCount = useRef<Record<number, number>>({});
+
+  // The epic you filter by was deleted: show every epic again rather than an empty board.
+  useEffect(() => {
+    if (filter.epic && filter.epic !== 'none' && !epics.some((e) => e.id === filter.epic)) setFilter((f) => ({ ...f, epic: '' }));
+  }, [epics, filter.epic]);
 
   // A drag that ends outside any column (or on a card that re-rendered) still resets.
   useEffect(() => {
@@ -86,7 +93,7 @@ export function Board({ items, agents, projectKey, selectedId, onOpen, onMove, o
 
   return (
     <div className="board-view">
-      <BoardToolbar filter={filter} onChange={setFilter} people={people} />
+      <BoardToolbar filter={filter} onChange={setFilter} people={people} epics={epics} />
       <div className="board">
         {columns.map((col, idx) => {
           const all = shownItems.filter((i) => col.statuses.includes(i.status));
@@ -131,6 +138,8 @@ export function Board({ items, agents, projectKey, selectedId, onOpen, onMove, o
                     item={i}
                     projectKey={projectKey}
                     owner={agentById(agents, i.assignee)}
+                    epic={i.epicId ? epics.find((e) => e.id === i.epicId) : undefined}
+                    blocked={blockedTitle(i, items, projectKey)}
                     selected={i.id === selectedId}
                     dragging={i.id === dragId}
                     onOpen={onOpen}

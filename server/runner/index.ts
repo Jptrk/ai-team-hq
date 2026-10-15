@@ -6,13 +6,14 @@ import { rewindCursor } from '../cursor';
 import { unansweredComment, unansweredImages } from '../comments';
 import { hasClaudeLogin } from '../claudeAuth';
 import { gptOptIn, gptReady, hasChatGptLogin } from '../codexAuth';
-import { autoGate, countCost, countStart, globalHold, heldCount, setModelGate, holdItem, holdWake, holdWords, noteAutoFailure, noteAutoSuccess, pauseInfo, pickStarts, queuedAuto, expiredHolds, usageHoldFrom, type HeldFor } from '../autopilot';
+import { autoGate, countCost, countStart, globalHold, heldCount, setModelGate, holdItem, holdWake, holdWords, noteAutoFailure, noteAutoSuccess, pauseInfo, pickStarts, queuedAuto, expiredHolds, usageHoldFrom, type HeldFor, type HqHold } from '../autopilot';
 import { clearSignoff, qaDeskOf, queuedQaRun, rerouteQa } from '../qa';
 import { setPaused, settings, setUsageHold } from '../settings';
 import { allProjects, now, uid, type Project } from '../store';
 import { claudeRunner, MODEL, runCost } from './claude';
 import { codexRunner, isGptSession } from './codex';
 import { goalState, planDue, plannerOf } from '../goal';
+import { blockedText } from '../epics';
 import { concurrency, enqueue } from './queue';
 import type { AgentRunner, RunHooks, RunInput } from './types';
 import type { UsageLimit } from './watch';
@@ -149,7 +150,7 @@ export function setIdleForTests(on: boolean): void {
 }
 
 /** Idle: what you start waits on its ticket or thread, as held work does, and begins once HQ is live (releaseHolds). */
-const LOGIN_HOLD: HeldFor = { kind: 'login', text: 'HQ has no login to run desks on' };
+const LOGIN_HOLD: HqHold = { kind: 'login', text: 'HQ has no login to run desks on' };
 
 /** Why a run can't start now: idle, or sim. */
 export function notLiveText(): string {
@@ -218,7 +219,7 @@ export function modelProblem(p: Project): string | null {
 }
 
 /** The hold for work in a project whose model can't run: it starts by itself once it can. */
-function modelHold(p: Project): HeldFor | null {
+function modelHold(p: Project): HqHold | null {
   const cause = modelCause(p);
   return cause ? { kind: 'model', text: MODEL_WHY[cause].hold } : null;
 }
@@ -461,6 +462,17 @@ export function kickoff(p: Project, itemId: string, reason: RunReason, note?: st
     p.commit();
     return null;
   }
+  // Tickets it is blocked by are not done: the start waits on the ticket, yours with your note, and begins once they are (releaseHolds).
+  const blocked = blockedText(p, item, reason);
+  if (blocked) {
+    if (opts.auto) holdItem(item, reason, { kind: 'blocked', text: blocked }, opts.restarts, opts.heldAt);
+    else {
+      delete item.autoSkip;
+      holdYours(item, reason, note, images, Boolean(opts.includeNotes), { kind: 'blocked', text: blocked });
+    }
+    p.commit();
+    return null;
+  }
   // One waiting QA check per ticket. A running one is not reused: it may be checking an older round, and its verdict will be refused.
   if (reason === 'qa') {
     const queued = queuedQaRun(s, item.id);
@@ -547,6 +559,13 @@ export function kickoff(p: Project, itemId: string, reason: RunReason, note?: st
       if (noModel) {
         holdYours(liveItem, reason, note, images, Boolean(liveRun.notes), noModel);
         return skip(p, liveRun, `held: ${noModel.text}`);
+      }
+      // A blocker was added while it waited: it waits for that ticket too.
+      const blocked = blockedText(p, liveItem, reason);
+      if (blocked) {
+        if (liveRun.auto) holdItem(liveItem, reason, { kind: 'blocked', text: blocked }, liveRun.restarts);
+        else holdYours(liveItem, reason, note, images, Boolean(liveRun.notes), { kind: 'blocked', text: blocked });
+        return skip(p, liveRun, `held: ${blocked}`);
       }
 
     // The owner is back on it: it is not waiting on your sign-off any more, so Approve starts a run again. A comment answer changes nothing.
@@ -755,6 +774,20 @@ export function holdQueued(p: Project): number {
 const oldestHold = (a: WorkItem, b: WorkItem) => a.autoHold!.at.localeCompare(b.autoHold!.at) || (a.number ?? 0) - (b.number ?? 0);
 
 /**
+ * A held start whose ticket's blockers are still not done stays held, now saying it waits for them, and false once
+ * nothing blocks it (or it is a start that never waits for blockers). A start no longer fitting its ticket is not
+ * kept for its blockers: the release drops it as usual. Changes nothing else.
+ */
+function stillBlocked(p: Project, item: WorkItem, hold: NonNullable<WorkItem['autoHold']>): boolean {
+  if (mootRun(hold.reason, item.status)) return false;
+  if (blockedText(p, item, hold.reason)) {
+    hold.why = 'blocked';
+    return true;
+  }
+  return false;
+}
+
+/**
  * Starts what you gave while HQ was idle, oldest first, as your own clicks: a project's daily limits don't hold them,
  * only HQ's Pause or the project's model's usage or account hold, and then each says that is what it waits for. Starts that no longer
  * fit their ticket are dropped; a comment of yours a later start took the place of is answered after it.
@@ -766,6 +799,12 @@ function releaseYours(p: Project): number {
   let touched = false;
   for (const item of s.items.filter((i) => i.autoHold?.mine).sort(oldestHold)) {
     const hold = item.autoHold!;
+    // Its blockers come first: whatever else holds HQ, it can't start before they are done.
+    const was = hold.why;
+    if (stillBlocked(p, item, hold)) {
+      touched ||= was !== 'blocked';
+      continue;
+    }
     if (gate) {
       touched ||= hold.why !== gate.kind;
       hold.why = gate.kind;
@@ -808,13 +847,26 @@ export function releaseHolds(p: Project): number {
   if (!isLive()) return 0;
   const s = p.state;
   let n = releaseYours(p);
-  if (autoGate(p)) return n;
+  const closed = autoGate(p);
+  if (closed) {
+    // A team start that waited for its blockers, and now waits for HQ instead (a Pause, a limit): it says so, and counts as held.
+    let changed = false;
+    for (const item of s.items) {
+      const hold = item.autoHold;
+      if (!hold || hold.mine || hold.why !== 'blocked' || stillBlocked(p, item, hold)) continue;
+      hold.why = closed.kind;
+      changed = true;
+    }
+    if (changed) p.commit();
+    return n;
+  }
   // Oldest hold first; held in the same moment, the older ticket first (items are stored newest first).
   const items = s.items.filter((i) => i.autoHold && !i.autoHold.mine).sort(oldestHold);
   for (const item of items) {
     // Counting what is already queued, so a start is only taken off hold when it can really start.
     if (autoGate(p, Date.now(), queuedAuto(p))) break;
     const hold = item.autoHold!;
+    if (stillBlocked(p, item, hold)) continue;
     delete item.autoHold;
     if (hold.reason === 'auto') {
       // Autopilot's own start waits only while Autopilot is on, and starts only into a free slot, like any pick.
@@ -823,6 +875,12 @@ export function releaseHolds(p: Project): number {
         continue;
       }
       if (p.state.auto.halted || freeSlots() === 0) {
+        // It waited for its blockers and they are done. In To do it leaves the hold: Autopilot picks it like any ticket
+        // once a desk and a slot are free. Otherwise it says what it waits for now.
+        if (hold.why === 'blocked') {
+          if (!p.state.auto.halted && item.status === 'todo') continue;
+          hold.why = p.state.auto.halted ? 'halted' : 'restart';
+        }
         item.autoHold = hold;
         continue;
       }

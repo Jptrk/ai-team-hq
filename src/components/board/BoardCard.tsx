@@ -1,6 +1,7 @@
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import type { DragEvent } from 'react';
-import type { Agent, WorkItem } from '../../../shared/types';
+import type { Agent, Epic, WorkItem } from '../../../shared/types';
+import { EpicTag } from '../epics/EpicTag';
 import { Avatar } from '../../ui/Avatar';
 import { StatusLozenge } from '../../ui/Lozenge';
 import { TypeIcon } from '../../ui/TypeIcon';
@@ -10,6 +11,10 @@ interface Props {
   item: WorkItem;
   projectKey: string;
   owner?: Agent;
+  /** The ticket's epic, shown as a tag that opens it. */
+  epic?: Epic;
+  /** Tickets it is blocked by that are not done yet, in words for the Blocked tag; null when nothing blocks it. */
+  blocked: string | null;
   selected: boolean;
   dragging: boolean;
   onOpen: (key: string) => void;
@@ -19,7 +24,7 @@ interface Props {
   right?: { label: string; onClick: () => void };
 }
 
-export function BoardCard({ item, projectKey, owner, selected, dragging, onOpen, onDragStart, onDragEnd, left, right }: Props) {
+export function BoardCard({ item, projectKey, owner, epic, blocked, selected, dragging, onOpen, onDragStart, onDragEnd, left, right }: Props) {
   const key = ticketKey(item, projectKey);
   return (
     <article
@@ -33,6 +38,7 @@ export function BoardCard({ item, projectKey, owner, selected, dragging, onOpen,
       <button type="button" className="bcard-title" onClick={() => onOpen(key)}>
         {item.title}
       </button>
+      {epic && <EpicTag epic={epic} projectKey={projectKey} onOpen={onOpen} />}
       <div className="bcard-foot">
         <TypeIcon kind={item.kind} />
         <span className="ticket-key">{key}</span>
@@ -44,7 +50,13 @@ export function BoardCard({ item, projectKey, owner, selected, dragging, onOpen,
             Goal
           </span>
         )}
-        {item.autoHold && (
+        {blocked && (
+          <span className="chip blocked-chip" title={blocked}>
+            Blocked
+          </span>
+        )}
+        {/* A start waiting for its blockers shows as Blocked; one waiting for HQ as Waiting. */}
+        {item.autoHold && !(blocked && item.autoHold.why === 'blocked') && (
           <span className="chip held-chip" title={holdText(item.autoHold)}>
             Waiting
           </span>

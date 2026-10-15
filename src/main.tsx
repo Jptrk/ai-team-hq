@@ -14,6 +14,7 @@ import './styles/views/board.css';
 import './styles/views/chat.css';
 import './styles/views/team.css';
 import './styles/views/ticket.css';
+import './styles/views/epics.css';
 import './styles/views/office.css';
 import './styles/views/projects.css';
 import './styles/views/attachments.css';
