@@ -15,3 +15,4 @@
 - [Usage hold review checks](usage-hold-review-checks.md) — per-model holds: hard-coded Claude copy, Resume clears other model, stale README GPT limits
 - [Chat limits review checks](chat-limits-review-checks.md) — chat cap call sites, default-arg trap, founder notices not auto, sim no-arg, stale daily-cap pauses
 - [Prompt copy review checks](prompt-copy-review-checks.md) — Voice vs teammates/markdown rules, banned words vs exact names, GPT resume reach, README drift
+- [TipTap React lifecycle checks](tiptap-react-lifecycle-checks.md) — useEditor 1 ms destroy vs Suspense 300 ms reveal, destroyed-editor API, rAF focus
