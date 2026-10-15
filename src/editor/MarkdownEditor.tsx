@@ -25,6 +25,17 @@ installTypedTextEscaping();
 const SAFE_LINK = /^(https?:\/\/|mailto:)/i;
 const LINK_SCHEMES = ['http', 'https', 'mailto'];
 
+/**
+ * The editor, or null once useEditor has destroyed it. If no effect has claimed an editor within 1 ms of
+ * making it, useEditor destroys it, and the first time this box loads React can wait about 300 ms between
+ * rendering it and putting it in the page (Suspense holds back a reveal right after the plain box showed).
+ * So the editor a render saw can be gone by the time its effects run. Check when using it; useEditor makes
+ * a new one next.
+ */
+function live(editor: Editor | null): Editor | null {
+  return editor && !editor.isDestroyed ? editor : null;
+}
+
 function promptLink(editor: Editor): void {
   const previous = (editor.getAttributes('link').href as string | undefined) ?? '';
   const url = window.prompt('Link address (https:// or mailto:)', previous || 'https://');
@@ -232,34 +243,38 @@ const MarkdownEditor = forwardRef<EditorHandle, TextEditorProps>(function Markdo
 
   // Changes from outside (cleared after sending) replace the content.
   useEffect(() => {
-    if (!editor || value === emitted.current) return;
+    const ed = live(editor);
+    if (!ed || value === emitted.current) return;
     emitted.current = value;
     edited.current = false;
-    editor.commands.setContent(value, { contentType: 'markdown', emitUpdate: false });
-    if (value) editor.commands.focus('end');
+    ed.commands.setContent(value, { contentType: 'markdown', emitUpdate: false });
+    if (value) ed.commands.focus('end');
   }, [editor, value]);
 
   useEffect(() => {
-    editor?.setEditable(!disabled, false);
+    live(editor)?.setEditable(!disabled, false);
   }, [editor, disabled]);
 
   // The plain box shown while this editor loaded had the caret: carry on typing at the end.
   useLayoutEffect(() => {
-    if (editor && takeFocusFrom(root.current)) editor.commands.focus('end');
+    const ed = live(editor);
+    // Only a live editor takes the caret, so the one useEditor makes next still gets it.
+    if (ed && takeFocusFrom(root.current)) ed.commands.focus('end');
   }, [editor]);
 
   useImperativeHandle(
     ref,
     () => ({
-      focus: () => editor?.commands.focus('end'),
+      focus: () => live(editor)?.commands.focus('end'),
       insertText: (text) => {
-        if (!editor) return;
-        const { $from } = editor.state.selection;
+        const ed = live(editor);
+        if (!ed) return;
+        const { $from } = ed.state.selection;
         let walled = false;
         for (let d = $from.depth; d > 0; d--) if (['codeBlock', 'tableCell', 'tableHeader'].includes($from.node(d).type.name)) walled = true;
         // Never inside code or a table: the text starts a new paragraph at the end instead.
         if (walled) {
-          editor.chain().focus().insertContentAt(editor.state.doc.content.size, { type: 'paragraph', content: [{ type: 'text', text }] }).run();
+          ed.chain().focus().insertContentAt(ed.state.doc.content.size, { type: 'paragraph', content: [{ type: 'text', text }] }).run();
           return;
         }
         const before = $from.nodeBefore?.text?.slice(-1) ?? '';
@@ -267,7 +282,7 @@ const MarkdownEditor = forwardRef<EditorHandle, TextEditorProps>(function Markdo
         // One space on each side, never two: "hello @Nora world", not "hello @Nora  world".
         let piece = before && !/\s/.test(before) ? ` ${text}` : text;
         if (/\s$/.test(piece) && /^\s/.test(after)) piece = piece.replace(/\s+$/, '');
-        editor.chain().focus().insertContent({ type: 'text', text: piece }).run();
+        ed.chain().focus().insertContent({ type: 'text', text: piece }).run();
       },
     }),
     [editor],
