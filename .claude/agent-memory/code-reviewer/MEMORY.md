@@ -18,3 +18,4 @@
 - [TipTap React lifecycle checks](tiptap-react-lifecycle-checks.md) — useEditor 1 ms destroy vs Suspense 300 ms reveal, destroyed-editor API, rAF focus
 - [Shell review checks](shell-review-checks.md) — shellRefusal bypasses (reserved words, cmd //c, powershell -NoProfile, cd --), shellDelete folder gaps
 - [Blocker hold review checks](blocker-hold-review-checks.md) — stale autoHold why after release paths, Pause vs released yours, loop check via done tickets
+- [Chat echo review checks](chat-echo-review-checks.md) — quiet replies stall waiting tickets (Autopilot busy too), echoStreak counts quiet/notices, NO_REPLY false hits
