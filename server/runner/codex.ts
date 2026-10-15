@@ -38,6 +38,7 @@ import {
   type RunMode,
 } from './claude';
 import { ALL_FILE_TOOLS, FILE_TOOL_SPECS, READ_ONLY_TOOLS, runFileTool, type FileToolName, type ToolReply } from './codexTools';
+import { BASH_TOOL_SPEC, runBashTool, shellFor } from './shell';
 import { attachmentPath, imageMarker, splitImages } from './content';
 import { setLastTool, toolKind } from './liveTools';
 import { isCaptureTool, keepLinkedShots, keepShots, toolImageLinksIn, toolImagesIn, toolResultIdsIn } from './screenshots';
@@ -51,7 +52,8 @@ import { limitRow, mcpToolTimeoutFromEnv, RunWatch, stopText, type UsageLimit, t
  * same fence (guard), the same close-out. What differs:
  *   - Codex's own tools are switched off (DESK_CONFIG). The desk reads and writes with HQ's file tools
  *     (codexTools.ts), named like Claude Code's. Codex's apply_patch stays, but the thread is read-only, so every
- *     patch asks HQ first and HQ answers with the guard's verdict. Deletes go through delete_file only.
+ *     patch asks HQ first and HQ answers with the guard's verdict. Deletes go through delete_file. Where the project
+ *     has the shell on, the desk also gets HQ's Bash tool (shell.ts): the same check of each command as Claude's Bash.
  *   - Connections (MCP) are the desk's own, from the same list as for Claude (codexMcp.ts). Every tool call asks
  *     HQ first, and HQ answers with the same rules (mcpDecision in claude.ts); a refusal reaches the model with
  *     HQ's reason (turn/steer). Auto acts as Ask on a server HQ knows no tools of (no hints for its delete check).
@@ -81,10 +83,11 @@ function schemaOf(shape: unknown): Record<string, unknown> {
   return schema;
 }
 
-/** The tools a GPT desk gets this run: HQ's file tools for its mode, then HQ's own tools. Exported for tests. */
-export function toolSpecs(files: FileToolName[], hq: HqTools): DynamicTool[] {
+/** The tools a GPT desk gets this run: HQ's file tools for its mode, Bash where the shell is on (shellFor), then HQ's own tools. Exported for tests. */
+export function toolSpecs(files: FileToolName[], hq: HqTools, shell = false): DynamicTool[] {
   return [
     ...files.map((name) => ({ type: 'function' as const, name, ...FILE_TOOL_SPECS[name] })),
+    ...(shell ? [{ type: 'function' as const, name: 'Bash', ...BASH_TOOL_SPEC }] : []),
     ...hq.tools.map((t) => ({ type: 'function' as const, name: t.name, description: t.description, inputSchema: schemaOf(t.inputSchema) })),
   ];
 }
@@ -98,6 +101,8 @@ function fileToolsFor(mode: RunContext['mode']): FileToolName[] {
 /** What else a GPT desk has this run: the web, its connections, connections it can't use here, and ones on Auto that act as Ask. */
 export interface DeskExtras {
   web?: boolean;
+  /** HQ's Bash tool is in the run (see the Shell section of the system prompt). */
+  shell?: boolean;
   connections?: boolean;
   skipped?: { name: string; why: string }[];
   askOnly?: string[];
@@ -113,7 +118,11 @@ export function developerPrompt(systemPrompt: string, hq: HqTools, files: FileTo
     writes
       ? '- Read, Glob and Grep read files; Write and Edit change them, where you may write. Use them, not apply_patch: a patch to a place you may not write is refused without a reason.'
       : '- Read, Glob and Grep read files. Nothing gets written in this run.',
-    extras.web ? '- You have no shell and no sub-agents. You can search the web with your web tool.' : '- You have no shell, no web and no sub-agents.',
+    extras.shell
+      ? `- Bash runs a shell command: see Shell above. You have no sub-agents${extras.web ? '. You can search the web with your web tool.' : ' and no web.'}`
+      : extras.web
+        ? '- You have no shell and no sub-agents. You can search the web with your web tool.'
+        : '- You have no shell, no web and no sub-agents.',
     ...(extras.connections
       ? [
           "- Your connections' tools are named mcp__<connection>__<tool>. HQ checks every call against the rules under Connections. A call it refuses comes back rejected, and HQ then tells you why: follow that.",
@@ -284,6 +293,7 @@ async function runTurn(input: RunInput, ctx: RunContext, a: Attempt, signal: Abo
   const check = guard(ctx);
   const hq = new Map(a.hq.tools.map((t) => [t.name, t]));
   const files = new Set<string>(a.tools.filter((t) => t.name in FILE_TOOL_SPECS).map((t) => t.name));
+  const bash = a.tools.some((t) => t.name === 'Bash');
   const controller = new AbortController();
   // HQ's own tools see this attempt's signal: a skill script stops with the run.
   ctx.signal = controller.signal;
@@ -342,6 +352,8 @@ async function runTurn(input: RunInput, ctx: RunContext, a: Attempt, signal: Abo
 
   /** The guard for HQ's file tools: once the run is stopping, a call already under way writes nothing either. */
   const fence: typeof check = async (toolName, toolInput, opts) => {
+    // Asked first, so a call refused for stopping is never counted or logged as run (a shell command).
+    if (stopping) return { behavior: 'deny', message: 'This run was stopped. Do nothing more.' };
     const d = await check(toolName, toolInput, opts);
     if (!stopping || d.behavior !== 'allow') return d;
     if (opts?.toolUseID) ctx.pendingWrites.delete(opts.toolUseID);
@@ -369,6 +381,10 @@ async function runTurn(input: RunInput, ctx: RunContext, a: Attempt, signal: Abo
       if (files.has(name)) {
         setLastTool(input.run.id, toolKind(name, { file_path: args.file_path }, codeDir, ctx.dir));
         return fromReply(await runFileTool(name as FileToolName, args, { dir: ctx.dir, guard: fence, pendingWrites: ctx.pendingWrites, changed: ctx.changed }, id));
+      }
+      if (bash && name === 'Bash') {
+        setLastTool(input.run.id, 'other');
+        return fromReply(await runBashTool(args, { dir: ctx.dir, guard: fence, signal: controller.signal }, id));
       }
       const t = hq.get(name);
       if (!t) return { success: false, contentItems: [textItem(`${name} is not available on this desk.`)] };
@@ -654,9 +670,11 @@ export const codexRunner: AgentRunner = {
     const s = settings();
     const files = fileToolsFor(mode);
     const hq = hqTools(ctx);
-    const tools = toolSpecs(files, hq);
+    const shell = shellFor(p.meta, mode);
+    const tools = toolSpecs(files, hq, shell);
     const developer = developerPrompt(systemPromptFor(p, agent, dir, mcp.allowed, mode, Boolean(input.includeNotes)), hq, files, {
       web,
+      shell,
       connections: mcp.allowed.length > 0,
       skipped: mcp.skipped,
       askOnly,

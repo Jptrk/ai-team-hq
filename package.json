@@ -29,6 +29,7 @@
     "test:account": "tsx server/account.test.ts",
     "test:codex": "tsx server/codex.test.ts",
     "test:idle": "tsx server/idle.test.ts",
+    "test:shell": "tsx server/shell.test.ts",
     "office:sync": "node scripts/office-sync.mjs"
   },
   "dependencies": {

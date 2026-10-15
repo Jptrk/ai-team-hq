@@ -135,7 +135,7 @@ function summary(p: Project): ProjectSummary {
   };
 }
 
-type ProjectPatch = Partial<Pick<ProjectMeta, 'name' | 'key' | 'path' | 'access' | 'signoff' | 'autopilot' | 'goalMode' | 'goal' | 'autoLimits' | 'provider'>>;
+type ProjectPatch = Partial<Pick<ProjectMeta, 'name' | 'key' | 'path' | 'access' | 'signoff' | 'autopilot' | 'goalMode' | 'goal' | 'autoLimits' | 'provider' | 'shell'>>;
 
 /** Validate the editable project fields present in `body`. Exported for tests. */
 export function readProjectPatch(body: Record<string, unknown>, exceptId?: string): { patch: ProjectPatch; error?: string } {
@@ -169,7 +169,8 @@ export function readProjectPatch(body: Record<string, unknown>, exceptId?: strin
     if (typeof body.signoff !== 'boolean') return { patch, error: 'signoff must be true or false' };
     patch.signoff = body.signoff;
   }
-  for (const flag of ['autopilot', 'goalMode'] as const) {
+  // The guard reads shell on every command, so turning it off stops the next one; desks' tools change from their next run.
+  for (const flag of ['autopilot', 'goalMode', 'shell'] as const) {
     if (!(flag in body)) continue;
     if (typeof body[flag] !== 'boolean') return { patch, error: `${flag} must be true or false` };
     patch[flag] = body[flag] as boolean;
@@ -494,6 +495,7 @@ router.post('/projects', (req, res) => {
     template,
     signoff: patch.signoff ?? true,
     provider: patch.provider ?? 'claude',
+    shell: patch.shell ?? false,
   });
   res.status(201).json(summary(p));
 });

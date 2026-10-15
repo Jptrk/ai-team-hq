@@ -84,6 +84,8 @@ export interface ProjectBody {
   template?: TeamTemplate;
   /** Finished tickets wait for your sign-off before Done. */
   signoff?: boolean;
+  /** Desks may run shell commands. */
+  shell?: boolean;
   /** Free desks start their next To do ticket on their own. */
   autopilot?: boolean;
   /** The lead plans tickets toward the goal. Needs goal and autopilot. */

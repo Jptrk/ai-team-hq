@@ -538,6 +538,46 @@ test('the next run resumes the desk thread with this run instructions', async ()
   assert.doesNotMatch(turn.input[0].text, /fresh session/, 'a resumed thread is not told it is fresh');
 });
 
+test("a GPT ticket run with the shell on: HQ's Bash, through the same check as Claude's; Codex's own shell stays off", async () => {
+  const { bashPath } = await import('./runner/shell');
+  // New tools start a new thread: later cases get the desk's own thread back.
+  const kept = { sessionId: desk.sessionId, sessionKey: desk.sessionKey, sessionAt: desk.sessionAt, sessionTokens: desk.sessionTokens, sessionBaseTokens: desk.sessionBaseTokens };
+  store.updateProject(p.id, { shell: true });
+  try {
+    const item = ticket(desk.id);
+    scenario = deskTurn(async (f) => {
+      const pushed = await call(f, 'Bash', { command: 'git push origin main' });
+      assert.equal(pushed.success, false);
+      assert.match(JSON.stringify(pushed), /refuses git push/);
+      // Without bash on this PC the tool says so; with it, the command runs in the workspace.
+      const ran = await call(f, 'Bash', { command: 'echo shell-ok && pwd' });
+      if (bashPath()) {
+        assert.equal(ran.success, true, JSON.stringify(ran));
+        assert.match(JSON.stringify(ran), /shell-ok/);
+        assert.match(JSON.stringify(ran), new RegExp(`${path.basename(workspace)}\\b`));
+      } else assert.match(JSON.stringify(ran), /could not find bash/);
+      await call(f, 'report_done', { summary: 'Ran the check command for you.' });
+      say(f, 'Done.');
+      return { status: 'completed', error: null };
+    });
+    assert.ok(runner.kickoff(p, item.id, 'manual'));
+    await idle();
+    assert.equal(runOf(item).status, 'done', runOf(item).error);
+    const f = servers.at(-1)!;
+    assert.deepEqual(f.opts.config?.slice(0, codexServer.DESK_CONFIG.length), codexServer.DESK_CONFIG, "Codex's own shell stays off");
+    const start = f.calls.find((c) => c.method === 'thread/start')?.params;
+    assert.ok(start, 'new tools start a new thread');
+    assert.ok(start.dynamicTools.some((t: { name: string }) => t.name === 'Bash'));
+    assert.match(start.developerInstructions, /## Shell/);
+    assert.match(start.developerInstructions, /Bash runs a shell command/);
+    assert.doesNotMatch(start.developerInstructions, /You have no shell/);
+    assert.ok(p.state.activity.some((a) => a.text === 'Ran a shell command: echo shell-ok && pwd'), 'the command is in the activity feed');
+  } finally {
+    store.updateProject(p.id, { shell: false });
+    Object.assign(desk, kept);
+  }
+});
+
 test('patches ask first: inside the fence accepted, outside or a delete declined', async () => {
   const item = ticket(desk.id);
   const decisions: string[] = [];

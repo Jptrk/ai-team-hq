@@ -431,6 +431,8 @@ export interface ProjectInput {
   signoff?: boolean;
   /** The model every desk runs on. Left out means Claude. */
   provider?: Provider;
+  /** Desks may run shell commands. Left out means off. */
+  shell?: boolean;
 }
 
 function makeMeta(input: ProjectInput, r: Registry, forcedId?: string): ProjectMeta {
@@ -450,6 +452,7 @@ function makeMeta(input: ProjectInput, r: Registry, forcedId?: string): ProjectM
     createdAt: now(),
     signoff: input.signoff ?? true,
     ...(input.provider === 'gpt' ? { provider: 'gpt' as const } : {}),
+    ...(input.shell ? { shell: true } : {}),
   };
 }
 
@@ -469,13 +472,14 @@ export function createProject(input: ProjectInput): Project {
 
 export function updateProject(
   id: string,
-  patch: Partial<Pick<ProjectMeta, 'name' | 'key' | 'path' | 'access' | 'signoff' | 'autopilot' | 'goalMode' | 'goal' | 'autoLimits' | 'provider'>>,
+  patch: Partial<Pick<ProjectMeta, 'name' | 'key' | 'path' | 'access' | 'signoff' | 'autopilot' | 'goalMode' | 'goal' | 'autoLimits' | 'provider' | 'shell'>>,
 ): ProjectMeta {
   const meta = reg().projects.find((p) => p.id === id);
   if (!meta) throw new Error('project not found');
   Object.assign(meta, patch);
-  // Claude is the default: only GPT is written down.
+  // Claude is the default: only GPT is written down. Likewise the shell, only when on.
   if (meta.provider !== 'gpt') delete meta.provider;
+  if (meta.shell !== true) delete meta.shell;
   saveRegistry();
   const project = getProject(id);
   if (project && patch.name) {

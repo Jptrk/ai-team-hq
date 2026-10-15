@@ -671,6 +671,8 @@ export interface ProjectMeta {
   autoLimits?: AutoLimits;
   /** The model every desk here runs on. Unset: Claude. Read it with projectProvider. */
   provider?: Provider;
+  /** Desks may run shell commands, on this PC as you, with no sandbox. Off unless you turn it on. Read it with shellOn. */
+  shell?: boolean;
 }
 
 export interface AutoLimits {
@@ -702,6 +704,11 @@ export interface AutoStatus {
 /** Finished tickets wait for your sign-off before Done, unless you turned it off for the project. */
 export function signoffOn(meta: Pick<ProjectMeta, 'signoff'>): boolean {
   return meta.signoff !== false;
+}
+
+/** Desks here may run shell commands (see server/runner/shell.ts). Off unless you turned it on. */
+export function shellOn(meta: Pick<ProjectMeta, 'shell'>): boolean {
+  return meta.shell === true;
 }
 
 export interface ProjectSummary extends ProjectMeta {

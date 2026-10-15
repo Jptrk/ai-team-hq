@@ -311,7 +311,8 @@ Creating a project:
   demo keeps its own names, since its tickets name them.
 - **Access**: Read only (default) or Read & write. Read only means agents read the code and put
   plans and diffs in reports. Read & write lets them edit files, but never `.git`, `node_modules`,
-  `.env*` or key files. There is no shell either way: no builds, tests, git, or commits.
+  `.env*` or key files. Neither gives desks a shell; that is the next setting.
+- **Shell** (off by default): desks may run shell commands, as you, with no sandbox. See [Shell](#shell).
 - **Sign-off** (on by default): finished tickets wait for you before Done. See
   [Sign-off and QA](#sign-off-and-qa).
 
@@ -322,7 +323,7 @@ person in every project; renaming yourself in one renames you everywhere.
 Routing an instruction: `@Name` sends it straight to that desk. Otherwise the desk whose keywords
 match best gets it, and the lead catches anything nobody matches.
 
-Project settings (from the picker) edit name, key, folder, access and sign-off, or remove the project.
+Project settings (from the picker) edit name, key, folder, access, shell and sign-off, or remove the project.
 Removing it either archives it or deletes it for good:
 
 - **Archive** moves its board, images, trash and agent workspaces (every desk's reports too) to
@@ -338,6 +339,44 @@ Either way the linked folder is never touched, and a link inside a workspace is 
 followed. Removing waits while a desk runs, a huddle is going, or a connection check or sign-in
 runs, and the last project can't go. Desks' Claude Code transcripts stay in
 `~/.claude/projects/`, which HQ doesn't manage.
+
+## Shell
+
+Off by default, per project: **Shell** in Project settings. With it on, desks run commands in ticket runs, chat
+replies and QA checks: builds, tests, linters, the project's scripts, git. Huddles and planning never get one.
+
+- **Claude desks** get Claude Code's own `Bash` tool. **GPT desks** get HQ's `Bash` tool
+  (`server/runner/shell.ts`), named and shaped like it; Codex's own shell stays off.
+- Either way a command runs in bash, Git Bash on Windows (it comes with Git for Windows;
+  `CLAUDE_CODE_GIT_BASH_PATH` in `.env` points at another `bash.exe`), and starts in the desk's workspace every
+  time. Nothing can be typed in and nothing runs in the background. A command stops after 2 minutes unless the
+  desk gives it longer (at most 10), and stopping the run stops it.
+- **Not sandboxed.** A command runs on this PC as you. It can read and change any file you can and reach the
+  network, whatever the project's folder access says: HQ's file rules hold for the file tools, not for commands.
+  Commands also see HQ's environment, what HQ's `.env` sets included (GPT desks' without `ANTHROPIC_*`,
+  `CLAUDE_*`, `OPENAI_*` and `CODEX_*`). Only turn it on where you'd hand the desks a terminal.
+- **What HQ refuses.** HQ reads every command before it runs (for Claude, in a hook that comes before Claude
+  Code's own checks) and refuses:
+  - `git push`, in the forms it can read (`git -C app push`, `bash -c "git push"`, `if ! git push; then …`).
+  - Any command that names a `.env` file: `.env`, `app/.env.local`, `--env-file=.env`.
+  - Deleting outside where the desk may write, with `rm`, `rmdir`, `unlink`, `find -delete`, `git rm`,
+    `git clean`, `del`, `rd` or `Remove-Item`: never `.git`, `.env` files or keys (nor a folder holding one;
+    HQ looks through up to 50,000 files), the desk's `ROLE.md`, `memory.md` or `reports/`, or the workspace and
+    project folders themselves. In a Read only project, and in a QA check, that leaves the workspace. A delete
+    whose target HQ can't work out (a variable, `~`, `xargs`, `popd`, a pattern that matches dot files) is
+    refused too. `node_modules` may go, whatever it holds.
+  - A command left running in the background (a lone `&`, as in `npm run dev &`): it would outlive the run.
+
+  That is a reading of the command's text, best effort, not a fence: a script, an alias or a program can still
+  do any of it.
+- **Logged.** Each command goes in the activity feed, the first 20 of a run (`Ran a shell command: npm test`). A
+  run that ran one is never retried in a fresh session, since a command could have changed anything. Files a
+  command changes aren't listed under a ticket's "Files changed"; only the file tools' writes are.
+- **What desks are told.** That they have a shell and what HQ refuses; to stay in their workspace and the
+  project folder (and change nothing in a read-only one); not to commit unless asked to; to delete with
+  `delete_file` (HQ's trash) whatever a command can't make again; and to run skill scripts only through
+  `run_skill_script`.
+- Turning it off stops a desk's next command; its tools change from its next run.
 
 ## Connections (MCP servers per project)
 
@@ -562,9 +601,10 @@ same format Claude Code uses, so repos of Claude Code skills work, for example
 ### Scripts
 
 Skill docs often show shell commands, like
-`python3 .claude/skills/ui-ux-pro-max/scripts/search.py "query" --design-system`. Desks have no shell. Instead,
-ticket runs and chat replies get one HQ tool, `run_skill_script(skill, script, args)`, which runs a skill's
-script for them. QA checks and huddles never run scripts.
+`python3 .claude/skills/ui-ux-pro-max/scripts/search.py "query" --design-system`. Desks don't run those
+themselves (a desk with a [shell](#shell) is told not to). Instead, ticket runs and chat replies get one HQ tool,
+`run_skill_script(skill, script, args)`, which runs a skill's script for them. QA checks and huddles never run
+scripts.
 
 - **Off until you allow it, per skill.** Install lists each skill's scripts with an **Allow scripts** box, off by
   default. On the Skills page, **Allow scripts** asks you to confirm first. It counts in every project where the
@@ -679,9 +719,9 @@ On a project made from the **Dev team** template, finished work is checked befor
    count starts over.
 
 - **The QA desk only reads.** In a QA check the project folder is read-only, connections are
-  read-only, and there is no shell and no web. So QA checks by reading, and says in its verdict what
-  should be run (tests, a build) to confirm. Each check starts a fresh session, so the QA desk's own
-  session is not filled with other tickets' code.
+  read-only, and there is no web. Without a [shell](#shell) QA checks by reading, and says in its verdict
+  what should be run (tests, a build) to confirm; with one it may run them. Each check starts a fresh
+  session, so the QA desk's own session is not filled with other tickets' code.
 - **Files changed.** HQ records each project file a desk changes for a ticket, once the write went
   through (never the desk's own workspace). The QA check gets that list, and the ticket shows it
   under "Files changed".
@@ -1002,13 +1042,15 @@ What happens on an instruction:
    - `cwd` = `workspaces/<project>/<agent>/`, created on first run with `ROLE.md`, `memory.md`, `reports/`.
    - The linked folder is passed as `additionalDirectories`.
    - Tools: Read / Write / Edit / Glob / Grep, fenced by a `canUseTool` guard (see
-     `server/guard.test.ts`). No Bash, no subagents. `HQ_WEB=1` adds WebSearch and WebFetch.
+     `server/guard.test.ts`). No subagents, and Bash only where the project has the [shell](#shell) on.
+     `HQ_WEB=1` adds WebSearch and WebFetch.
    - Three HQ tools (in-process MCP server): `post_update`, `raise_for_decision`, `report_done`.
      They write straight into the project's board, so the UI updates as the agent works.
      Report files written during the run are linked on the ticket automatically.
    - Skills turned on for the desk are listed in its system prompt, and their folders are added read-only.
      `run_skill_script` runs a skill's script where you allowed it (see [Skills](#skills)).
-   - Deleting: with no shell, a desk's only way to delete is the HQ tool `delete_file`. It works where
+   - Deleting: a desk deletes with the HQ tool `delete_file` (with the [shell](#shell) on, commands can too,
+     within what HQ refuses). It works where
      the desk may write (its workspace; the project folder on Read & write), never on `.git`,
      `node_modules`, `.env` files or keys (nor a folder holding any of them), and never on its
      `ROLE.md`, `memory.md`, `reports/` or the folders themselves. Nothing is deleted for good: it
@@ -1167,7 +1209,7 @@ How it works (`server/codexServer.ts`, `server/codexAuth.ts`, `server/runner/cod
   desk threads and Codex's logs. Your `~/.codex`, its settings, MCP servers, AGENTS.md and skills never
   reach a desk, and signing in or out here doesn't touch a Codex CLI you use. HQ never reads a token:
   only the email, plan and usage windows Codex reports. `OPENAI_API_KEY` is never passed to Codex.
-- **Codex's own tools are off**: the shell, sub-agents, ChatGPT apps and plugins, image tools, goals,
+- **Codex's own tools are off**: the shell (a project with the [shell](#shell) on gives its GPT desks HQ's `Bash` tool instead), sub-agents, ChatGPT apps and plugins, image tools, goals,
   hooks, memories, Codex's skills, computer and browser use, the in-app browser and automation,
   worktrees, workspace dependencies, voice, web search (unless `HQ_WEB=1`), and the project's `AGENTS.md`
   (HQ puts the project's instructions in the prompt itself, as for Claude). What stays is `apply_patch`, the
@@ -1372,9 +1414,10 @@ npm run test:archive
 npm run test:account
 npm run test:codex
 npm run test:idle
+npm run test:shell
 ```
 
-- **`test:guard`** checks what an agent may read and write in its workspace and the linked folder, including names Windows reads as another file (`.git.`, `server.key.`, a `:` stream, a `\\` path). It also checks which MCP tools run freely, need approval, or are refused.
+- **`test:guard`** checks what an agent may read and write in its workspace and the linked folder, including names Windows reads as another file (`.git.`, `server.key.`, a `:` stream, a `\\` path). It also checks which MCP tools run freely, need approval, or are refused, and when Bash is refused (shell off, a huddle or a plan, a background command, a delete outside the fence).
 - **`test:auth`** checks HQ's own login:
   - the password hash (and a hand-edited one), and the cookie (`HttpOnly`, `SameSite=Strict`, 30 days,
     named after the API's port)
@@ -1435,6 +1478,7 @@ npm run test:idle
   - the Skills section of the system prompt, the read-only fence around skill folders, and the API routes
 
   It fetches nothing: a stand-in builds a local fixture where git would clone.
+- **`test:shell`** checks desks' shell: Bash only with the project's Shell on (never in a huddle or a plan; a QA check with the project read-only), what HQ refuses before a command runs (git push in its forms, a `.env` file named anywhere, deletes outside the fence through `rm`, globs, `find`, `xargs`, `git clean`, `git rm`, PowerShell and `cmd`, nested shells, variables and `~`) and what it lets through, the hook that checks Claude's commands, counting and the activity feed, the prompts both models get, the setting, and HQ's Bash tool for GPT desks (finding Git Bash, an environment without HQ's logins, the reply). Where this PC has bash, a few commands really run in a scratch workspace: output, exit code, the working folder, a refusal that never ran, a timeout.
 - **`test:delete`** checks `delete_file`: files and folders move to the project's trash (nothing overwritten there), only where a desk may write, never protected files or a folder holding one, never a desk's own ROLE.md, memory.md or reports, the per-run and folder-size limits, the ticket history and changed files, and the QA prompt marking a deleted file.
 - **`test:archive`** checks removing a project: archived (board, images, trash and workspaces to `data/archive/`) or deleted for good with nothing left, the Removed projects list (names, dates, sizes, newest first) and deleting from it (only a folder there by its exact name), a link in a workspace removed but never followed (also when sizing), the linked folder untouched, and removing refused while a desk runs, a huddle is going, a connection check or sign-in runs, or for the last project. On Windows, with another program working in a desk's folder: archiving is refused with nothing moved and the board kept, and deleting for good names the held folder, which a new project by the same name never takes over. A removed project's late saves write nothing, also into a new project that took its id.
 - **`test:auto`** checks what the team does on its own, with desks on a fake runner:

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { autoLimitsOf, hasQa, MAX_GOAL, projectProvider, signoffOn, type PathCheck, type ProjectAccess, type ProjectSummary, type Provider, type TeamTemplate } from '../../shared/types';
+import { autoLimitsOf, hasQa, MAX_GOAL, projectProvider, shellOn, signoffOn, type PathCheck, type ProjectAccess, type ProjectSummary, type Provider, type TeamTemplate } from '../../shared/types';
 import { api } from '../api';
 import { AVATAR_FALLBACK, cleanPath, suggestKey } from '../util';
 import { ProjectAvatar } from './ProjectAvatar';
@@ -38,6 +38,7 @@ export function ProjectForm({ mode, project, projects, onCancel, onSaved, onRemo
   const [template, setTemplate] = useState<TeamTemplate>(project?.template ?? 'dev');
   const [access, setAccess] = useState<ProjectAccess>(project?.access ?? 'read');
   const [signoff, setSignoff] = useState(project ? signoffOn(project) : true);
+  const [shell, setShell] = useState(project ? shellOn(project) : false);
   const [provider, setProvider] = useState<Provider>(project ? projectProvider(project) : 'claude');
   const [autopilot, setAutopilot] = useState(Boolean(project?.autopilot));
   const [goalMode, setGoalMode] = useState(Boolean(project?.goalMode));
@@ -106,7 +107,7 @@ export function ProjectForm({ mode, project, projects, onCancel, onSaved, onRemo
     if (!canSave) return;
     setBusy(true);
     setError(null);
-    const body = { name: name.trim(), key: keyValue, path: cleanPath(folder), access: hasFolder ? access : ('read' as ProjectAccess), signoff };
+    const body = { name: name.trim(), key: keyValue, path: cleanPath(folder), access: hasFolder ? access : ('read' as ProjectAccess), signoff, shell };
     // What the team does on its own is set once the project exists.
     // Only what you changed here, so a switch flipped on the board meanwhile is not undone.
     const before = { autopilot: Boolean(project?.autopilot), goalMode: Boolean(project?.goalMode), goal: project?.goal ?? '', limits: autoLimitsOf(project ?? {}) };
@@ -261,9 +262,27 @@ export function ProjectForm({ mode, project, projects, onCancel, onSaved, onRemo
             <label className={`choice${access === 'write' ? ' on' : ''}`}>
               <input type="radio" name="access" value="write" checked={access === 'write'} onChange={() => setAccess('write')} />
               <span className="choice-title">Read &amp; write</span>
-              <span className="choice-sub">Edit files directly. Never .git, node_modules, .env or keys. No shell, no commits.</span>
+              <span className="choice-sub">Edit files directly. Never .git, node_modules, .env or keys.</span>
             </label>
           </div>
+        </fieldset>
+
+        <fieldset className="field">
+          <legend className="label">Shell</legend>
+          <label className="check signoff-check">
+            <input type="checkbox" checked={shell} onChange={(e) => setShell(e.target.checked)} /> Desks may run shell commands: builds, tests, scripts, git
+          </label>
+          <p className="field-hint">
+            {shell ? (
+              <>
+                <span className="warn">On:</span> commands run on this PC as you, with no sandbox, so they can read and change any file you can, whatever the
+                folder access above says. HQ refuses git push, any command that names a .env file, and deleting outside where a desk may write; it reads
+                each command first, which is not airtight. Huddles and planning never get a shell.
+              </>
+            ) : (
+              'Off: desks only read and write files. They say what should be run, and you run it.'
+            )}
+          </p>
         </fieldset>
 
         <fieldset className="field">
