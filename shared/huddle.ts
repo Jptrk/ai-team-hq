@@ -1,4 +1,4 @@
-import type { HuddleKind, HuddleLane } from './types';
+import type { HuddleKind, HuddleLane, HuddleProposalSummary } from './types';
 
 /** Huddles: a team session you start. Shared by the server and the UI so the numbers always agree. */
 
@@ -41,4 +41,18 @@ export function estimateHuddleRuns(desks: number, rounds: number): number {
 /** Rough token count of text, for the cost hint next to "Include team notes". About 4 characters a token. */
 export function roughTokens(text: string): number {
   return Math.ceil(text.trim().length / 4);
+}
+
+/**
+ * Tickets (ids) from a planning huddle that come after a proposal still waiting for you. Autopilot leaves them until
+ * you decide it: approved, its ticket blocks them; declined, they go ahead.
+ */
+export function waitingOnProposals(huddles: { proposals: Pick<HuddleProposalSummary, 'id' | 'status' | 'itemId' | 'after'>[] }[]): Set<string> {
+  const ids = new Set<string>();
+  for (const h of huddles) {
+    const pending = new Set(h.proposals.filter((x) => x.status === 'pending').map((x) => x.id));
+    if (!pending.size) continue;
+    for (const x of h.proposals) if (x.status === 'approved' && x.itemId && x.after?.some((id) => pending.has(id))) ids.add(x.itemId);
+  }
+  return ids;
 }

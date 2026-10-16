@@ -20,7 +20,9 @@ import { cleanMarkdown, escapeTypedText, looksLikeDiffOrTerminal, looksLikeMarkd
 import { attachmentUrl, isAttachmentUrl, isReportUrl, reportFileName, resolveReportHref } from './markdown/reportLinks';
 import { parseRoute, projectPath } from './route';
 import { blockedTitle, blockerChoices, epicByKey, epicTicketChoices, progressParts, progressText, sortEpics } from './components/epics/epicInfo';
-import type { Epic } from '../shared/types';
+import type { Epic, HuddleProposalSummary } from '../shared/types';
+import { huddleEpicState, proposalAfter, proposalEpic } from './components/huddles/plan';
+import { waitingOnProposals } from '../shared/huddle';
 import { accountHeld, awaitsSignoff, clockTime, latestDecision, readableInk, autoTodayText, effortLabel, goalLabel, goLiveHint, holdText, pauseLabel, pauseText, pauseTitle, runnerLabel, signoffVerdict, waitingSummary, waitingTitle } from './util';
 import { MCP_PRESETS, presetArgs, presetDefaults } from '../shared/mcpPresets';
 import { buildSpec, safeAuthUrl } from '../shared/mcpSpec';
@@ -242,6 +244,38 @@ test('blockers: the Blocked tag names what is not done; choices leave out itself
   assert.deepEqual(blockerChoices(c, all).map((i) => i.id), ['w1']);
   assert.equal(holdText({ reason: 'manual', why: 'blocked' }), 'Your start waits for the tickets this one is blocked by. It starts by itself once they are done.');
   assert.equal(holdText({ reason: 'handoff', why: 'blocked' }), 'The hand-off waits for the tickets this one is blocked by. It starts by itself once they are done.');
+});
+test('huddle plans: a proposal shows its epic (new, already there, made, or gone) and what it comes after, by key once approved', () => {
+  const prop = (id: string, extra: Partial<HuddleProposalSummary> = {}): HuddleProposalSummary => ({ id, type: 'ticket', title: `Task ${id}`, status: 'pending', ...extra });
+  const made: Epic = { id: 'ep9', number: 9, title: 'New checkout', summary: '', color: '#8a5fb8', from: 'leo', createdAt: '' };
+  const planned = { title: 'New checkout', summary: '' };
+  assert.equal(proposalEpic(prop('a'), planned, []), null, 'not in the epic');
+  assert.deepEqual(proposalEpic(prop('a', { inEpic: true }), planned, []), { title: 'New checkout' });
+  assert.deepEqual(huddleEpicState(planned, []), { kind: 'new', title: 'New checkout' });
+  assert.deepEqual(huddleEpicState({ title: 'new  CHECKOUT!', summary: '' }, [made]), { kind: 'existing', title: 'New checkout', epic: made }, 'the server uses the one already there');
+  assert.deepEqual(proposalEpic(prop('a', { inEpic: true }), { ...planned, epicId: 'ep9' }, [made]), { title: 'New checkout', epic: made });
+  assert.equal(proposalEpic(prop('a', { inEpic: true }), { ...planned, epicId: 'ep9' }, []), null, 'you deleted it');
+  assert.equal(huddleEpicState(undefined, [made]), null);
+  const cart = item(1);
+  const siblings = [
+    prop('a', { status: 'approved', itemId: 'w1' }),
+    prop('b'),
+    prop('c', { status: 'declined' }),
+    prop('e', { status: 'approved', itemId: 'w_deleted' }),
+    prop('d', { after: ['a', 'b', 'c', 'e', 'gone'] }),
+  ];
+  assert.deepEqual(proposalAfter(siblings[4], siblings, [cart]), [{ title: 'Task a', item: cart }, { title: 'Task b' }], 'declined, deleted and missing ones drop out');
+  assert.deepEqual(proposalAfter(siblings[0], siblings, [cart]), []);
+});
+test('huddle plans: Autopilot leaves a ticket that comes after a proposal still waiting for you', () => {
+  type Prop = Pick<HuddleProposalSummary, 'id' | 'status' | 'itemId' | 'after'>;
+  const huddles: { proposals: Prop[] }[] = [
+    { proposals: [{ id: 'a', status: 'pending' }, { id: 'b', status: 'approved', itemId: 'w2', after: ['a'] }, { id: 'c', status: 'approved', itemId: 'w3' }] },
+    { proposals: [{ id: 'x', status: 'declined' }, { id: 'y', status: 'approved', itemId: 'w9', after: ['x'] }] },
+  ];
+  assert.deepEqual([...waitingOnProposals(huddles)], ['w2']);
+  huddles[0].proposals[0] = { id: 'a', status: 'approved' };
+  assert.deepEqual([...waitingOnProposals(huddles)], [], 'decided: its ticket blocks it now, or it goes ahead');
 });
 
 // ---------- search ----------

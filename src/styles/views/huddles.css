@@ -368,6 +368,27 @@
   .proposal-actions {
     flex: none;
   }
+  /* Planning: an epic not made yet shows as a tag with an empty dot, and not as a link. */
+  .epic-tag.planned {
+    cursor: default;
+  }
+  .epic-tag.planned:hover {
+    border-color: var(--border);
+    color: var(--text-subtle);
+  }
+  .epic-tag.planned .epic-dot {
+    border: 1.5px solid currentColor;
+  }
+  .proposal .epic-tag {
+    align-self: center;
+  }
+  .proposal-after {
+    overflow-wrap: anywhere;
+  }
+  .huddle-epic-hint .epic-tag {
+    vertical-align: middle;
+    margin-left: 2px;
+  }
 
   /* ---------- team notes ---------- */
   .team-notes {

@@ -315,6 +315,7 @@ export function App({ loginName, onLogout }: { loginName: string; onLogout: () =
             <NeedsYou
               items={state.items}
               agents={state.agents}
+              epics={state.epics}
               projectKey={key}
               paused={state.threads.filter((t) => t.status === 'paused')}
               huddles={state.huddles}
@@ -411,6 +412,7 @@ export function App({ loginName, onLogout }: { loginName: string; onLogout: () =
                 summary={summary}
                 agents={state.agents}
                 items={state.items}
+                epics={state.epics}
                 projectKey={key}
                 notesEveryRun={state.notesEveryRun}
                 onBack={() => navigate(projectPath(current.id, 'huddles'))}

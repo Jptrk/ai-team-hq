@@ -205,6 +205,222 @@ test('proposals: decline changes nothing; a note that would overflow the notes i
   assert.equal(h.proposals[1].status, 'pending');
 });
 
+const planning = (extra: Record<string, unknown> = {}) => ({ kind: 'planning', topic: 'Launch the new checkout', participants: ['dylan', 'paige', 'mike'], rounds: 1, includeNotes: false, ...extra });
+/** A planning huddle waiting for its last summary. */
+const summing = (extra: Record<string, unknown> = {}) => {
+  const h = start(planning(extra));
+  h.phase = 'summarize';
+  h.waiting = [];
+  return h;
+};
+const approve = (h: Huddle, title: string) => {
+  const out = core.decideProposal(p, h, h.proposals.find((x) => x.title === title)!.id, 'approve');
+  assert.ok(typeof out !== 'string' && out.item, String(out));
+  return out.item;
+};
+
+test('planning summary: an epic, and an order by number or title; a bad order is refused before anything is saved', () => {
+  fresh();
+  const h = summing();
+  const refused = (tickets: unknown[], re: RegExp) => {
+    assert.match(String(core.recordSummary(p.state, h, 'dylan', { summary: 'Plan', tickets } as never)), re);
+    assert.equal(h.entries.length, 0, 'no summary saved');
+    assert.equal(h.proposals.length, 0, 'no proposals saved');
+  };
+  refused([{ title: 'Build the cart', brief: 'x' }, { title: 'Wire payments', brief: 'x', blocked_by: [3] }], /^Ticket 2 "Wire payments" is blocked by "3", which is not a ticket in this summary/);
+  refused([{ title: 'Build the cart', brief: 'x' }, { title: 'Wire payments', brief: 'x', blocked_by: ['SA-12'] }], /not a ticket in this summary\. Name tickets by their number/);
+  refused([{ title: 'Build the cart', brief: 'x', blocked_by: ['build the CART'] }], /^Ticket 1 "Build the cart" can't be blocked by itself/);
+  refused(
+    [
+      { title: 'Build the cart', brief: 'x', blocked_by: [3] },
+      { title: 'Wire payments', brief: 'x', blocked_by: [1] },
+      { title: 'Test checkout', brief: 'x', blocked_by: ['2'] },
+    ],
+    /^Ticket 1 "Build the cart": ticket 3 "Test checkout" already waits on this ticket .*that would make a loop/,
+  );
+  assert.equal(
+    core.recordSummary(p.state, h, 'dylan', {
+      summary: 'Plan',
+      epic: { title: '  New   checkout ', brief: 'Cart to payment, on phones too.' },
+      tickets: [
+        { title: 'Build the cart', owner: 'Paige', brief: 'The cart page' },
+        { title: 'Wire payments', owner: 'Mike', brief: 'Card payments', blocked_by: [1, '#1'] },
+        { title: 'Write the launch post', brief: 'For the blog', in_epic: false },
+        { title: 'Test checkout', owner: 'Mike', brief: 'End to end', blocked_by: ['wire payments', 'Write the launch post!'] },
+      ],
+    }),
+    null,
+  );
+  const [cart, pay, post, test] = h.proposals;
+  assert.deepEqual(h.epic, { title: 'New checkout', summary: 'Cart to payment, on phones too.' });
+  assert.deepEqual(h.proposals.map((x) => x.inEpic), [true, true, undefined, true]);
+  assert.equal(cart.after, undefined);
+  assert.deepEqual(pay.after, [cart.id], 'the same ticket twice counts once');
+  assert.deepEqual(test.after, [pay.id, post.id], 'titles match without case or punctuation');
+});
+
+test('planning summary: no epic without a ticket in it; retro and brainstorm keep tickets plain', () => {
+  fresh();
+  const h = summing();
+  core.recordSummary(p.state, h, 'dylan', { summary: 'Plan', epic: { title: 'Lonely epic' }, tickets: [{ title: 'Outside it', brief: 'x', in_epic: false }] });
+  assert.equal(h.epic, undefined);
+  assert.equal(h.proposals[0].inEpic, undefined);
+  const r = start(retro({ rounds: 1 }));
+  r.phase = 'summarize';
+  r.waiting = [];
+  const args = { summary: 'Done', epic: { title: 'Ignored' }, tickets: [{ title: 'One', brief: 'x' }, { title: 'Two', brief: 'x', blocked_by: [1, 9] }] };
+  assert.equal(core.recordSummary(p.state, r, 'dylan', args), null, 'a retro ignores an order it does not take');
+  assert.equal(r.epic, undefined);
+  assert.deepEqual(r.proposals.map((x) => [x.inEpic, x.after]), [[undefined, undefined], [undefined, undefined]]);
+});
+
+test('planning approve: the epic comes with the first ticket in it; blockers link whichever is approved first', () => {
+  fresh();
+  const h = summing();
+  core.recordSummary(p.state, h, 'dylan', {
+    summary: 'Plan',
+    epic: { title: 'New checkout', brief: 'Cart to payment.' },
+    tickets: [
+      { title: 'Build the cart', owner: 'Paige', brief: 'The cart page' },
+      { title: 'Wire payments', owner: 'Mike', brief: 'Card payments', blocked_by: [1] },
+      { title: 'Write the launch post', brief: 'For the blog', in_epic: false },
+      { title: 'Test checkout', owner: 'Mike', brief: 'End to end', blocked_by: [2, 3] },
+    ],
+  });
+  const epics = p.state.epics.length;
+  // Out of order: payments first. Its blocker is still waiting for you, so nothing links yet.
+  const pay = approve(h, 'Wire payments');
+  assert.equal(p.state.epics.length, epics + 1, 'the epic is made with its first ticket');
+  const epic = p.state.epics[0];
+  assert.equal(epic.title, 'New checkout');
+  assert.equal(epic.summary, 'Cart to payment.');
+  assert.equal(epic.from, 'dylan', 'made by the facilitator who proposed it');
+  assert.equal(h.epic?.epicId, epic.id);
+  assert.equal(pay.epicId, epic.id);
+  assert.equal(pay.blockedBy, undefined);
+  assert.ok(pay.history.some((x) => x.text === `Added to epic ${p.ticket(epic)} "New checkout" by Planning #1`));
+  const cart = approve(h, 'Build the cart');
+  assert.equal(p.state.epics.length, epics + 1, 'one epic, not two');
+  assert.equal(cart.epicId, epic.id);
+  assert.deepEqual(pay.blockedBy, [cart.id], 'payments now waits on the cart');
+  assert.ok(pay.history.some((x) => x.text.startsWith(`Blocked by ${p.ticket(cart)} (set by Planning #1)`)));
+  // Declined: it drops out of the order.
+  assert.ok(typeof core.decideProposal(p, h, h.proposals[2].id, 'decline') !== 'string');
+  const test = approve(h, 'Test checkout');
+  assert.deepEqual(test.blockedBy, [pay.id]);
+  assert.equal(test.epicId, epic.id);
+  assert.equal(p.state.epics.length, epics + 1);
+});
+
+test('planning approve: a ticket already started is not held back; a ticket outside the epic joins none', () => {
+  fresh();
+  const h = summing();
+  core.recordSummary(p.state, h, 'dylan', {
+    summary: 'Plan',
+    epic: { title: 'New checkout' },
+    tickets: [
+      { title: 'Build the cart', brief: 'x', in_epic: false },
+      { title: 'Wire payments', brief: 'x', blocked_by: [1] },
+    ],
+  });
+  const pay = approve(h, 'Wire payments');
+  pay.status = 'in-progress';
+  const cart = approve(h, 'Build the cart');
+  assert.equal(pay.blockedBy, undefined, 'work under way is not stopped by a blocker added later');
+  assert.equal(cart.epicId, undefined);
+  assert.equal(cart.blockedBy, undefined);
+});
+
+test('planning approve: an epic of the same title is used, not made twice; a deleted one is not made again', async () => {
+  fresh();
+  const epics = await import('./epics');
+  const mine = epics.createEpic(p, 'you', { title: 'New Checkout!', summary: 'Mine' });
+  const count = p.state.epics.length;
+  const h = summing();
+  core.recordSummary(p.state, h, 'dylan', {
+    summary: 'Plan',
+    epic: { title: 'new checkout' },
+    tickets: [
+      { title: 'Build the cart', brief: 'x' },
+      { title: 'Wire payments', brief: 'x' },
+    ],
+  });
+  const cart = approve(h, 'Build the cart');
+  assert.equal(p.state.epics.length, count);
+  assert.equal(cart.epicId, mine.id);
+  assert.equal(h.epic?.epicId, mine.id);
+  epics.deleteEpic(p, mine);
+  const pay = approve(h, 'Wire payments');
+  assert.equal(p.state.epics.length, count - 1, 'you deleted it, so it stays gone');
+  assert.equal(pay.epicId, undefined);
+});
+
+test('planning approve: a link that would make a loop is left out, with a line in the history', async () => {
+  fresh();
+  const epics = await import('./epics');
+  const h = summing();
+  core.recordSummary(p.state, h, 'dylan', {
+    summary: 'Plan',
+    tickets: [
+      { title: 'Pick a provider', brief: 'x' },
+      { title: 'Wire payments', brief: 'x', blocked_by: [1] },
+      { title: 'Test checkout', brief: 'x', blocked_by: [2] },
+    ],
+  });
+  const provider = approve(h, 'Pick a provider');
+  const test = approve(h, 'Test checkout');
+  // By hand, meanwhile: the provider now waits on the test. Payments would close the loop.
+  epics.setBlockers(p, provider, [test.id], 'you');
+  const pay = approve(h, 'Wire payments');
+  assert.deepEqual(pay.blockedBy, [provider.id], 'its own blocker links: it is new, so nothing waits on it yet');
+  assert.equal(test.blockedBy, undefined, 'the test would wait on payments, which waits on it through the provider');
+  assert.ok(test.history.some((x) => /^Planning #1 put .+ first, but it is not linked: .+that would make a loop/.test(x.text)));
+  assert.equal(p.state.items.filter((i) => i.blockedBy?.length).length, 2);
+});
+
+test('planning prompt and tool: the last round asks for an epic and an order; other rounds and kinds do not', async () => {
+  fresh();
+  const { z } = await import('zod');
+  /** The facilitator's tool, as the JSON schema a model sees. */
+  const schemaOf = (h: Huddle) => {
+    const tools = claude.hqTools({ project: p, agent: p.state.agents.find((a) => a.id === 'dylan')!, mode: 'huddle', huddle: { id: h.id, role: 'facilitator' } } as never);
+    assert.deepEqual(tools.tools.map((t) => t.name), ['huddle_summarize']);
+    return JSON.stringify(z.toJSONSchema(z.object(tools.tools[0].inputSchema as never)));
+  };
+  const h = start(planning({ rounds: 2 }));
+  assert.doesNotMatch(core.huddlePromptText(p, h, 'dylan', 'facilitator'), /blocked_by/);
+  assert.doesNotMatch(schemaOf(h), /tickets|epic|blocked_by/, 'no proposals before the last round');
+  h.round = 2;
+  const prompt = core.huddlePromptText(p, h, 'dylan', 'facilitator');
+  assert.match(prompt, /name it as epic/);
+  assert.match(prompt, /blocked_by, by its number in your tickets list \(1 is the first\) or its title/);
+  assert.match(prompt, /never use ticket keys/);
+  const planned = schemaOf(h);
+  for (const key of ['"epic"', '"in_epic"', '"blocked_by"', 'Never ticket keys']) assert.ok(planned.includes(key), key);
+  const r = start(retro());
+  r.round = 2;
+  assert.doesNotMatch(core.huddlePromptText(p, r, 'dylan', 'facilitator'), /blocked_by/);
+  const plain = schemaOf(r);
+  assert.match(plain, /"tickets"/);
+  assert.doesNotMatch(plain, /epic|blocked_by/);
+});
+
+test('planning sim: the canned summary proposes one epic and an order, and approving all of it keeps both', async () => {
+  fresh();
+  const h = engine.startHuddle(p, planning(), engine.simTurn);
+  assert.ok(!('error' in h));
+  await settle(h.id);
+  const done = core.findHuddle(p.state, h.id)!;
+  assert.equal(done.status, 'done');
+  const tickets = done.proposals.filter((x) => x.type === 'ticket');
+  assert.equal(tickets.length, 3);
+  assert.equal(done.epic?.title, 'Launch the new checkout');
+  assert.deepEqual(tickets.map((x) => x.after), [undefined, [tickets[0].id], [tickets[1].id]]);
+  const made = tickets.map((x) => approve(done, x.title));
+  assert.deepEqual(made.map((i) => i.blockedBy), [undefined, [made[0].id], [made[1].id]]);
+  assert.equal(new Set(made.map((i) => i.epicId)).size, 1);
+});
+
 test('poll: summaries carry no board or transcript', () => {
   fresh();
   const h = start(retro());

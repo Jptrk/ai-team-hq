@@ -1,6 +1,6 @@
 import { MessagesSquare, Play, Plus } from 'lucide-react';
 import { HUDDLE_KIND_LABEL } from '../../shared/huddle';
-import type { Agent, Decision, HuddleSummary, Thread, WorkItem } from '../../shared/types';
+import type { Agent, Decision, Epic, HuddleSummary, Thread, WorkItem } from '../../shared/types';
 import { plainText } from '../markdown/plainText';
 import { Avatar } from '../ui/Avatar';
 import { TypeIcon } from '../ui/TypeIcon';
@@ -11,6 +11,7 @@ import { ProposalRow, type ProposalDecision } from './huddles/Proposals';
 interface Props {
   items: WorkItem[];
   agents: Agent[];
+  epics: Epic[];
   projectKey: string;
   paused: Thread[];
   huddles: HuddleSummary[];
@@ -128,6 +129,9 @@ export function NeedsYou(p: Props) {
                 onOpenTicket={p.onOpen}
                 compact
                 source={{ label: `${HUDDLE_KIND_LABEL[h.kind]} #${h.number}`, onOpen: () => p.onOpenHuddle(h.id) }}
+                siblings={h.proposals}
+                plannedEpic={h.epic}
+                epics={p.epics}
               />
             ))}
           </ul>

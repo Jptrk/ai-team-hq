@@ -1,12 +1,15 @@
 import { ArrowLeft, CircleStop, Play, Star } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { HUDDLE_KIND_LABEL, HUDDLE_LANES, MAX_STEER } from '../../../shared/huddle';
-import type { Agent, Huddle, HuddleCard, HuddleEntry, HuddleSummary, WorkItem } from '../../../shared/types';
+import type { Agent, Epic, Huddle, HuddleCard, HuddleEntry, HuddleSummary, WorkItem } from '../../../shared/types';
 import { api } from '../../api';
 import { Markdown } from '../../markdown/Markdown';
+import { plainText } from '../../markdown/plainText';
 import { Avatar } from '../../ui/Avatar';
 import { Lozenge } from '../../ui/Lozenge';
 import { agentById, timeAgo } from '../../util';
+import { EpicTag } from '../epics/EpicTag';
+import { huddleEpicState, proposalAfter } from './plan';
 import { ProposalRow, type ProposalDecision } from './Proposals';
 import { huddleStatus } from './status';
 
@@ -15,6 +18,7 @@ interface Props {
   summary: HuddleSummary;
   agents: Agent[];
   items: WorkItem[];
+  epics: Epic[];
   projectKey: string;
   /** The project sends the team notes with every run, so this huddle gets them too. */
   notesEveryRun: boolean;
@@ -163,7 +167,7 @@ function SteerBox({ h, onSteer }: { h: Huddle; onSteer: Props['onSteer'] }) {
 }
 
 /** One huddle: the board it fills, what it proposes, and the transcript, with Stop, Resume and a box to steer it. */
-export function HuddleView({ pid, summary, agents, items, projectKey, notesEveryRun, onBack, onOpenTicket, onStop, onResume, onSteer, onDecide }: Props) {
+export function HuddleView({ pid, summary, agents, items, epics, projectKey, notesEveryRun, onBack, onOpenTicket, onStop, onResume, onSteer, onDecide }: Props) {
   const [h, setH] = useState<Huddle | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -198,6 +202,14 @@ export function HuddleView({ pid, summary, agents, items, projectKey, notesEvery
   // Status comes from the poll, which is always fresher. It drops the text of decided proposals; the full huddle has it.
   const proposals = summary.proposals.map((x) => (x.text !== undefined ? x : { ...x, text: h?.proposals.find((y) => y.id === x.id)?.text }));
   const pending = proposals.filter((x) => x.status === 'pending').length;
+  // Planning: the epic it proposed (gone once you delete it), and whether any ticket comes after another.
+  const planned = summary.epic;
+  const epicState = huddleEpicState(planned, epics);
+  // While a ticket for it waits for you. Once made, it stays shown, as a link.
+  const epicPending = proposals.some((x) => x.status === 'pending' && x.inEpic);
+  const brief = planned?.summary ? plainText(planned.summary, 200) : '';
+  const epicBrief = brief ? `${brief}${/[.!?…]$/.test(brief) ? '' : '.'} ` : '';
+  const ordered = proposals.some((x) => x.status === 'pending' && proposalAfter(x, proposals, items).length > 0);
 
   return (
     <div className="huddle-view">
@@ -266,9 +278,37 @@ export function HuddleView({ pid, summary, agents, items, projectKey, notesEvery
             Proposals {pending > 0 && <span className="badge">{pending}</span>}
           </h3>
           <p className="field-hint">Approved tickets go to To do for you to start. Approved notes go into the team notes.</p>
+          {epicState?.kind === 'new' && epicPending && (
+            <p className="field-hint">
+              New epic: <strong>{epicState.title}</strong>. {epicBrief}It is made when you approve the first ticket tagged with it.
+            </p>
+          )}
+          {epicState?.kind === 'existing' && epicPending && (
+            <p className="field-hint huddle-epic-hint">
+              Tickets tagged with it join <EpicTag epic={epicState.epic!} projectKey={projectKey} onOpen={onOpenTicket} />, which is already there.
+            </p>
+          )}
+          {epicState?.kind === 'made' && (
+            <p className="field-hint huddle-epic-hint">
+              Tickets tagged with it go in <EpicTag epic={epicState.epic!} projectKey={projectKey} onOpen={onOpenTicket} />
+            </p>
+          )}
+          {ordered && <p className="field-hint">A ticket marked “After …” starts once those tickets are done. Declining one takes it out of the order.</p>}
           <ul className="inbox-list proposal-list">
             {proposals.map((pr) => (
-              <ProposalRow key={pr.id} huddleId={summary.id} proposal={pr} agents={agents} items={items} projectKey={projectKey} onDecide={onDecide} onOpenTicket={onOpenTicket} />
+              <ProposalRow
+                key={pr.id}
+                huddleId={summary.id}
+                proposal={pr}
+                agents={agents}
+                items={items}
+                projectKey={projectKey}
+                onDecide={onDecide}
+                onOpenTicket={onOpenTicket}
+                siblings={proposals}
+                plannedEpic={planned}
+                epics={epics}
+              />
             ))}
           </ul>
         </section>

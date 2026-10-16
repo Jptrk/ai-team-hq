@@ -701,10 +701,23 @@ export interface HuddleProposal {
   text: string;
   /** Tickets: the desk proposed to own it. */
   owner?: string;
+  /** Planning tickets: they go in the epic the huddle proposed (Huddle.epic). */
+  inEpic?: boolean;
+  /** Planning tickets: the ticket proposals (ids, same huddle) that must be done first. Each links once both are approved. */
+  after?: string[];
   status: 'pending' | 'approved' | 'declined';
   /** The ticket an approved ticket proposal became. */
   itemId?: string;
   decidedAt?: string;
+}
+
+/** The one epic a planning huddle proposed for its tickets. It is made when you approve the first ticket in it. */
+export interface HuddleEpic {
+  title: string;
+  /** What it is for, in markdown. */
+  summary: string;
+  /** The epic it became (made then, or one already there under the same title). */
+  epicId?: string;
 }
 
 export interface Huddle {
@@ -733,6 +746,8 @@ export interface Huddle {
   entries: HuddleEntry[];
   cards: HuddleCard[];
   proposals: HuddleProposal[];
+  /** Planning: the epic proposed for its tickets. */
+  epic?: HuddleEpic;
   /** Brainstorm: the idea the facilitator picked, and why. */
   pick?: { title: string; reason: string };
   createdAt: string;

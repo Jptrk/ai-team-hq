@@ -34,7 +34,7 @@ export function blockedText(p: Project, item: WorkItem, reason: RunReason): stri
 }
 
 /** A title as compared for duplicates: case, spacing and punctuation do not count. */
-const titleKey = (t: string) =>
+export const titleKey = (t: string) =>
   t
     .toLowerCase()
     .replace(/[^\p{L}\p{N}]+/gu, ' ')

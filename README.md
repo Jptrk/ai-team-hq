@@ -839,7 +839,8 @@ nothing it proposes happens until you approve it. Start one from the **Huddles**
 - **Three kinds.** Each kind fills its own board:
   - **Retro**: Went well, Did not go well, and Try next columns.
   - **Brainstorm**: idea cards. The facilitator picks the strongest idea and says why.
-  - **Planning**: a task list. Each task has a desk to own it.
+  - **Planning**: a task list. Each task has a desk to own it. The last summary can also put the
+    tickets in order and group them under one epic (see below).
 - **Rounds.** Pick 1 to 3 rounds. In each round, every desk adds its part at the same time,
   through the normal desk queue. Then the facilitator sums up the round. Desks in later rounds
   react to the summary.
@@ -860,6 +861,20 @@ nothing it proposes happens until you approve it. Start one from the **Huddles**
   - **Tickets.** They land in **To do**, owned by the desk named. You start them yourself.
   - **Team notes.** They're added to the notes as one plain line of up to 300 characters, with
     no headings or sections. You see the whole line before you approve it.
+- **A planning huddle can plan the order and an epic**, the way the lead does in Goal mode. The
+  facilitator names the tickets by their place in its list or their title, since none exist yet.
+  - **One epic** for the tickets, with a title and a short brief. A ticket shows it as a tag,
+    marked "new epic" until it's made. It's made when you approve the first ticket in it, and the
+    rest join it. If an epic with the same title is already there, the tickets join that one. If
+    you delete the epic, tickets you approve after that join none.
+  - **The order.** A ticket can come after others in the same list: it shows "After …". Once you
+    approve both, the later one is blocked by the earlier one, whichever you approve first. If you
+    approve the later one first, Autopilot leaves it until you approve or decline the earlier one.
+    A ticket you decline drops out of the order. A ticket already started isn't held back by one
+    you approve later. HQ never makes a loop: if your own changes meanwhile would make one, that
+    link is left out, with a line in the ticket's history.
+  - The facilitator's plan is checked before it's saved. A ticket that isn't in the list, one
+    waiting on itself, or a loop is sent back to the facilitator to fix.
 - **Steer, stop, resume.** Your note in the steer box reaches the desks on their next turn,
   and it wakes nobody. **Stop** cancels the desks mid-turn. **Resume** runs only the turns
   still owed: desks that haven't added anything this round, including ones whose run failed
@@ -906,7 +921,8 @@ that must be done first.
 ### Epics
 
 - **Make one** on the **Epics** page (**New epic**): a title, and what it is for if you like. The lead can make them
-  too, when it plans toward the goal.
+  too, when it plans toward the goal, and a planning huddle can propose one (see
+  [Huddles](#huddles-retro-brainstorm-planning)).
 - **Its key** comes from the same numbers as tickets, so an epic is `GA-14` and no ticket ever shares it. The key opens
   it in the ticket modal (`?ticket=GA-14`), like a ticket.
 - **Tickets join** from the ticket (**Epic** in its details) or from the epic (**Add a ticket**). A ticket is in one
@@ -1512,7 +1528,7 @@ npm run test:epics
 - **`test:account`** checks signing in to your Claude account with a stand-in Claude Code: the pages shown (Claude's own sites only), the pasted code (and a code the browser beat to it), cancel and every way a sign-in can end, no token or code in any answer, that a poll never sees a sign-in that worked as signed out, that checks share one Claude Code run and only HQ's own page can force one, how HQ picks sim, live or not live, the switch and the restart hint, and sign-out. Your real login is never touched.
 - **`test:codex`** checks GPT desks with a stand-in Codex: the ChatGPT sign-in on this PC and by device code (OpenAI's own pages only, cancel, sign-out), account, usage windows and model list parsing, the model and effort setting, the desk config that switches Codex's own tools off (also against the pinned Codex's own `features list`, offline, skipped when it isn't installed), the file tools through HQ's fence (reads, writes, protected files, globs, grep, a runaway pattern stopped off the main thread), a ticket run end to end (HQ tools, close-out, no dollar cost, the thread kept and resumed), messages that come in during a run (with the next HQ tool result, once, and as a note in the turn after a file change), patch approvals inside and outside the fence (Windows name tricks declined, patches counted toward the cap), a used-up plan holding automatic work in GPT projects only (a Claude project's queued start stays in line; also when the limit comes after the desk closed out), Stop (also before Codex answers `turn/start`, with nothing written after it), the tool-call cap, a turn's end matched by its id, a thread too long for the model dropped, a project whose model can't run (the reason names the switch that is off or the login that is missing; work waits on its ticket with your note, the team's own starts wait at the gate, and it all starts once the model can run; an instruct and a chat message of yours already queued behind a busy desk wait too, with no failed run and no paused thread; a team start never replaces your held start; **Put … on it** is refused with the reason and holds nothing), a status check that must not undo a sign-out, and switching a project's model (refused while desks run; every desk starts a new conversation). Nothing signs in and no model runs.
 - **`test:idle`** checks HQ not live: starts and chat messages you make wait (one note per desk per thread) and begin once HQ is live as your own clicks, with your note and images, past the daily limits and ChatGPT's limit but not a Pause or Claude's limit; a held comment still gets its answer; huddles are refused; `wentLive` survives sign-out and is backfilled from desk runs on disk.
-- **`test:ui`** checks the UI helpers: routes, board columns and filter (by epic too), search ranking, report link resolution, markdown previews, image sizing, avatar text contrast, the pause notices (one model's hold, or both at once), and the epic and blocker helpers (an epic's key, progress, the Blocked tag, which tickets may block another).
+- **`test:ui`** checks the UI helpers: routes, board columns and filter (by epic too), search ranking, report link resolution, markdown previews, image sizing, avatar text contrast, the pause notices (one model's hold, or both at once), and the epic and blocker helpers (an epic's key, progress, the Blocked tag, which tickets may block another, and the epic and "After …" a huddle proposal shows, and which of its tickets Autopilot leaves for you to decide).
 - **`test:office`** checks the office floor:
   - the approved v3 layout exactly, and growth from 1 to 12 desks
   - the design team's route checks: every seat reachable, nothing inside a wall or a table, doorways only through gaps
@@ -1524,6 +1540,11 @@ npm run test:epics
   - what it takes to start one, the daily limit, and who facilitates
   - what desks add, and the facilitator's summary and proposals
   - approving a proposal into a ticket or a note, and notes kept to one plain line
+  - a planning huddle's epic and order: numbers and titles, a bad order refused before it's saved,
+    the epic made with its first ticket (or one by the same title used, and a deleted one not made
+    again), blockers linked whichever ticket you approve first, declined ones dropped, a started
+    ticket not held back, a link that would make a loop left out, the prompt and tool only in a
+    planning huddle's last round, and sim mode
   - the round engine: turns that skip their tool, failed turns, stop and resume (also a quick
     resume mid-turn, a removed facilitator, and a summary that landed before the stop)
   - a restart mid-huddle, and the guard and prompt that keep huddle turns read-only
@@ -1556,7 +1577,7 @@ npm run test:epics
 
   It fetches nothing: a stand-in builds a local fixture where git would clone.
 - **`test:shell`** checks desks' shell: Bash only with the project's Shell on (never in a huddle or a plan; a QA check with the project read-only), what HQ refuses before a command runs (git push in its forms, a `.env` file named anywhere, deletes outside the fence through `rm`, globs, `find`, `xargs`, `git clean`, `git rm`, PowerShell and `cmd`, nested shells, variables and `~`) and what it lets through, the hook that checks Claude's commands, counting and the activity feed, the prompts both models get, the setting, and HQ's Bash tool for GPT desks (finding Git Bash, an environment without HQ's logins, the reply). Where this PC has bash, a few commands really run in a scratch workspace: output, exit code, the working folder, a refusal that never ran, a timeout.
-- **`test:epics`** checks epics and blockers: progress from tickets, open blockers and loops (direct and through others), the epic and blocker routes (an epic takes the next ticket number; a bad field changes nothing; deleting an epic keeps its tickets), cleaning a hand-edited `db.json`, Autopilot passing a blocked ticket over, **Put … on it** and a hand-off waiting and starting once the blockers are done (or dropped when the ticket moves on), comments and QA checks not waiting, a blocker added while a start was queued, the lead waiting while goal work waits on blockers, planning with `create_epic`, `epic` and `blocked_by`, what ticket and planning prompts say, and a hand-off joining its parent's epic.
+- **`test:epics`** checks epics and blockers: progress from tickets, open blockers and loops (direct and through others), the epic and blocker routes (an epic takes the next ticket number; a bad field changes nothing; deleting an epic keeps its tickets), cleaning a hand-edited `db.json`, Autopilot passing a blocked ticket over, **Put … on it** and a hand-off waiting and starting once the blockers are done (or dropped when the ticket moves on), comments and QA checks not waiting, a blocker added while a start was queued, the lead waiting while goal work waits on blockers, planning with `create_epic`, `epic` and `blocked_by`, a planning huddle's approved tickets keeping their order for Autopilot (also one approved before the ticket it comes after), what ticket and planning prompts say, and a hand-off joining its parent's epic.
 - **`test:delete`** checks `delete_file`: files and folders move to the project's trash (nothing overwritten there), only where a desk may write, never protected files or a folder holding one, never a desk's own ROLE.md, memory.md or reports, the per-run and folder-size limits, the ticket history and changed files, and the QA prompt marking a deleted file.
 - **`test:archive`** checks removing a project: archived (board, images, trash and workspaces to `data/archive/`) or deleted for good with nothing left, the Removed projects list (names, dates, sizes, newest first) and deleting from it (only a folder there by its exact name), a link in a workspace removed but never followed (also when sizing), the linked folder untouched, and removing refused while a desk runs, a huddle is going, a connection check or sign-in runs, or for the last project. On Windows, with another program working in a desk's folder: archiving is refused with nothing moved and the board kept, and deleting for good names the held folder, which a new project by the same name never takes over. A removed project's late saves write nothing, also into a new project that took its id.
 - **`test:auto`** checks what the team does on its own, with desks on a fake runner:

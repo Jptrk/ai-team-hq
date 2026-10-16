@@ -485,6 +485,71 @@ test('planning tools: create_epic, and create_ticket with epic and blocked_by, t
   store.updateProject(p.id, { autopilot: false, goalMode: false });
 });
 
+test('planning huddle: approved tickets keep the proposed order for Autopilot, all in the proposed epic', async () => {
+  await fresh();
+  const huddles = await import('./huddle-core');
+  const ok = huddles.validateHuddle(p.state, { kind: 'planning', topic: 'Ship the new checkout', participants: ['nora', 'leo', 'sam'], rounds: 1 });
+  assert.ok(typeof ok !== 'string', String(ok));
+  const h = huddles.createHuddle(p.state, ok.input, ok.facilitator);
+  h.phase = 'summarize';
+  h.waiting = [];
+  const why = huddles.recordSummary(p.state, h, 'nora', {
+    summary: 'Cart first, then payments.',
+    epic: { title: 'Checkout' },
+    tickets: [
+      { title: 'Build the cart page', owner: 'Leo', brief: 'The cart' },
+      { title: 'Wire the payment API', owner: 'Sam', brief: 'Payments', blocked_by: ['Build the cart page'] },
+    ],
+  });
+  assert.equal(why, null);
+  huddles.advance(h);
+  // Payments approved first: it links to the cart once that is approved too.
+  const [pay, cart] = [...h.proposals].reverse().map((x) => {
+    const out = huddles.decideProposal(p, h, x.id, 'approve');
+    assert.ok(typeof out !== 'string' && out.item);
+    return out.item;
+  });
+  assert.deepEqual(pay.blockedBy, [cart.id]);
+  assert.equal(epicProgress(cart.epicId!, p.state.items).total, 2);
+  assert.deepEqual(pickStarts(p.state, { autopilot: true }, 5).map((x) => x.itemId), [cart.id], 'payments waits for the cart');
+  cart.status = 'done';
+  assert.deepEqual(pickStarts(p.state, { autopilot: true }, 5).map((x) => x.itemId), [pay.id]);
+});
+
+test('planning huddle: a ticket approved before the one it comes after waits for your decision on that one', async () => {
+  await fresh();
+  const huddles = await import('./huddle-core');
+  const ok = huddles.validateHuddle(p.state, { kind: 'planning', topic: 'Ship the new checkout', participants: ['nora', 'leo', 'sam'], rounds: 1 });
+  assert.ok(typeof ok !== 'string', String(ok));
+  const h = huddles.createHuddle(p.state, ok.input, ok.facilitator);
+  h.phase = 'summarize';
+  h.waiting = [];
+  huddles.recordSummary(p.state, h, 'nora', {
+    summary: 'Cart first.',
+    tickets: [
+      { title: 'Build the cart page', owner: 'Leo', brief: 'The cart' },
+      { title: 'Wire the payment API', owner: 'Sam', brief: 'Payments', blocked_by: [1] },
+    ],
+  });
+  huddles.advance(h);
+  const [cartProp, payProp] = h.proposals;
+  const out = huddles.decideProposal(p, h, payProp.id, 'approve');
+  assert.ok(typeof out !== 'string' && out.item);
+  const pay = out.item;
+  assert.equal(pay.blockedBy, undefined);
+  assert.match(pay.history.at(-1)!.text, /^Planning #1 put it after "Build the cart page", still waiting for you: Autopilot leaves it until you approve or decline that$/);
+  const meta = { autopilot: true };
+  assert.deepEqual(pickStarts(p.state, meta, 5), [], 'Sam leaves payments while the cart waits for you');
+  store.updateProject(p.id, { autopilot: true });
+  runner.autoTick(p);
+  await idle();
+  assert.equal(started.length, 0, 'nothing started');
+  store.updateProject(p.id, { autopilot: false });
+  // Declined: payments goes ahead.
+  assert.ok(typeof huddles.decideProposal(p, h, cartProp.id, 'decline') !== 'string');
+  assert.deepEqual(pickStarts(p.state, meta, 5).map((x) => x.itemId), [pay.id]);
+});
+
 test('prompts: a ticket run sees its epic and links; the plan sees epics and what waits on what', async () => {
   await fresh();
   store.updateProject(p.id, { autopilot: true, goalMode: true, goal: 'Ship the new checkout' });

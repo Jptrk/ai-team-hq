@@ -1,11 +1,13 @@
 import { Check, NotebookPen, SquareKanban, X } from 'lucide-react';
 import { useState } from 'react';
-import type { Agent, HuddleProposalSummary, WorkItem } from '../../../shared/types';
+import type { Agent, Epic, HuddleEpic, HuddleProposalSummary, WorkItem } from '../../../shared/types';
 import { Markdown } from '../../markdown/Markdown';
 import { plainText } from '../../markdown/plainText';
 import { Avatar } from '../../ui/Avatar';
 import { Lozenge } from '../../ui/Lozenge';
 import { agentById, ticketKey } from '../../util';
+import { EpicTag } from '../epics/EpicTag';
+import { proposalAfter, proposalEpic } from './plan';
 
 export type ProposalDecision = (huddleId: string, proposalId: string, decision: 'approve' | 'decline') => Promise<void>;
 
@@ -22,10 +24,15 @@ interface Props {
   compact?: boolean;
   /** Inbox rows: where it came from, as a link. */
   source?: { label: string; onOpen: () => void };
+  /** Planning: the huddle's proposals, for what this one comes after. */
+  siblings?: HuddleProposalSummary[];
+  /** Planning: the epic the huddle proposed. */
+  plannedEpic?: HuddleEpic;
+  epics?: Epic[];
 }
 
 /** One thing a huddle proposed: a ticket for a desk, or a line for the team notes. Nothing happens until you approve it. */
-export function ProposalRow({ huddleId, proposal: pr, agents, items, projectKey, onDecide, onOpenTicket, compact, source }: Props) {
+export function ProposalRow({ huddleId, proposal: pr, agents, items, projectKey, onDecide, onOpenTicket, compact, source, siblings = [], plannedEpic, epics = [] }: Props) {
   const [busy, setBusy] = useState(false);
   const owner = pr.owner ? agentById(agents, pr.owner) : undefined;
   const ticket = pr.itemId ? items.find((i) => i.id === pr.itemId) : undefined;
@@ -34,6 +41,10 @@ export function ProposalRow({ huddleId, proposal: pr, agents, items, projectKey,
   const approveLabel = pr.type === 'ticket' ? 'Add to To do' : 'Add to notes';
   // The title of a note is its first 80 characters; show the whole line you are approving.
   const noteText = pr.type === 'note' && pr.text && pr.text !== pr.title ? pr.text : undefined;
+  // Planning: its epic and what it comes after, while you decide. Once approved, its ticket shows them.
+  const planned = pr.status === 'pending';
+  const epic = planned ? proposalEpic(pr, plannedEpic, epics) : null;
+  const after = planned ? proposalAfter(pr, siblings, items) : [];
 
   const decide = async (decision: 'approve' | 'decline') => {
     if (busy) return;
@@ -66,6 +77,35 @@ export function ProposalRow({ huddleId, proposal: pr, agents, items, projectKey,
             <button type="button" className="link-btn small" onClick={source.onOpen}>
               {source.label}
             </button>
+          )}
+          {epic &&
+            (epic.epic ? (
+              <EpicTag epic={epic.epic} projectKey={projectKey} onOpen={onOpenTicket} />
+            ) : (
+              <span className="epic-tag planned" title="Made when you approve the first ticket in it">
+                <span className="epic-dot" aria-hidden />
+                <span className="epic-tag-text">{epic.title} (new epic)</span>
+              </span>
+            ))}
+          {after.length > 0 && (
+            <span className="proposal-after">
+              After{' '}
+              {after.map((a, i) => {
+                const k = a.item ? ticketKey(a.item, projectKey) : undefined;
+                return (
+                  <span key={i}>
+                    {i > 0 && (i === after.length - 1 ? ' and ' : ', ')}
+                    {k ? (
+                      <button type="button" className="link-btn small" title={a.title} onClick={() => onOpenTicket(k)}>
+                        {k}
+                      </button>
+                    ) : (
+                      <>“{a.title}”</>
+                    )}
+                  </span>
+                );
+              })}
+            </span>
           )}
         </div>
       </div>

@@ -28,7 +28,7 @@ import {
   threadForItem,
 } from '../chat';
 import { addComment } from '../comments';
-import { findHuddle, huddlePromptText, recordContribution, recordSummary, type ContributionArgs, type SummaryArgs } from '../huddle-core';
+import { findHuddle, huddlePromptText, MAX_PROPOSED_TICKETS, recordContribution, recordSummary, type ContributionArgs, type SummaryArgs } from '../huddle-core';
 import { runtimeServers, type AllowedServer } from '../connections';
 import { limit, watchLimits } from '../limits';
 import { autoDelete, isReadOnlyTool } from '../mcp';
@@ -1102,21 +1102,43 @@ function huddleTools(ctx: RunContext): HqTools {
     return ok('Added to the board. You can stop now.');
   });
 
+  // Planning orders its tickets and can group them under one epic. The tickets don't exist yet, so they are named by number or title.
+  const planning = kind === 'planning';
+  const ticketShape = {
+    title: z.string().min(3).max(120).describe('Short, starts with a verb'),
+    owner: z.string().max(40).optional().describe('Name of the desk that should own it'),
+    brief: z.string().min(3).max(1500).describe('What to do and what done looks like, in markdown'),
+    ...(planning
+      ? {
+          in_epic: z.boolean().optional().describe('false when this ticket is not part of the epic. Leave out otherwise.'),
+          blocked_by: z
+            .array(z.union([z.number().int().min(1).max(MAX_PROPOSED_TICKETS), z.string().min(1).max(120)]))
+            .max(MAX_PROPOSED_TICKETS - 1)
+            .optional()
+            .describe('Tickets in this list that must be done before this one starts: their number in the list (1 is the first) or their title. Never ticket keys. Leave out when it can start right away.'),
+        }
+      : {}),
+  };
   const summarizeShape: z.ZodRawShape = {
     summary: z.string().min(10).max(3000).describe('Markdown summary of the round: the themes, where desks agree, open disagreements.'),
     ...(last
       ? {
           tickets: z
-            .array(
-              z.object({
-                title: z.string().min(3).max(120).describe('Short, starts with a verb'),
-                owner: z.string().max(40).optional().describe('Name of the desk that should own it'),
-                brief: z.string().min(3).max(1500).describe('What to do and what done looks like, in markdown'),
-              }),
-            )
-            .max(8)
+            .array(z.object(ticketShape))
+            .max(MAX_PROPOSED_TICKETS)
             .optional()
             .describe('Action items worth doing. The founder approves each one before it becomes a ticket.'),
+          ...(planning
+            ? {
+                epic: z
+                  .object({
+                    title: z.string().min(3).max(MAX_EPIC_TITLE).describe('A short name for the bigger piece of work, e.g. "Checkout on mobile"'),
+                    brief: z.string().max(1000).optional().describe('What it is for and what done looks like, in markdown. Optional.'),
+                  })
+                  .optional()
+                  .describe('One epic for these tickets, when they add up to one bigger piece of work. It is made when the founder approves the first ticket in it.'),
+              }
+            : {}),
           notes: z.array(z.string().min(3).max(400)).max(5).optional().describe('Short lessons worth keeping in the team notes. The founder approves each one.'),
           ...(kind === 'brainstorm'
             ? { pick: z.object({ title: z.string().min(3).max(120), reason: z.string().min(3).max(600) }).optional().describe('The strongest idea, and why') }
@@ -1126,7 +1148,11 @@ function huddleTools(ctx: RunContext): HqTools {
   };
   const summarize = tool(
     'huddle_summarize',
-    last ? 'Sum up the last round and propose tickets and notes for the founder to approve. Call it once, then stop.' : 'Sum up this round for the next one. Call it once, then stop.',
+    !last
+      ? 'Sum up this round for the next one. Call it once, then stop.'
+      : planning
+        ? 'Sum up the last round and propose tickets (with an epic and their order, when that helps) and notes for the founder to approve. Call it once, then stop.'
+        : 'Sum up the last round and propose tickets and notes for the founder to approve. Call it once, then stop.',
     summarizeShape,
     async (args) => {
       const current = live();

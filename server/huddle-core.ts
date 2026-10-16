@@ -1,6 +1,8 @@
 import { estimateHuddleRuns, HUDDLE_KIND_LABEL, MAX_HUDDLE_DESKS, MAX_HUDDLE_ROUNDS, MAX_HUDDLE_TOPIC, MAX_TEAM_NOTES, MIN_HUDDLE_DESKS } from '../shared/huddle';
-import type { Agent, Huddle, HuddleCard, HuddleKind, HuddleLane, HuddleProposal, HuddleSummary, State, WorkItem } from '../shared/types';
+import type { Agent, Epic, Huddle, HuddleCard, HuddleKind, HuddleLane, HuddleProposal, HuddleSummary, State, WorkItem } from '../shared/types';
+import { blockerProblem, MAX_DESCRIPTION, MAX_EPIC_TITLE } from '../shared/types';
 import { leadOf } from './agents';
+import { blockersProblem, createEpic, epicTwin, findEpic, setBlockers, setEpic, titleKey } from './epics';
 import { limit } from './limits';
 import { now, today, uid, type Project } from './store';
 
@@ -229,11 +231,61 @@ export function recordFallback(h: Huddle, agentId: string, text: string, failed:
 
 // ---------- the facilitator's summary ----------
 
+export interface SummaryTicketArgs {
+  title: string;
+  owner?: string;
+  brief: string;
+  /** Planning: false keeps it out of the proposed epic. */
+  in_epic?: boolean;
+  /** Planning: tickets in the same summary that must be done first, by number in the list (1 is the first) or by title. */
+  blocked_by?: (number | string)[];
+}
+
 export interface SummaryArgs {
   summary: string;
-  tickets?: { title: string; owner?: string; brief: string }[];
+  tickets?: SummaryTicketArgs[];
   notes?: string[];
   pick?: { title: string; reason: string };
+  /** Planning: one epic for the tickets. */
+  epic?: { title: string; brief?: string };
+}
+
+/** Most tickets one summary proposes. */
+export const MAX_PROPOSED_TICKETS = 8;
+
+/**
+ * What each proposed ticket waits on, as positions in the summary's ticket list (0-based). Tickets are named by
+ * number (1 is the first) or by title, since none exists yet. A string is why the order won't do, in words for the
+ * facilitator: a ticket that isn't in the list, one waiting on itself, or a loop.
+ */
+function planOrder(tickets: SummaryTicketArgs[], listed: boolean[]): number[][] | string {
+  const at = (ref: number | string): number => {
+    if (typeof ref === 'number') return listed[ref - 1] ? ref - 1 : -1;
+    const n = /^\s*#?(\d+)\s*$/.exec(ref)?.[1];
+    if (n !== undefined) return listed[Number(n) - 1] ? Number(n) - 1 : -1;
+    const key = titleKey(ref);
+    return tickets.findIndex((t, i) => listed[i] && titleKey(t.title) === key);
+  };
+  const order: number[][] = [];
+  for (const [i, t] of tickets.entries()) {
+    const after: number[] = [];
+    for (const ref of listed[i] ? (t.blocked_by ?? []) : []) {
+      if (typeof ref === 'string' && !ref.trim()) continue;
+      const j = at(ref);
+      if (j === -1) return `Ticket ${i + 1} "${t.title.trim()}" is blocked by "${ref}", which is not a ticket in this summary. Name tickets by their number in the list (1 is the first) or their title.`;
+      if (j === i) return `Ticket ${i + 1} "${t.title.trim()}" can't be blocked by itself.`;
+      if (!after.includes(j)) after.push(j);
+    }
+    order.push(after);
+  }
+  // The same loop check as real tickets get.
+  const ref = (x: { number?: number }) => `ticket ${x.number} "${tickets[(x.number ?? 1) - 1].title.trim()}"`;
+  const nodes = order.map((after, i) => ({ id: `t${i}`, number: i + 1, blockedBy: after.map((j) => `t${j}`) }));
+  for (const [i, node] of nodes.entries()) {
+    const why = blockerProblem(node.id, node.blockedBy, nodes, ref);
+    if (why) return `Ticket ${i + 1} "${tickets[i].title.trim()}": ${why}`;
+  }
+  return order;
 }
 
 /** Record the facilitator's round summary; on the last round, its proposals too. Null when it went in, or why not. */
@@ -243,12 +295,32 @@ export function recordSummary(s: State, h: Huddle, agentId: string, args: Summar
   if (summarizedThisRound(h)) return 'This round is already summed up. You can stop now.';
   const summary = args.summary?.trim();
   if (!summary) return 'Write the summary.';
+  const last = h.round >= h.rounds;
+  const tickets = last ? (args.tickets ?? []).slice(0, MAX_PROPOSED_TICKETS) : [];
+  const listed = tickets.map((t) => Boolean(t.title?.trim()));
+  // Only planning orders its tickets and groups them under an epic. Checked before anything is saved, so a fix can come in a second call.
+  const planning = h.kind === 'planning';
+  const order = planning ? planOrder(tickets, listed) : [];
+  if (typeof order === 'string') return order;
   h.entries.push({ id: uid('hen'), round: h.round, from: agentId, kind: 'summary', text: summary, ts: now() });
-  if (h.round >= h.rounds) {
-    for (const t of (args.tickets ?? []).slice(0, 8)) {
-      if (!t.title?.trim()) continue;
-      h.proposals.push({ id: uid('prop'), type: 'ticket', title: t.title.trim(), text: (t.brief ?? '').trim(), owner: deskByName(s, t.owner)?.id ?? h.facilitator, status: 'pending' });
+  if (last) {
+    const epicTitle = planning ? (args.epic?.title ?? '').replace(/\s+/g, ' ').trim().slice(0, MAX_EPIC_TITLE) : '';
+    const ids = tickets.map(() => uid('prop'));
+    for (const [i, t] of tickets.entries()) {
+      if (!listed[i]) continue;
+      const after = (order[i] ?? []).map((j) => ids[j]);
+      h.proposals.push({
+        id: ids[i],
+        type: 'ticket',
+        title: t.title.trim(),
+        text: (t.brief ?? '').trim(),
+        owner: deskByName(s, t.owner)?.id ?? h.facilitator,
+        ...(epicTitle && t.in_epic !== false ? { inEpic: true } : {}),
+        ...(after.length ? { after } : {}),
+        status: 'pending',
+      });
     }
+    if (epicTitle && h.proposals.some((x) => x.inEpic)) h.epic = { title: epicTitle, summary: (args.epic?.brief ?? '').trim().slice(0, MAX_DESCRIPTION) };
     for (const n of (args.notes ?? []).slice(0, 5)) {
       const line = noteLine(n ?? '');
       if (line) h.proposals.push({ id: uid('prop'), type: 'note', title: line.slice(0, 80), text: line, status: 'pending' });
@@ -384,7 +456,64 @@ export function decideProposal(p: Project, h: Huddle, proposalId: string, decisi
   proposal.decidedAt = now();
   touch(h);
   p.log('you', `Approved ${p.ticket(item)} "${item.title}" from ${huddleLabel(h)}`);
+  followPlan(p, h, proposal, item);
   return { proposal, item };
+}
+
+/**
+ * A planning huddle's epic and order, for a ticket you just approved. It joins the proposed epic, which is made with
+ * the first ticket you approve in it. It waits on the tickets its blocker proposals became, and To do tickets
+ * approved earlier that wait on it get it as a blocker. A blocker still pending links when you approve it (until then
+ * Autopilot leaves the ticket: waitingOnProposals); a declined one never does. A ticket already started is not held back.
+ */
+function followPlan(p: Project, h: Huddle, proposal: HuddleProposal, item: WorkItem): void {
+  const by = huddleLabel(h);
+  if (proposal.inEpic && h.epic) {
+    const epic = planEpic(p, h);
+    if (epic) setEpic(p, item, epic, by);
+  }
+  const itemOf = (id: string) => {
+    const x = h.proposals.find((y) => y.id === id);
+    return x?.status === 'approved' && x.itemId ? p.state.items.find((i) => i.id === x.itemId) : undefined;
+  };
+  addBlockers(p, item, (proposal.after ?? []).map(itemOf).filter((i): i is WorkItem => Boolean(i)), by);
+  const undecided = h.proposals.filter((x) => x.status === 'pending' && proposal.after?.includes(x.id));
+  if (undecided.length) {
+    const titles = undecided.map((x) => `"${x.title}"`).join(', ');
+    item.history.push({ ts: now(), text: `${by} put it after ${titles}, still waiting for you: Autopilot leaves it until you approve or decline ${undecided.length === 1 ? 'that' : 'those'}` });
+  }
+  for (const other of h.proposals) {
+    if (!other.after?.includes(proposal.id)) continue;
+    const waiting = itemOf(other.id);
+    if (waiting?.status === 'todo') addBlockers(p, waiting, [item], by);
+  }
+}
+
+/**
+ * The huddle's epic: made now if this is its first ticket, or one already there under the same title. Undefined once
+ * you deleted it: you took it away, so it is not made again.
+ */
+function planEpic(p: Project, h: Huddle): Epic | undefined {
+  const plan = h.epic!;
+  if (plan.epicId) return findEpic(p.state, plan.epicId);
+  const epic = epicTwin(p.state, plan.title) ?? createEpic(p, h.facilitator, { title: plan.title, summary: plan.summary });
+  plan.epicId = epic.id;
+  return epic;
+}
+
+/**
+ * Adds blockers the plan asked for. One that would make a loop (tickets changed by hand since) or go past the limit
+ * is left out, with a line in the ticket's history.
+ */
+function addBlockers(p: Project, item: WorkItem, blockers: WorkItem[], by: string): void {
+  const ids = [...(item.blockedBy ?? [])];
+  for (const b of blockers) {
+    if (ids.includes(b.id)) continue;
+    const why = blockersProblem(p, item, [...ids, b.id]);
+    if (why) item.history.push({ ts: now(), text: `${by} put ${p.ticket(b)} first, but it is not linked: ${why}` });
+    else ids.push(b.id);
+  }
+  setBlockers(p, item, ids, by);
 }
 
 // ---------- prompt ----------
@@ -445,6 +574,11 @@ export function huddlePromptText(p: Project, h: Huddle, agentId: string, role: '
       lines.push(
         `This is the last round. Also propose, only where the discussion supports it: tickets (title, owner desk, brief) for the action items worth doing, and notes: short lessons worth keeping in the team notes.${h.kind === 'brainstorm' ? ' Pick the strongest idea and say why.' : ''} ${founder} approves each one.`,
       );
+      if (h.kind === 'planning') {
+        lines.push(
+          'When the tickets add up to one bigger piece of work, name it as epic (a short title and brief); a ticket that is not part of it gets in_epic: false. When a ticket needs another done first, list that one in its blocked_by, by its number in your tickets list (1 is the first) or its title. These tickets do not exist yet, so never use ticket keys there. Leave blocked_by out when a ticket can start right away.',
+        );
+      }
     } else lines.push('More rounds follow, so no tickets or notes yet.');
     lines.push('Call huddle_summarize once, then stop.');
   }

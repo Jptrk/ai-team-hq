@@ -1,4 +1,5 @@
 import type { Agent, AutoState, AutoStatus, Hold, PauseInfo, ProjectMeta, Run, RunReason, State, Thread, WorkItem } from '../shared/types';
+import { waitingOnProposals } from '../shared/huddle';
 import { autoLimitsOf, localDay, openBlockers, projectProvider, PROVIDERS, type Provider } from '../shared/types';
 import { clearWaiting, note } from './chat';
 import { waitsForBlockers } from './epics';
@@ -229,13 +230,15 @@ export function freeDesks(s: State): Agent[] {
 export function pickStarts(s: State, meta: Pick<ProjectMeta, 'autopilot'>, slots: number, reserved: ReadonlySet<string> = new Set()): { agentId: string; itemId: string }[] {
   if (!meta.autopilot || slots <= 0) return [];
   const queuedFor = new Set(s.runs.filter((r) => r.status === 'queued' && r.itemId).map((r) => r.itemId));
-  const blocked = (i: WorkItem) => openBlockers(i, s.items).length > 0;
+  const afterPending = waitingOnProposals(s.huddles);
+  const blocked = (i: WorkItem) => openBlockers(i, s.items).length > 0 || afterPending.has(i.id);
   const picks: { agentId: string; itemId: string; number: number }[] = [];
   for (const desk of freeDesks(s)) {
     if (reserved.has(desk.id)) continue;
     let next: WorkItem | undefined;
     for (const i of s.items) {
       // A ticket waiting for its blockers is passed over: the desk takes its next one, and comes back once they are done.
+      // So is one a planning huddle put after a proposal you haven't decided yet.
       if (i.assignee !== desk.id || i.status !== 'todo' || i.autoHold || i.autoSkip || queuedFor.has(i.id) || blocked(i)) continue;
       if (!next || (i.number ?? 0) < (next.number ?? 0)) next = i;
     }

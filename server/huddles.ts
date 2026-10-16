@@ -267,10 +267,18 @@ function simSummary(p: Project, h: Huddle): SummaryArgs {
   const top = inRound.slice(0, 3).map((c) => `- ${c.title} (${nameOf(p, c.by)})`);
   const summary = [`**Round ${h.round}:** ${inRound.length} items from ${h.participants.length} desks.`, ...top].join('\n');
   if (h.round < h.rounds) return { summary };
-  const actions = inRound.filter((c) => c.lane === 'try' || c.lane === 'task' || c.lane === 'idea').slice(0, 2);
+  const planning = h.kind === 'planning';
+  const actions = inRound.filter((c) => c.lane === 'try' || c.lane === 'task' || c.lane === 'idea').slice(0, planning ? 3 : 2);
   return {
     summary,
-    tickets: actions.map((c) => ({ title: c.title.slice(0, 120), owner: nameOf(p, c.owner ?? c.by), brief: `From ${huddleLabel(h)}. ${c.detail ?? 'Agreed in the huddle.'}` })),
+    // Planning: one epic for them all, each ticket after the one before it.
+    tickets: actions.map((c, i) => ({
+      title: c.title.slice(0, 120),
+      owner: nameOf(p, c.owner ?? c.by),
+      brief: `From ${huddleLabel(h)}. ${c.detail ?? 'Agreed in the huddle.'}`,
+      ...(planning && i > 0 ? { blocked_by: [i] } : {}),
+    })),
+    ...(planning && actions.length ? { epic: { title: h.topic.replace(/\s+/g, ' ').trim().slice(0, 60), brief: `Planned in ${huddleLabel(h)}.` } } : {}),
     notes: h.kind === 'retro' ? [inRound.find((c) => c.lane === 'try')?.title ?? 'Name an owner for every open question'] : [],
     ...(h.kind === 'brainstorm' && inRound[0] ? { pick: { title: inRound[0].title, reason: 'Most desks built on it and it is the cheapest to try.' } } : {}),
   };
