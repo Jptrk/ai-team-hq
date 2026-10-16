@@ -538,6 +538,70 @@ test('the next run resumes the desk thread with this run instructions', async ()
   assert.doesNotMatch(turn.input[0].text, /fresh session/, 'a resumed thread is not told it is fresh');
 });
 
+test('a GPT run hears messages that come in while it works: with the next HQ tool result, and as a note after a patch', async () => {
+  const item = ticket(desk.id);
+  const thread = chat.threadForItem(p.state, item, p.ticket(item), desk.id);
+  const mate = p.state.agents.find((a) => !a.isHuman && a.id !== desk.id)!;
+  const text = (r: { contentItems?: { text?: string }[] }) => (r.contentItems ?? []).map((c) => c.text ?? '').join('\n');
+  let steered = '';
+  const results: string[] = [];
+  scenario = (f, method, params) => {
+    if (method === 'turn/steer') {
+      steered = params.input?.[0]?.text ?? '';
+      return {};
+    }
+    return deskTurn(async (ff) => {
+      results.push(text(await call(ff, 'post_update', { text: 'Making the design file' })));
+      // A teammate made the file meanwhile and said so. The desk is busy, and hears it now, not after its run.
+      chat.postAgentMessage(p.state, thread, mate.id, [desk.id], 'Design file made: use https://example.test/file/1.', undefined, { needsReply: false });
+      results.push(text(await call(ff, 'post_update', { text: 'Checking the thread' })));
+      results.push(text(await call(ff, 'post_update', { text: 'Still here' })));
+      chat.postAgentMessage(p.state, thread, mate.id, [desk.id], 'Frames 1-3 are in it now.', undefined, { needsReply: false });
+      ff.emit('item/completed', { threadId: 'th', turnId: 'tu-1', item: { type: 'fileChange', id: 'fc-live', status: 'completed', changes: [] } });
+      await sleep(20);
+      await call(ff, 'report_done', { summary: 'Used the file my teammate made for the design.' });
+      return { status: 'completed' };
+    })(f, method, params);
+  };
+  const cursor = thread.cursor[desk.id];
+  runner.kickoff(p, item.id, 'manual');
+  await idle();
+  assert.equal(runOf(item).status, 'done', runOf(item).error);
+  assert.doesNotMatch(results[0], /while you work/, 'nothing new yet');
+  assert.match(results[1], new RegExp(`## New in thread "${p.ticket(item)}: ${item.title}" \\(${thread.id}\\) while you work\\n- \\[\\d+\\] ${mate.name} -> ${desk.name} \\(to you\\):\\n  > Design file made`));
+  assert.doesNotMatch(results[2], /while you work/, 'shown once');
+  assert.match(steered, /Frames 1-3 are in it now\./, 'after a patch, as a note in the turn');
+  assert.doesNotMatch(steered, /Design file made/);
+  assert.ok((thread.cursor[desk.id] ?? 0) >= (cursor ?? 0), 'the read marker is not moved back');
+});
+
+test("a note Codex won't take in is shown again with the next tool result", async () => {
+  const item = ticket(desk.id);
+  const thread = chat.threadForItem(p.state, item, p.ticket(item), desk.id);
+  const mate = p.state.agents.find((a) => !a.isHuman && a.id !== desk.id)!;
+  let steers = 0;
+  let next = '';
+  scenario = (f, method, params) => {
+    if (method === 'turn/steer') {
+      steers++;
+      return new Error('no turn to steer');
+    }
+    return deskTurn(async (ff) => {
+      chat.postAgentMessage(p.state, thread, mate.id, [desk.id], 'Use my file, not a new one.', undefined, { needsReply: false });
+      ff.emit('item/completed', { threadId: 'th', turnId: 'tu-1', item: { type: 'fileChange', id: 'fc-lost', status: 'completed', changes: [] } });
+      await sleep(20);
+      next = (await call(ff, 'post_update', { text: 'Carrying on' })).contentItems.map((c: { text?: string }) => c.text ?? '').join('\n');
+      await call(ff, 'report_done', { summary: 'Used the file my teammate made for the design.' });
+      return { status: 'completed' };
+    })(f, method, params);
+  };
+  runner.kickoff(p, item.id, 'manual');
+  await idle();
+  assert.equal(runOf(item).status, 'done', runOf(item).error);
+  assert.equal(steers, 1);
+  assert.match(next, /> Use my file, not a new one\./);
+});
+
 test("a GPT ticket run with the shell on: HQ's Bash, through the same check as Claude's; Codex's own shell stays off", async () => {
   const { bashPath } = await import('./runner/shell');
   // New tools start a new thread: later cases get the desk's own thread back.

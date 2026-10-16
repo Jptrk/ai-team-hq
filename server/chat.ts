@@ -401,6 +401,11 @@ export function markRead(t: Thread, agentId: string): void {
   t.cursor[agentId] = t.count;
 }
 
+/** Messages after `seen` that `agentId` did not write: what landed in the thread while its run was going. */
+export function newSince(s: State, t: Thread, agentId: string, seen: number): Message[] {
+  return messagesOf(s, t.id).filter((m) => m.n > seen && m.from !== agentId);
+}
+
 /** One queued run per desk per thread: it reads every unread message when it starts. */
 export function needsWake(s: State, t: Thread, agentId: string): boolean {
   return !s.runs.some((r) => r.reason === 'message' && r.threadId === t.id && r.agentId === agentId && r.status === 'queued');

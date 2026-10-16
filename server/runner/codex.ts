@@ -21,6 +21,8 @@ import {
   hqTools,
   huddlePrompt,
   imagesFor,
+  liveFromPrompt,
+  liveNote,
   logAutoChanges,
   logUnfinishedAutoChanges,
   messagePrompt,
@@ -371,7 +373,14 @@ async function runTurn(input: RunInput, ctx: RunContext, a: Attempt, signal: Abo
     return capText;
   };
 
+  /** A tool HQ runs for the desk. Messages that came in during the run ride along with its result (liveNote). */
   const callTool = async (p: { tool?: string; arguments?: unknown; callId?: string }): Promise<ToolResult> => {
+    const result = await runTool(p);
+    const news = stopping ? null : liveNote(ctx);
+    return news ? { ...result, contentItems: [...result.contentItems, textItem(news)] } : result;
+  };
+
+  const runTool = async (p: { tool?: string; arguments?: unknown; callId?: string }): Promise<ToolResult> => {
     const name = String(p.tool ?? '');
     const id = String(p.callId ?? `call-${calls}`);
     const refused = nextCall();
@@ -432,16 +441,19 @@ async function runTurn(input: RunInput, ctx: RunContext, a: Attempt, signal: Abo
   };
 
   let steerFailed = false;
-  /** Tell the model why HQ refused something, as a note in its turn: Codex's own refusal says only "rejected". */
-  const steer = (text: string) => {
-    if (server && threadId && turnId && !stopping) {
-      void server.request('turn/steer', { threadId, expectedTurnId: turnId, input: [{ type: 'text', text, text_elements: [] }] }, 10_000).catch((e: unknown) => {
-        // The desk still has the prompt's rule for a refusal; said once a run, so a log doesn't fill up.
-        if (steerFailed) return;
-        steerFailed = true;
-        console.info(`[hq] ${ctx.project.meta.key} ${ctx.agent.name}: HQ could not tell the desk why it refused a connection call (${e instanceof Error ? e.message.slice(0, 120) : 'error'}).`);
-      });
-    }
+  /**
+   * A note in the desk's turn: why HQ refused something (Codex's own refusal says only "rejected"), or messages that
+   * came in during the run. `onFail` runs when it can't go in.
+   */
+  const steer = (text: string, onFail?: () => void) => {
+    if (!server || !threadId || !turnId || stopping) return onFail?.();
+    void server.request('turn/steer', { threadId, expectedTurnId: turnId, input: [{ type: 'text', text, text_elements: [] }] }, 10_000).catch((e: unknown) => {
+      onFail?.();
+      // The desk still has the prompt's rules, and unread messages wait for its next run; said once a run, so a log doesn't fill up.
+      if (steerFailed) return;
+      steerFailed = true;
+      console.info(`[hq] ${ctx.project.meta.key} ${ctx.agent.name}: HQ could not add a note to the desk's turn (${e instanceof Error ? e.message.slice(0, 120) : 'error'}).`);
+    });
   };
 
   /**
@@ -544,6 +556,15 @@ async function runTurn(input: RunInput, ctx: RunContext, a: Attempt, signal: Abo
         if (item.type === 'mcpToolCall') settleMcp(item);
         if (item.type === 'agentMessage' && typeof item.text === 'string' && item.text.trim()) reply = item.text;
         if (item.type === 'fileChange') settlePatch(item.id, item.status === 'completed');
+        // A connection call or a patch has no result HQ writes: messages that came in during the run go in as a note.
+        // One that can't go in is shown again with the next tool result.
+        if (item.type === 'mcpToolCall' || item.type === 'fileChange') {
+          const before = new Map(ctx.live ?? []);
+          const news = liveNote(ctx);
+          if (news) steer(news, () => {
+            for (const [id, n] of before) ctx.live?.set(id, Math.min(ctx.live.get(id) ?? n, n));
+          });
+        }
         return;
       }
       watch.touch();
@@ -645,6 +666,7 @@ function ctxPrompt(input: RunInput, ctx: RunContext, fresh: boolean): string {
           : mode === 'qa'
             ? qaPrompt(input)
             : ticketPrompt(input, { restarted: Boolean(input.run.restarts) });
+  liveFromPrompt(ctx);
   const notes = runNotes(ctx.project, ctx.agent, ctx.connections, ctx.reason, mode, owns(ctx), Boolean(input.includeNotes), fresh);
   return notes.length ? `${base}\n\n## For this run\n${notes.join('\n')}` : base;
 }

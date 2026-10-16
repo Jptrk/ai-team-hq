@@ -17,6 +17,7 @@ import {
   messagesOf,
   needsNoReply,
   needsWake,
+  newSince,
   noticeHandoff,
   pauseForFailure,
   postAgentMessage,
@@ -375,6 +376,19 @@ test("back-and-forth: HQ's notices of a hand-off or a finished ticket always go 
   assert.equal(t.status, 'open', 'the notice ended the run before it');
   postAgentMessage(s, t, 'sam', ['leo'], ECHOES[ECHO_LIMIT - 1], LOOSE);
   assert.equal(t.pausedReason, 'echo');
+});
+
+test('new since: what landed after a point, from anyone but the desk itself, whether it was to the desk or not', () => {
+  const s = fresh();
+  const t = createThread(s, { title: 'T', createdBy: 'leo' });
+  postAgentMessage(s, t, 'leo', ['sam'], 'Before the run.', L);
+  const seen = t.count;
+  postAgentMessage(s, t, 'sam', ['leo'], 'I made the file.', L, { needsReply: false });
+  postAgentMessage(s, t, 'leo', ['sam'], 'Mine.', L);
+  postAgentMessage(s, t, 'sam', ['dylan'], 'Not to Leo.', L);
+  postFounderMessage(s, t, '@Sam one file only');
+  assert.deepEqual(newSince(s, t, 'leo', seen).map((m) => m.text), ['I made the file.', 'Not to Leo.', '@Sam one file only']);
+  assert.deepEqual(newSince(s, t, 'leo', t.count), []);
 });
 
 test('batching: a queued run for the desk and thread means no second wake; a running one does not block', () => {
