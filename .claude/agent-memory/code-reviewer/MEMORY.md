@@ -20,3 +20,4 @@
 - [Blocker hold review checks](blocker-hold-review-checks.md) — stale autoHold why after release paths, Pause vs released yours, loop check via done tickets
 - [Chat echo review checks](chat-echo-review-checks.md) — quiet replies stall waiting tickets (Autopilot busy too), echoStreak counts quiet/notices, NO_REPLY false hits
 - [Live delivery review checks](live-delivery-review-checks.md) — quiet sends make closedOut true, system-reminder framing, steer marks shown early, prompt dupes
+- [Huddle plan review checks](huddle-plan-review-checks.md) — out-of-order approval lets Autopilot start the later ticket, decline breaks transitive order, stale "new epic"
