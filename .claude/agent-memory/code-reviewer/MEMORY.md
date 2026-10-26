@@ -21,3 +21,4 @@
 - [Chat echo review checks](chat-echo-review-checks.md) — quiet replies stall waiting tickets (Autopilot busy too), echoStreak counts quiet/notices, NO_REPLY false hits
 - [Live delivery review checks](live-delivery-review-checks.md) — quiet sends make closedOut true, system-reminder framing, steer marks shown early, prompt dupes
 - [Huddle plan review checks](huddle-plan-review-checks.md) — out-of-order approval lets Autopilot start the later ticket, decline breaks transitive order, stale "new epic"
+- [Full mode and preset review checks](full-mode-preset-review-checks.md) — mode enums in src, READ_WORDS prefix leaks, SDK prompt snapshot, preset auto memory, message item
