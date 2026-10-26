@@ -172,12 +172,14 @@ export function updateConnection(p: Project, name: string, patch: ConnectionPatc
   }
   if (patch.desks !== undefined) conn.desks = patch.desks.filter((d) => desks.has(d));
   if (patch.mode !== undefined) conn.mode = patch.mode;
-  // A connection that is off never keeps Auto: turned back on, it starts at Ask, so Auto is picked again on purpose.
-  const backToAsk = !conn.enabled && conn.mode === 'auto';
+  // A connection that is off never keeps Auto or Full: turned back on, it starts at Ask, so either is picked again on purpose.
+  const openName = conn.mode === 'full' ? 'Full' : 'Auto';
+  const backToAsk = !conn.enabled && (conn.mode === 'auto' || conn.mode === 'full');
   if (backToAsk) conn.mode = 'ask';
 
-  const how = conn.mode === 'read' ? 'read only' : conn.mode === 'auto' ? 'changes run on their own, deletes need approval' : 'changes need approval';
-  p.log('you', `${conn.enabled ? 'Connection' : 'Turned off'} ${name}${conn.enabled ? ` for ${conn.desks.length} desk${conn.desks.length === 1 ? '' : 's'}, ${how}` : backToAsk ? ', Auto back to Ask' : ''}`);
+  const how =
+    conn.mode === 'read' ? 'read only' : conn.mode === 'auto' ? 'changes run on their own, deletes need approval' : conn.mode === 'full' ? 'everything runs on its own, deletes too' : 'changes need approval';
+  p.log('you', `${conn.enabled ? 'Connection' : 'Turned off'} ${name}${conn.enabled ? ` for ${conn.desks.length} desk${conn.desks.length === 1 ? '' : 's'}, ${how}` : backToAsk ? `, ${openName} back to Ask` : ''}`);
   p.commit();
   return conn;
 }
@@ -357,7 +359,7 @@ function settleSaved(added?: { name: string; source: McpSource }): void {
         proj.log('you', f ? `Turned off ${c.name}: its setup in Claude Code changed. Turn it on again to use the new one.` : `Turned off ${c.name}: it is no longer set up in Claude Code.`);
       }
       c.enabled = false;
-      if (c.mode === 'auto') c.mode = 'ask';
+      if (c.mode === 'auto' || c.mode === 'full') c.mode = 'ask';
       if (f) c.source = f.info.source;
       delete c.fingerprint;
       delete checks[c.name];

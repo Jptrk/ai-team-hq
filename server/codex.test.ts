@@ -1408,7 +1408,7 @@ test('which call an approval is about: by its arguments, then by the tool the me
 });
 
 /** Turn a connection on for the GPT desk, in this mode. */
-function connect(name: string, mode: 'ask' | 'read' | 'auto') {
+function connect(name: string, mode: 'ask' | 'read' | 'auto' | 'full') {
   p.state.connections = p.state.connections.filter((c) => c.name !== name);
   p.state.connections.push({ name, source: 'user', enabled: true, desks: [desk.id], mode });
 }

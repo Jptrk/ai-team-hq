@@ -1364,7 +1364,7 @@ project.put('/connections/:name', jsonOnly, (req, res) => {
     patch.desks = body.desks as string[];
   }
   if ('mode' in body) {
-    if (body.mode !== 'ask' && body.mode !== 'read' && body.mode !== 'auto') return res.status(400).json({ error: 'mode must be ask, read or auto' });
+    if (body.mode !== 'ask' && body.mode !== 'read' && body.mode !== 'auto' && body.mode !== 'full') return res.status(400).json({ error: 'mode must be ask, read, auto or full' });
     patch.mode = body.mode;
   }
   const result = updateConnection(p, String(req.params.name), patch);

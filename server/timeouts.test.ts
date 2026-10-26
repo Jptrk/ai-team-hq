@@ -196,6 +196,7 @@ test('env: MCP tool calls get a time limit, unless you set MCP_TOOL_TIMEOUT your
   assert.equal(runEnv(undefined, { PATH: 'x' }, 900_000).MCP_TOOL_TIMEOUT, '900000');
   assert.equal(runEnv(undefined, { PATH: 'x', MCP_TOOL_TIMEOUT: '120000' }, 900_000).MCP_TOOL_TIMEOUT, '120000');
   assert.equal(runEnv(undefined, { PATH: 'x' }, 0).MCP_TOOL_TIMEOUT, undefined, 'HQ_MCP_TOOL_TIMEOUT_MS=0 leaves it to Claude Code');
+  assert.equal(runEnv(undefined, { PATH: 'x' }, 0).CLAUDE_CODE_DISABLE_AUTO_MEMORY, '1', "Claude Code's auto memory stays off: its writes skip HQ's guard");
   assert.equal(mcpToolTimeoutFromEnv(undefined), 900_000);
   assert.equal(mcpToolTimeoutFromEnv(''), 900_000, 'empty is the default, not off');
   assert.equal(mcpToolTimeoutFromEnv('15m'), 900_000, 'junk is the default');

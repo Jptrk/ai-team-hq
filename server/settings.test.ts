@@ -204,6 +204,8 @@ test('runs: a run reads its limits once at its start, for its kind of run', () =
     const watch = { idleMs: 300_000, toolIdleMs: 600_000, capMs: 900_000 };
     for (const mode of ['ticket', 'qa'] as const) assert.deepEqual(runLimitsFor(mode, 1000), { deadline: 901_000, watch, maxTurns: 50, maxBudgetUsd: 4 }, mode);
     for (const mode of ['message', 'huddle'] as const) assert.deepEqual(runLimitsFor(mode, 1000), { deadline: 901_000, watch, maxTurns: 9, maxBudgetUsd: 0.5 }, mode);
+    assert.deepEqual(runLimitsFor('message', 1000, true), { deadline: 901_000, watch, maxTurns: 50, maxBudgetUsd: 4 }, 'a message run on a ticket gets ticket room');
+    assert.deepEqual(runLimitsFor('huddle', 1000, true), { deadline: 901_000, watch, maxTurns: 9, maxBudgetUsd: 0.5 }, 'only message runs');
     assert.deepEqual(runLimitsFor('plan', 1000), { deadline: 901_000, watch, maxTurns: 15, maxBudgetUsd: 2 });
     const started = runLimitsFor('ticket', 1000);
     setLimits({ runTimeoutMs: 1_800_000, claudeTicketTurns: 80 });

@@ -124,7 +124,7 @@ export function AutoBar({ project, auto, autoConnections, paused, onChange, onRe
           Free desks start their next To do ticket on their own, while you are away too, up to {limits.runs} runs and ${limits.usd} a day. Pause in the header
           stops everything the team starts on its own.
           {autoConnections > 0 &&
-            ` ${autoConnections} connection${autoConnections === 1 ? ' is' : 's are'} on Auto, so desks change things there without asking.`}
+            ` ${autoConnections} connection${autoConnections === 1 ? ' is' : 's are'} on Auto or Full, so desks change things there without asking.`}
         </ConfirmInline>
       )}
     </div>

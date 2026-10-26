@@ -416,7 +416,7 @@ export interface McpToolInfo {
 }
 
 /** read = changes never allowed; ask = changes wait for your approval; auto = changes run on their own, deletes still ask. */
-export type ConnectionMode = 'ask' | 'read' | 'auto';
+export type ConnectionMode = 'ask' | 'read' | 'auto' | 'full';
 
 /** Your choice for one server in one project. Only this is stored; tokens never are. */
 export interface ProjectConnection {
@@ -425,7 +425,7 @@ export interface ProjectConnection {
   enabled: boolean;
   /** Desks allowed to use it. */
   desks: string[];
-  /** ask = reads run, changes wait for approval; read = changes are never allowed; auto = changes run, deletes wait for approval. */
+  /** ask = reads run, changes wait for approval; read = changes are never allowed; auto = changes run, deletes wait for approval; full = everything runs, deletes too. */
   mode: ConnectionMode;
   /**
    * Which server it was when you turned it on: a hash of its masked shape, never the command or URL

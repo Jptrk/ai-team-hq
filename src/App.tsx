@@ -337,7 +337,7 @@ export function App({ loginName, onLogout }: { loginName: string; onLogout: () =
           <AutoBar
             project={state.project}
             auto={state.auto}
-            autoConnections={state.connections.filter((c) => c.enabled && c.mode === 'auto').length}
+            autoConnections={state.connections.filter((c) => c.enabled && (c.mode === 'auto' || c.mode === 'full')).length}
             paused={Boolean(meta?.paused)}
             onChange={async (patch) => {
               try {

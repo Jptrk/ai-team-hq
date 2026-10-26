@@ -50,7 +50,8 @@ export function ConnectionsPanel({ pid, agents, ownerName, hasFolder, notify }: 
   const [busy, setBusy] = useState<ReadonlySet<string>>(() => new Set());
   const [error, setError] = useState<string | null>(null);
   // The connection whose switch to Auto waits for your yes.
-  const [confirmAuto, setConfirmAuto] = useState<string | null>(null);
+  // One confirm box at a time, Auto or Full for one row. Any other change to the row closes it.
+  const [confirm, setConfirm] = useState<{ name: string; mode: 'auto' | 'full' } | null>(null);
   const [showAll, setShowAll] = useState(false);
   const [adding, setAdding] = useState(false);
   // A fresh form after every close, so typed secrets never stay in memory.
@@ -143,7 +144,7 @@ export function ConnectionsPanel({ pid, agents, ownerName, hasFolder, notify }: 
     markBusy(row.name, true);
     setError(null);
     setConfirmRemove(null);
-    setConfirmAuto((c) => (c === row.name ? null : c));
+    setConfirm((c) => (c?.name === row.name ? null : c));
     version.current++;
     let res: ConnectionsResponse | null = null;
     try {
@@ -310,22 +311,50 @@ export function ConnectionsPanel({ pid, agents, ownerName, hasFolder, notify }: 
                 disabled={busy.has(row.name)}
                 onClick={() => {
                   // It acts as you on that service, so it waits for a yes in the page.
-                  if (row.connection.mode !== 'auto') setConfirmAuto(row.name);
+                  setConfirm(row.connection.mode === 'auto' ? null : { name: row.name, mode: 'auto' });
                 }}
               >
                 Auto
               </button>
+              <button
+                type="button"
+                className={`seg${row.connection.mode === 'full' ? ' on' : ''}`}
+                aria-pressed={row.connection.mode === 'full'}
+                disabled={busy.has(row.name)}
+                onClick={() => {
+                  // Nothing waits for you on Full, deletes included, so it waits for a yes in the page.
+                  setConfirm(row.connection.mode === 'full' ? null : { name: row.name, mode: 'full' });
+                }}
+              >
+                Full
+              </button>
             </div>
-            {confirmAuto === row.name && row.connection.mode !== 'auto' && (
+            {confirm !== null && confirm.name === row.name && confirm.mode === 'full' && row.connection.mode !== 'full' && (
+              <ConfirmInline
+                title={`Turn on Full for ${row.name}?`}
+                confirmLabel="Turn on Full"
+                busy={busy.has(row.name)}
+                onConfirm={() => {
+                  setConfirm(null);
+                  update(row, { mode: 'full' });
+                }}
+                onCancel={() => setConfirm(null)}
+              >
+                Desks will read, change and delete things on {row.name} as {ownerName}, without asking you first, the way a Claude Code session on this PC would. Pick it
+                for a tool that runs on this PC and keeps its own undo or versioned files (Blender), not for a service or a browser, where a delete, a send or a payment is
+                for good. What desks read (files, pages, the web) can also steer what they do. Every change shows in the activity feed.
+              </ConfirmInline>
+            )}
+            {confirm !== null && confirm.name === row.name && confirm.mode === 'auto' && row.connection.mode !== 'auto' && (
               <ConfirmInline
                 title={`Turn on Auto for ${row.name}?`}
                 confirmLabel="Turn on Auto"
                 busy={busy.has(row.name)}
                 onConfirm={() => {
-                  setConfirmAuto(null);
+                  setConfirm(null);
                   update(row, { mode: 'auto' });
                 }}
-                onCancel={() => setConfirmAuto(null)}
+                onCancel={() => setConfirm(null)}
               >
                 Desks will post and change things on {row.name} as {ownerName}, without asking you first. Deleting or removing anything still waits for your approval, but
                 HQ can't fully see inside tools that run code, scripts or batches, so a delete there can slip through. What desks read (issues, pages, the web) can also
@@ -336,6 +365,12 @@ export function ConnectionsPanel({ pid, agents, ownerName, hasFolder, notify }: 
               <p className="field-hint conn-auto-note">
                 <span className="warn">Auto:</span> desks change things on {row.name} as you without asking. Deletes still wait for your approval, but ones hidden inside code,
                 scripts or batches can slip through, and what desks read can steer them. Every change shows in the activity feed. Turning it off puts it back on Ask.
+              </p>
+            )}
+            {row.connection.mode === 'full' && (
+              <p className="field-hint conn-auto-note">
+                <span className="warn">Full:</span> desks read, change and delete things on {row.name} as you without asking. Nothing waits for your approval, and what desks
+                read can steer them. Every change shows in the activity feed. Turning it off puts it back on Ask.
               </p>
             )}
             <div className="conn-desks">

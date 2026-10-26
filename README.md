@@ -405,6 +405,11 @@ settings. That's the same order Claude Code uses.
   - *Auto*: agents post and change things on their own, as you. Anything that deletes or removes
     still waits for your approval, the same way as Ask. HQ asks you to confirm before turning
     Auto on. Turning a connection off puts it back on Ask.
+  - *Full*: agents read, change and delete on their own, as you, with no check of names, inputs or
+    code: the way a Claude Code session on this PC works. For a tool that runs on this PC and keeps
+    its own undo or versioned files (Blender), not for a service or a browser, where a delete, a send
+    or a payment is for good and what agents read can steer them. HQ asks you to confirm before
+    turning Full on. Turning a connection off puts it back on Ask.
 - **Changes count at once.** A run checks your saved choice on every tool call: turn a server off,
   drop a desk, or pick a stricter mode, and a desk that is already working follows it straight
   away. A looser mode waits for its next run.
@@ -815,9 +820,10 @@ a desk wakes it for a live run, which spends usage.
   `raise_for_decision` opens a new ticket rather than taking over theirs. A ticket run that
   asked a teammate stays in progress until the reply.
 - **Trust.** Teammate messages are treated as colleague requests. They can't approve anything.
-  On Ask, MCP writes need a run that follows your approval; on Auto, only deletes do.
+  On Ask, MCP writes need a run that follows your approval; on Auto, only deletes do; on Full, nothing does.
 - **Message runs are cheap by design.** They're capped at 12 turns and $1 estimated. A small
-  ask-and-answer came to about $0.05 to $0.08 per run.
+  ask-and-answer came to about $0.05 to $0.08 per run. A ticket's owner replying in that ticket's
+  thread runs under the ticket caps instead: they carry the ticket on from there.
 
 | Env | Default | What |
 | --- | ------- | ---- |
@@ -827,7 +833,8 @@ a desk wakes it for a live run, which spends usage.
 | `HQ_MSG_MAX_BUDGET_USD` | 1 | Estimated-cost cap for a message run |
 
 You can also set all four on the Accounts page, under [Limits](#limits-on-the-accounts-page): the first two
-under **Desk chat**, the message-run caps as **Turns per chat reply** and **Budget per chat reply**.
+under **Desk chat**, the message-run caps as **Turns per chat reply** and **Budget per chat reply**. A ticket's owner
+replying in that ticket's thread runs under the ticket caps instead: they carry the ticket on from there.
 
 In sim mode, desks answer with canned replies, so the tab works without spending usage.
 
@@ -1216,7 +1223,7 @@ run. The list is the models on your login; **Codex default** follows OpenAI's pi
 What is different from a Claude desk:
 
 - **Connections work, from the same list.** A GPT desk gets the connections turned on for it, as a Claude desk
-  does, with the same Ask / Read only / Auto modes, the same delete checks, the auto-change log and screenshot
+  does, with the same Ask / Read only / Auto / Full modes, the same delete checks, the auto-change log and screenshot
   attachments. The differences, shown on each row of a GPT project's **Connections** page (**On GPT: …**):
   - A server you sign in to in a browser (Figma, Atlassian…) keeps one sign-in per model: Claude's can't be used
     by GPT. Press **Check**; a row that says **needs a sign-in for GPT** gets a **Sign in for GPT** button. Codex
@@ -1450,7 +1457,9 @@ chat reply's whole budget ("Reached maximum budget ($1)").
   tools, first prompt), which any fresh session starts with anyway. Sessions from before HQ kept
   the base count their whole size. `memory.md`, reports and the ticket carry what matters, and a
   fresh session's prompt says so: its earlier conversation is not loaded, so read `memory.md` first.
-- **One system prompt per desk.** A desk gets the same system prompt and tools for ticket runs and
+- **One system prompt per desk.** It is Claude Code's own system prompt with HQ's rules appended, so a
+  desk starts from what a Claude Code session on this PC gets: its tool guidance and each connection's
+  server instructions. A desk gets the same system prompt and tools for ticket runs and
   chat replies; what differs per run (why it was woken, an approval, team notes ticked for one task)
   goes in a "For this run" section at the very end of the prompt. Switching between chat and ticket
   work keeps the cache warm. The system prompt says only that last section counts, so a copy of it

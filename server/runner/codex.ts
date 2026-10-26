@@ -279,8 +279,8 @@ interface Attempt {
   watch: WatchLimits;
 }
 
-/** The tool-call limit for a kind of run: chat replies, planning, or the rest (tickets, QA checks, huddle turns). */
-const callsKeyOf = (mode: RunMode): LimitKey => (mode === 'message' ? 'gptReplyCalls' : mode === 'plan' ? 'gptPlanCalls' : 'gptTicketCalls');
+/** The tool-call limit for a kind of run: chat replies, planning, or the rest (tickets, QA checks, huddle turns). The ticket's owner replying in its thread gets the ticket cap: they carry the ticket on from there. */
+const callsKeyOf = (mode: RunMode, onTicket = false): LimitKey => (mode === 'message' && !onTicket ? 'gptReplyCalls' : mode === 'plan' ? 'gptPlanCalls' : 'gptTicketCalls');
 
 /** dropThread: the thread grew past what the model takes, so the desk's next run starts a new one. */
 type Failure = Error & { outcome?: RunOutcome; usage?: UsageLimit; dropThread?: boolean };
@@ -719,7 +719,7 @@ export const codexRunner: AgentRunner = {
     // Read once, with the deadline: the run keeps the limits it started with.
     const watch = watchLimits();
     const deadline = Date.now() + watch.capMs;
-    const callsKey = callsKeyOf(mode);
+    const callsKey = callsKeyOf(mode, owns(ctx));
     const maxCalls = limit(callsKey);
     let dropThread = false;
     const remember = () => {

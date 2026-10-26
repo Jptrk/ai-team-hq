@@ -10,7 +10,7 @@ import type { AllowedServer } from './connections';
  *   Secrets in variables and headers never go on a command line. A token inside a server's URL or a program's
  *   arguments does, as it does for Claude.
  *   - every tool call asks HQ first (default_tools_approval_mode = prompt), and HQ answers with the same rules as
- *     for Claude (mcpDecision in claude.ts): Ask, Read only and Auto mean the same on both models.
+ *     for Claude (mcpDecision in claude.ts): Ask, Read only, Auto and Full mean the same on both models.
  * The server's id in Codex is its tool key (mcp__<key>__), the same one Claude uses, so tool names match too.
  * Left out: claude.ai connectors (they only exist inside your Claude account), SSE servers (Codex speaks
  * streamable HTTP), a server named hq (HQ's own tools), and a program whose variables would change Codex itself or

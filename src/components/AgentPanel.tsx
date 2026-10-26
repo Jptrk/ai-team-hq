@@ -154,7 +154,7 @@ export function AgentPanel({ agent, state, onClose, onOpenTicket, onOpenThread, 
             {connections.length ? (
               <p className="chips">
                 {connections.map((c) => (
-                  <span key={c.name} className="chip mono" title={c.mode === 'read' ? 'Read only' : c.mode === 'auto' ? 'Changes run on their own; deletes need your approval' : 'Changes need your approval'}>
+                  <span key={c.name} className="chip mono" title={c.mode === 'read' ? 'Read only' : c.mode === 'auto' ? 'Changes run on their own; deletes need your approval' : c.mode === 'full' ? 'Everything runs on its own, deletes too' : 'Changes need your approval'}>
                     {c.name} · {c.mode === 'read' ? 'read only' : c.mode}
                   </span>
                 ))}

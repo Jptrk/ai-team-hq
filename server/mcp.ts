@@ -187,6 +187,10 @@ export function discoverServers(folder: string | null): FoundServer[] {
 
 const WRITE_WORDS = /^(create|update|delete|remove|add|merge|push|post|send|edit|transition|set|write|close|approve|request|assign|upload|move|rename|submit|publish|comment|reply|react|star|fork|dismiss|rerun|cancel|trigger|run|execute|click|fill|type|press|drag|navigate|new|use|generate|export|import|sync|link|unlink|lock|unlock|archive|restore|invite|share)/i;
 const READ_WORDS = /^(get|list|search|read|fetch|find|query|lookup|view|describe|show|download|resolve|whoami|check|count|preview|inspect|take_screenshot|take_snapshot|list_)/i;
+// Whole names that read, where no first word says so: Blender's look (render and see), a browser's snapshot and
+// screenshot tools (Playwright's browser_snapshot, browser_take_screenshot). Whole names only: snapshot_restore or
+// screenshot_upload would change something.
+const READ_NAMES = /^(look|screenshot|snapshot|browser_snapshot|browser_take_screenshot|capture_screenshot)$/;
 
 /** getJiraIssue -> get_jira_issue, resolve-library-id -> resolve_library_id, files.delete -> files_delete */
 function snakeOf(name: string): string {
@@ -220,7 +224,7 @@ export function isReadOnlyTool(tool: string, hint?: Pick<McpToolInfo, 'readOnly'
   if (soundsLikeWrite) return false;
   if (hint?.readOnly === true) return true;
   if (hint?.readOnly === false || hint?.destructive === true) return false;
-  return READ_WORDS.test(snake) || /_read$/.test(snake) || /user_?info$/.test(snake);
+  return READ_WORDS.test(snake) || READ_NAMES.test(snake) || /_read$/.test(snake) || /user_?info$/.test(snake);
 }
 
 // Keys whose short value names the action: { method: 'delete_pending' }, { ops: ['remove'] }.

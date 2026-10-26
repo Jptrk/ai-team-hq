@@ -181,6 +181,18 @@ const figma: AllowedServer = {
     run_code: { name: 'run_code', destructive: true, reads: false },
   },
 };
+// Full: changes and deletes run on their own, as a Claude Code session on this PC would.
+const blender: AllowedServer = {
+  name: 'blender',
+  key: 'blender',
+  mode: 'full',
+  tools: {
+    get_scene_info: { name: 'get_scene_info', readOnly: true, reads: true },
+    look: { name: 'look', reads: true },
+    execute_blender_code: { name: 'execute_blender_code', destructive: true, reads: false },
+    import_asset: { name: 'import_asset', reads: false },
+  },
+};
 
 async function mcp(tool: string, reason: 'instruction' | 'approved' | 'message' | 'handoff', connections: AllowedServer[], input: Record<string, unknown> = {}) {
   return (await guard({ project: fakeProject('read', saved(connections)), dir: ws, agent: leo, reason, connections })(tool, input)).behavior;
@@ -215,6 +227,12 @@ const mcpCases: [string, string, 'instruction' | 'approved' | 'message' | 'hando
   ['auto: marked destructive, with no code to read, still needs approval', 'mcp__figma__generate_figma_design', 'instruction', [figma], 'deny'],
   ['auto: a delete after approval', 'mcp__figma__delete_node', 'approved', [figma], 'allow'],
   ['auto on one server does not open another', 'mcp__github__add_issue_comment', 'instruction', [github, figma], 'deny'],
+  ['full: read', 'mcp__blender__get_scene_info', 'instruction', [blender], 'allow'],
+  ['full: look is a read', 'mcp__blender__look', 'message', [blender], 'allow'],
+  ['full: a change runs without approval', 'mcp__blender__import_asset', 'instruction', [blender], 'allow'],
+  ['full: a delete by name runs without approval', 'mcp__blender__delete_object', 'instruction', [blender], 'allow'],
+  ['full: a tool marked destructive runs, in a message run too', 'mcp__blender__execute_blender_code', 'message', [blender], 'allow'],
+  ['full on one server does not open another', 'mcp__figma__delete_node', 'instruction', [figma, blender], 'deny'],
 ];
 for (const [label, tool, reason, conns, want] of mcpCases) {
   const got = await mcp(tool, reason, conns);
@@ -276,6 +294,21 @@ for (const [label, tool, reason, input, want] of inputCases) {
   console.log(`${ok ? 'ok  ' : 'FAIL'} mcp input: ${label}: ${got}${ok ? '' : ` (wanted ${want})`}`);
 }
 extra += inputCases.length;
+// Full: no check of the input either. bpy code removes objects all the time; the founder chose to let it run.
+{
+  const fullCases: [string, string, Record<string, unknown>][] = [
+    ['code that removes', 'execute_blender_code', { code: 'bpy.data.objects.remove(ob, do_unlink=True)' }],
+    ['a marked tool with no code', 'execute_blender_code', {}],
+    ['a delete by name with a delete flag', 'delete_object', { name: 'Cube', force: true }],
+  ];
+  for (const [label, tool, input] of fullCases) {
+    const got = await mcp(`mcp__blender__${tool}`, 'message', [blender], input);
+    const ok = got === 'allow';
+    if (!ok) failed++;
+    console.log(`${ok ? 'ok  ' : 'FAIL'} mcp full: ${label}: ${got}`);
+  }
+  extra += fullCases.length;
+}
 {
   // Too deep or too many values: best effort, so it lets them through, as documented.
   const deep = { a: { b: { c: { d: { e: { method: 'delete' } } } } } };
@@ -382,6 +415,14 @@ const readCases: [string, { readOnly?: boolean } | undefined, boolean][] = [
   ['getJiraIssue', undefined, true],
   ['resolve-library-id', undefined, true],
   ['take_screenshot', undefined, true],
+  ['look', undefined, true],
+  ['screenshot', undefined, true],
+  ['browser_snapshot', undefined, true],
+  ['browser_take_screenshot', undefined, true],
+  ['snapshot_restore', undefined, false],
+  ['screenshot_upload', undefined, false],
+  ['look_and_apply', undefined, false],
+  ['lock_file', undefined, false],
 ];
 for (const [tool, hint, want] of readCases) {
   const ok = isReadOnlyTool(tool, hint) === want;
@@ -398,6 +439,7 @@ extra += readCases.length;
   };
   const on = saved([figma])[0];
   const askFigma: AllowedServer = { ...figma, mode: 'ask' };
+  const fullFigma: AllowedServer = { ...figma, mode: 'full' };
   const liveCases: [string, ProjectConnection[], AllowedServer, string, RunReason, 'allow' | 'deny'][] = [
     ['turned off mid-run: reads stop too', [{ ...on, enabled: false }], figma, 'get_file', 'instruction', 'deny'],
     ['turned off mid-run: changes stop', [{ ...on, enabled: false }], figma, 'post_comment', 'instruction', 'deny'],
@@ -407,6 +449,9 @@ extra += readCases.length;
     ['auto switched to read mid-run: even approved', [{ ...on, mode: 'read' }], figma, 'post_comment', 'approved', 'deny'],
     ['ask switched to auto mid-run: still ask', [{ ...on, mode: 'auto' }], askFigma, 'post_comment', 'instruction', 'deny'],
     ['unchanged auto still runs', [on], figma, 'post_comment', 'instruction', 'allow'],
+    ['unchanged full runs a delete', [{ ...on, mode: 'full' }], fullFigma, 'delete_node', 'instruction', 'allow'],
+    ['full switched to auto mid-run: a delete waits', [{ ...on, mode: 'auto' }], fullFigma, 'delete_node', 'instruction', 'deny'],
+    ['auto switched to full mid-run: still auto', [{ ...on, mode: 'full' }], figma, 'delete_node', 'instruction', 'deny'],
   ];
   for (const [label, live, captured, tool, reason, want] of liveCases) {
     const got = await run(live, captured, reason)(tool);
@@ -435,6 +480,22 @@ extra += readCases.length;
   console.log(`${ok ? 'ok  ' : 'FAIL'} connections: turning off puts Auto back on Ask: ${conn.mode} ${JSON.stringify(logged)}`);
   extra += 1;
 }
+{
+  const conn: ProjectConnection = { name: 'hq-guard-test-full', source: 'claude-ai', enabled: true, desks: ['leo'], mode: 'full' };
+  const info = { name: conn.name, source: 'claude-ai', transport: 'claude-ai', target: 'claude.ai connector', auth: 'oauth' };
+  const logged: string[] = [];
+  const p = {
+    meta: { path: null },
+    state: { connections: [conn], checks: { [conn.name]: { state: 'connected', checkedAt: '2026-01-01T00:00:00.000Z', tools: [], info } }, agents: [{ id: 'leo', isHuman: false }] },
+    log: (_id: string, text: string) => logged.push(text),
+    commit: () => undefined,
+  } as unknown as Project;
+  updateConnection(p, conn.name, { enabled: false });
+  const ok = conn.mode === 'ask' && /Full back to Ask/.test(logged[0] ?? '');
+  if (!ok) failed++;
+  console.log(`${ok ? 'ok  ' : 'FAIL'} connections: turning off puts Full back on Ask: ${conn.mode} ${JSON.stringify(logged)}`);
+  extra += 1;
+}
 
 // An auto change is logged once it worked, and only then.
 const result = (id: string, isError: boolean) => ({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: isError }] } });
@@ -459,6 +520,19 @@ const result = (id: string, isError: boolean) => ({ type: 'user', message: { con
   if (!counted) failed++;
   console.log(`${counted ? 'ok  ' : 'FAIL'} mcp: allowed auto changes are counted, deletes not: ${JSON.stringify(autoAllowed)}`);
   extra += 2;
+}
+// A change Full let through is logged as full, so the feed says which mode allowed it.
+{
+  const autoChanges = new Map<string, AutoChange>();
+  const logged: string[] = [];
+  const project = { ticket: () => 'BP-8', log: (_id: string, text: string) => logged.push(text) } as unknown as Project;
+  const g = guard({ project: fakeProject('read', saved([blender])), dir: ws, agent: leo, reason: 'message', connections: [blender], autoChanges, autoAllowed: [] });
+  await g('mcp__blender__execute_blender_code', { code: 'bpy.data.objects.remove(ob)' }, { toolUseID: 'tu_full' });
+  logAutoChanges({ autoChanges, project, agent: leo, item: { id: 'wi_8', number: 8 } } as never, result('tu_full', false));
+  const ok = logged.length === 1 && /blender with execute_blender_code for BP-8 \(full, as you\)/.test(logged[0]);
+  if (!ok) failed++;
+  console.log(`${ok ? 'ok  ' : 'FAIL'} mcp: a change Full allowed is logged as full: ${JSON.stringify(logged)}`);
+  extra += 1;
 }
 
 // The log line says what it touched, and a run that stopped early still logs what may have gone through.

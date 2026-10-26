@@ -82,10 +82,13 @@ import { explainFailure, limitRow, mcpToolTimeoutFromEnv, nextUsage, RunWatch, t
  *   - Bash, only where the founder turned the shell on for the project, in ticket, message and QA runs. Commands run
  *     on this PC as the founder with no sandbox; HQ reads each one first and refuses a few things (see shell.ts).
  * No subagents. Nothing leaves the building without the founder approving it, except changes on a connection the
- * founder set to Auto (deletes still wait for approval there).
+ * founder set to Auto (deletes still wait for approval there) or Full (nothing waits: the desk works the way a
+ * Claude Code session on the founder's PC does).
  */
 
 export const MODEL = process.env.HQ_MODEL ?? 'claude-opus-5';
+/** The system prompt a desk's own rules are appended to (runOnce). Part of the session key: changing it empties every desk's cache. */
+const PROMPT_BASE = 'claude_code';
 // Turns, budgets and when a run stops are HQ's limits: the Accounts page, or .env (server/limits.ts). See runLimitsFor.
 // A tool call that never answers (a hung app behind a connection) fails after this, so Claude can carry on without it.
 const MCP_TOOL_TIMEOUT_MS = mcpToolTimeoutFromEnv(process.env.HQ_MCP_TOOL_TIMEOUT_MS);
@@ -413,11 +416,13 @@ export function systemPromptFor(p: Project, agent: Agent, dir: string, connectio
               ? 'read only. You can never change anything through it.'
               : c.mode === 'auto'
                 ? 'reading and changing run without approval, except deleting or removing anything, which needs approval.'
-                : 'reading is free. Posting or changing anything needs approval.'
+                : c.mode === 'full'
+                  ? 'reading, changing and deleting all run without approval. Work the way you would in a Claude Code session: do a step, check the result (look, a screenshot, read it back), fix, go on.'
+                  : 'reading is free. Posting or changing anything needs approval.'
         }`,
       );
     }
-    const auto = connections.some((c) => c.mode === 'auto');
+    const auto = connections.some((c) => c.mode === 'auto' || c.mode === 'full');
     lines.push(
       readsOnly
         ? `In a ${mode === 'qa' ? 'QA check' : mode === 'plan' ? 'planning run' : 'huddle'} you can only read through these. Anything that would change something is refused.`
@@ -425,7 +430,7 @@ export function systemPromptFor(p: Project, agent: Agent, dir: string, connectio
     );
     if (auto && !readsOnly) {
       lines.push(
-        `On an auto connection, change only what the task needs, and list every change you made (what, where) in your reply, comment, or report_done/raise_for_decision summary: ${ownerName} sees it only afterwards.`,
+        `On an auto or full connection, change only what the task needs, and list every change you made (what, where) in your reply, comment, or report_done/raise_for_decision summary: ${ownerName} sees it only afterwards.`,
       );
     }
   }
@@ -514,12 +519,12 @@ export interface SessionParts {
 }
 
 /**
- * Fingerprint of what Claude caches ahead of a session's messages: model, SDK, system prompt, tools, effort.
+ * Fingerprint of what Claude caches ahead of a session's messages: model, SDK, the prompt HQ's is appended to, system prompt, tools, effort.
  * Any of them changing means the next resume is not cached. Exported for tests.
  */
 export function sessionKeyOf(parts: SessionParts, sdk = SDK_VERSION): string {
   const connections = parts.connections.map((c) => `${c.key}: ${Object.keys(c.tools).sort().join(',')}`).sort();
-  const fields: unknown[] = [MODEL, sdk, parts.systemPrompt, Object.keys(parts.servers).sort(), parts.builtins, parts.hq, connections];
+  const fields: unknown[] = [MODEL, sdk, PROMPT_BASE, parts.systemPrompt, Object.keys(parts.servers).sort(), parts.builtins, parts.hq, connections];
   // Effort goes ahead of the messages too, so changing it re-reads the session. Left out when unset: keys from before the setting still match.
   if (parts.effort) fields.push(parts.effort);
   return createHash('sha256')
@@ -967,6 +972,8 @@ export interface AutoChange {
   server: string;
   tool: string;
   target?: string;
+  /** Allowed by Full, not Auto: the log says which. */
+  full?: boolean;
 }
 
 /** What the guard needs. Exported shape so tests can build one. */
@@ -1899,7 +1906,7 @@ function isProtected(target: string, projectDir: string): string | null {
   return null;
 }
 
-const STRICTNESS: Record<ConnectionMode, number> = { auto: 0, ask: 1, read: 2 };
+const STRICTNESS: Record<ConnectionMode, number> = { full: 0, auto: 1, ask: 2, read: 3 };
 
 /**
  * MCP tools act as the founder on outside services, so:
@@ -1912,8 +1919,10 @@ const STRICTNESS: Record<ConnectionMode, number> = { auto: 0, ask: 1, read: 2 };
  *   deletes, auto mode                   -> as on ask. A delete is one the tool's name says, one its input
  *                                           asks for, or one the server's hint says unless a scan of the
  *                                           script can stand in for it (best effort, see autoDelete)
+ *   changes and deletes, full mode       -> yes, logged like auto changes. No check of names, inputs or code:
+ *                                           the founder chose to let the desk work as they would themselves
  * The connection is read again on every call: turned off or this desk dropped means no, and the mode is the
- * stricter of the one the run started with and the one saved now (read, then ask, then auto).
+ * stricter of the one the run started with and the one saved now (read, then ask, then auto, then full).
  */
 function mcpDecision(ctx: GuardContext, toolName: string, input: Record<string, unknown>, toolUseID?: string): PermissionResult {
   const server = (ctx.connections ?? []).find((c) => toolName.startsWith(`mcp__${c.key}__`));
@@ -1934,10 +1943,10 @@ function mcpDecision(ctx: GuardContext, toolName: string, input: Record<string, 
   if (mode === 'read') {
     return { behavior: 'deny', message: `${server.name} is read only in this project. ${tool} would change something, so it is never allowed.` };
   }
-  // Auto: changes run without approval, except anything that deletes or removes. Each one goes in the activity feed.
+  // Auto: changes run without approval, except anything that deletes or removes. Full: deletes too. Each one goes in the activity feed.
   const deletes = mode === 'auto' ? autoDelete(tool, server.tools[tool], input) : null;
-  if (mode === 'auto' && !deletes) {
-    if (toolUseID) ctx.autoChanges?.set(toolUseID, { server: server.name, tool, target: targetOf(input) });
+  if (mode === 'full' || (mode === 'auto' && !deletes)) {
+    if (toolUseID) ctx.autoChanges?.set(toolUseID, { server: server.name, tool, target: targetOf(input), ...(mode === 'full' ? { full: true } : {}) });
     ctx.autoAllowed?.push(server.name);
     return { behavior: 'allow', updatedInput: input };
   }
@@ -2184,14 +2193,14 @@ export function logAutoChanges(ctx: Pick<RunContext, 'autoChanges' | 'project' |
     if (!change) continue;
     ctx.autoChanges.delete(id);
     if (!ok) continue;
-    ctx.project.log(ctx.agent.id, `Changed something ${autoChangeText(ctx, change)} (auto, as you)`);
+    ctx.project.log(ctx.agent.id, `Changed something ${autoChangeText(ctx, change)} (${change.full ? 'full' : 'auto'}, as you)`);
   }
 }
 
 /** The run stopped with auto changes still waiting on their result (a timeout, an abort, a crash). They may have gone through, so log them too. Exported for tests. */
 export function logUnfinishedAutoChanges(ctx: Pick<RunContext, 'autoChanges' | 'project' | 'agent' | 'item'>): void {
   for (const change of ctx.autoChanges.values()) {
-    ctx.project.log(ctx.agent.id, `May have changed something ${autoChangeText(ctx, change)} (auto, as you): the run stopped before the result came back`);
+    ctx.project.log(ctx.agent.id, `May have changed something ${autoChangeText(ctx, change)} (${change.full ? 'full' : 'auto'}, as you): the run stopped before the result came back`);
   }
   ctx.autoChanges.clear();
 }
@@ -2245,11 +2254,12 @@ export function bashHook(check: ReturnType<typeof guard>): HookCallback {
  * A desk run's environment. The 1-hour prompt cache, which HQ_SESSION_CACHE_MIN assumes: a subscription has it,
  * and this keeps it for API-key runs and on overage too. With HQ's effort set, CLAUDE_CODE_EFFORT_LEVEL from your
  * shell or .env is dropped: Claude Code would let it beat --effort. MCP tool calls get a time limit unless you set
- * MCP_TOOL_TIMEOUT yourself. Exported for tests.
+ * MCP_TOOL_TIMEOUT yourself. Claude Code's own auto memory stays off: the preset system prompt would turn it on, its
+ * writes skip canUseTool, and they would land in the founder's ~/.claude; memory.md is a desk's memory. Exported for tests.
  */
 export function runEnv(effort: EffortLevel | undefined, base: NodeJS.ProcessEnv = process.env, mcpToolTimeoutMs = MCP_TOOL_TIMEOUT_MS): NodeJS.ProcessEnv {
   // Every Bash command starts in the workspace, where HQ's check of it (shell.ts) reads its paths from.
-  const env = claudeEnv({ CLAUDE_AGENT_SDK_CLIENT_APP: 'ai-team-hq/0.4.0', ENABLE_PROMPT_CACHING_1H: '1', CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR: '1' }, base);
+  const env = claudeEnv({ CLAUDE_AGENT_SDK_CLIENT_APP: 'ai-team-hq/0.4.0', ENABLE_PROMPT_CACHING_1H: '1', CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR: '1', CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' }, base);
   if (effort) delete env.CLAUDE_CODE_EFFORT_LEVEL;
   if (!env.MCP_TOOL_TIMEOUT && mcpToolTimeoutMs > 0) env.MCP_TOOL_TIMEOUT = String(mcpToolTimeoutMs);
   return env;
@@ -2265,12 +2275,14 @@ export interface RunLimits {
 }
 
 /**
- * A run's limits, read once at its start. Message and huddle turns are short by design. A QA check reads code, so it
- * gets a ticket run's room. Planning reads a little and makes a few tickets: its own, middling room. Exported for tests.
+ * A run's limits, read once at its start. Message and huddle turns are short by design, except the ticket's owner
+ * replying in its thread (onTicket): they carry the ticket on from there, so they get a ticket run's room. A teammate
+ * woken there keeps a reply's room: real work for them goes through hand_off. A QA check reads code, so it gets a
+ * ticket run's room too. Planning reads a little and makes a few tickets: its own, middling room. Exported for tests.
  */
-export function runLimitsFor(mode: RunMode, start = Date.now()): RunLimits {
+export function runLimitsFor(mode: RunMode, start = Date.now(), onTicket = false): RunLimits {
   const watch = watchLimits();
-  const ticket = mode === 'ticket' || mode === 'qa';
+  const ticket = mode === 'ticket' || mode === 'qa' || (mode === 'message' && onTicket);
   return {
     deadline: start + watch.capMs,
     watch,
@@ -2302,7 +2314,10 @@ async function runOnce(input: RunInput, ctx: RunContext, systemPrompt: string, r
     cwd: ctx.dir,
     additionalDirectories: [...(projectDir ? [projectDir] : []), attachments, ...ctx.extraRead.filter((d) => fs.existsSync(d))],
     model: MODEL,
-    systemPrompt,
+    // Claude Code's own system prompt first (its tool guidance, each connection's server instructions), HQ's rules after it:
+    // a desk starts from what a Claude Code session on the founder's PC gets, not from HQ's rules alone. No snapshot: a
+    // resumed session takes the prompt as it is now (a mode change, an edited ROLE.md), not the one recorded at its start.
+    systemPrompt: { type: 'preset', preset: 'claude_code', append: systemPrompt, snapshot: false },
     settingSources: [],
     tools: builtinTools(ctx.mode, shell),
     // Bash only where the project has the shell on, and then every command goes through bashHook first.
@@ -2689,8 +2704,8 @@ export const claudeRunner: AgentRunner = {
     const mode = ctx.mode;
     const huddling = mode === 'huddle';
     // Read once: the whole run, a fresh-session retry too, keeps the limits it started with. Whole run covers both
-    // attempts: a retry gets what the first one left.
-    const limits = runLimitsFor(mode);
+    // attempts: a retry gets what the first one left. The ticket's owner replying in its thread gets a ticket run's room.
+    const limits = runLimitsFor(mode, Date.now(), owns(ctx));
     // A huddle turn or a QA check starts a fresh session and leaves the desk's own one alone: cheaper, and its ticket work stays unmixed.
     const freshSession = huddling || mode === 'qa' || mode === 'plan';
     const systemPrompt = systemPromptFor(p, input.agent, dir, allowed, mode, Boolean(input.includeNotes));
